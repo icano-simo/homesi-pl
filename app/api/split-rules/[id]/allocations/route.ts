@@ -79,5 +79,48 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     await reevaluateRuleAssigned(supabase, txIds, splitRules);
   }
 
+  // When this rule has vendor conditions, delete any matching vendor-type
+  // cc_allocation_splits rows. Those rows come from an earlier manual setup in the
+  // Vendors module and take priority over transaction-type rows in fanOutBySplits.
+  // Deleting them lets the rule's transaction-type rows (written by reevaluateRuleAssigned)
+  // control the split instead of silently being overridden by a stale manual entry.
+  const { data: conditions } = await supabase
+    .from("split_rule_conditions")
+    .select("field,operator,value")
+    .eq("split_rule_id", split_rule_id)
+    .eq("field", "vendor");
+
+  if (conditions && conditions.length > 0) {
+    for (const cond of conditions) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let vq: any = supabase
+        .from("cc_allocation_splits")
+        .select("assign_value")
+        .eq("assign_type", "vendor");
+
+      if (cond.operator === "equals") {
+        vq = vq.ilike("assign_value", cond.value);
+      } else if (cond.operator === "contains") {
+        vq = vq.ilike("assign_value", `%${cond.value}%`);
+      } else if (cond.operator === "starts_with") {
+        vq = vq.ilike("assign_value", `${cond.value}%`);
+      } else {
+        continue;
+      }
+
+      const { data: vendorRows } = await vq;
+      if (!vendorRows || vendorRows.length === 0) continue;
+
+      const vendorKeys = [...new Set((vendorRows as { assign_value: string }[]).map((r) => r.assign_value))];
+      for (const vendorKey of vendorKeys) {
+        await supabase
+          .from("cc_allocation_splits")
+          .delete()
+          .eq("assign_type", "vendor")
+          .eq("assign_value", vendorKey);
+      }
+    }
+  }
+
   return NextResponse.json(data);
 }

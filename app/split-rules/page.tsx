@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, AlertTriangle } from "lucide-react";
 import { CC_FIELDS, operatorsForField, defaultOperator, getFieldKind, defaultValue } from "@/lib/cost-center-constants";
 import type { SplitRuleWithDetails, SplitRuleCondition, SplitRuleAllocation } from "@/types";
 
@@ -515,18 +515,39 @@ function RuleRow({
   rule,
   ccNames,
   costCenters,
+  vendorManualSplits,
   onUpdate,
   onDelete,
 }: {
   rule: SplitRuleWithDetails;
   ccNames: Map<string, string>;
   costCenters: CCOption[];
+  vendorManualSplits: Set<string>; // normalized (lowercase) vendor names with active manual splits
   onUpdate: (updated: SplitRuleWithDetails) => void;
   onDelete: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Option C: detect vendor conditions that have active manual splits
+  const manualOverrides: string[] = [];
+  if (vendorManualSplits.size > 0) {
+    for (const cond of rule.conditions) {
+      if (cond.field !== "vendor") continue;
+      const cv = cond.value.toLowerCase();
+      for (const vendorKey of vendorManualSplits) {
+        let matches = false;
+        switch (cond.operator) {
+          case "equals":      matches = vendorKey === cv; break;
+          case "contains":    matches = vendorKey.includes(cv); break;
+          case "starts_with": matches = vendorKey.startsWith(cv); break;
+          case "ends_with":   matches = vendorKey.endsWith(cv); break;
+        }
+        if (matches) { manualOverrides.push(cond.value); break; }
+      }
+    }
+  }
 
   async function handleDelete() {
     if (!confirm(`Delete rule "${rule.name}"? Transactions matched by this rule will be re-evaluated.`)) return;
@@ -578,6 +599,15 @@ function RuleRow({
             <span className="text-xs text-gray-400">
               {rule.conditions.length} condition{rule.conditions.length !== 1 ? "s" : ""}
             </span>
+            {manualOverrides.length > 0 && (
+              <span
+                title={`Manual vendor split active for: ${manualOverrides.join(", ")} — this manual split takes priority over the rule in reports`}
+                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700 cursor-default"
+              >
+                <AlertTriangle size={10} />
+                Manual override
+              </span>
+            )}
           </div>
           {rule.description && (
             <p className="text-xs text-gray-500 truncate">{rule.description}</p>
@@ -654,6 +684,7 @@ function RuleRow({
 export default function SplitRulesPage() {
   const [rules, setRules] = useState<SplitRuleWithDetails[]>([]);
   const [costCenters, setCostCenters] = useState<CCOption[]>([]);
+  const [vendorManualSplits, setVendorManualSplits] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [reapplying, setReapplying] = useState(false);
@@ -664,13 +695,26 @@ export default function SplitRulesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [rulesRes, ccsRes] = await Promise.all([
+      const [rulesRes, ccsRes, splitsRes] = await Promise.all([
         fetch("/api/split-rules"),
         fetch("/api/cost-centers"),
+        fetch("/api/cc-allocation-splits"),
       ]);
-      const [rulesData, ccsData] = await Promise.all([rulesRes.json(), ccsRes.json()]);
+      const [rulesData, ccsData, splitsData] = await Promise.all([
+        rulesRes.json(), ccsRes.json(), splitsRes.json(),
+      ]);
       setRules(Array.isArray(rulesData) ? rulesData : []);
       setCostCenters(Array.isArray(ccsData) ? ccsData : []);
+      // Build a set of normalized (lowercase) vendor names that have active manual splits
+      const vendorKeys = new Set<string>();
+      if (Array.isArray(splitsData)) {
+        for (const s of splitsData as { assign_type: string; assign_value: string }[]) {
+          if (s.assign_type === "vendor") {
+            vendorKeys.add(s.assign_value.trim().replace(/\s+/g, " ").toLowerCase());
+          }
+        }
+      }
+      setVendorManualSplits(vendorKeys);
     } finally {
       setLoading(false);
     }
@@ -780,6 +824,7 @@ export default function SplitRulesPage() {
               rule={rule}
               ccNames={ccNames}
               costCenters={costCenters}
+              vendorManualSplits={vendorManualSplits}
               onUpdate={(updated) =>
                 setRules((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
               }

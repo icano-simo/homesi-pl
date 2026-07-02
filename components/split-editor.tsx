@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Plus, Trash2 } from "lucide-react";
+import { X, Plus, Trash2, AlertTriangle } from "lucide-react";
 import type { CostCenter } from "@/types";
 
 interface SplitRow {
@@ -28,13 +28,22 @@ export function SplitEditor({
   const [saving, setSaving]   = useState(false);
   const [errMsg, setErrMsg]   = useState("");
 
-  // Load existing splits on open
+  // Conflict detection: set when a split rule already covers this vendor/description3
+  const [ruleConflict, setRuleConflict] = useState<{ rule_id: string; rule_name: string } | null>(null);
+  // true once the user has clicked "Save anyway" in the conflict warning
+  const [conflictPending, setConflictPending] = useState(false);
+
+  // Load existing splits + conflict info on open
   useEffect(() => {
-    fetch(
-      `/api/cc-allocation-splits?type=${encodeURIComponent(assignType)}&value=${encodeURIComponent(assignValue)}&include_rule=true`
-    )
-      .then((r) => r.json())
-      .then((data: { cost_center_id: string; percentage: number; is_operational?: boolean }[]) => {
+    const splitsUrl = `/api/cc-allocation-splits?type=${encodeURIComponent(assignType)}&value=${encodeURIComponent(assignValue)}&include_rule=true`;
+    const conflictUrl = `/api/cc-allocation-splits/conflict-check?type=${encodeURIComponent(assignType)}&value=${encodeURIComponent(assignValue)}`;
+
+    Promise.all([
+      fetch(splitsUrl).then((r) => r.json()),
+      fetch(conflictUrl).then((r) => r.json()),
+    ])
+      .then(([splits, conflictData]) => {
+        const data = splits as { cost_center_id: string; percentage: number; is_operational?: boolean }[];
         if (data.length > 0) {
           setRows(data.map((d) => ({
             cost_center_id: d.cost_center_id,
@@ -42,7 +51,8 @@ export function SplitEditor({
             is_operational: d.is_operational ?? true,
           })));
         }
-        // else: keep the default [{ cc: "", percentage: "100" }]
+        const cd = conflictData as { rule_conflict: { rule_id: string; rule_name: string } | null };
+        setRuleConflict(cd.rule_conflict ?? null);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -63,6 +73,11 @@ export function SplitEditor({
   function removeRow(idx: number) { setRows((prev) => prev.filter((_, i) => i !== idx)); }
 
   async function handleSave() {
+    // If a rule conflict exists and the user hasn't confirmed yet, show the warning first
+    if (ruleConflict && !conflictPending) {
+      setConflictPending(true);
+      return;
+    }
     setSaving(true); setErrMsg("");
     try {
       const res = await fetch("/api/cc-allocation-splits", {
@@ -81,6 +96,7 @@ export function SplitEditor({
       setErrMsg(String(e));
     } finally {
       setSaving(false);
+      setConflictPending(false);
     }
   }
 
@@ -213,6 +229,40 @@ export function SplitEditor({
           )}
         </div>
 
+        {/* Conflict warning — shown when user clicks Save but a rule already covers this vendor/description */}
+        {conflictPending && ruleConflict && (
+          <div className="mx-5 mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-amber-900">
+                  Rule conflict detected
+                </p>
+                <p className="mt-0.5 text-xs text-amber-800">
+                  <strong>{displayName}</strong> is already captured by the rule{" "}
+                  <strong>&ldquo;{ruleConflict.rule_name}&rdquo;</strong>. Saving a manual split here will
+                  override what the rule defines — the manual split takes priority in all reports.
+                </p>
+                <div className="mt-2.5 flex gap-2">
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {saving ? "Saving…" : "Save anyway"}
+                  </button>
+                  <button
+                    onClick={() => setConflictPending(false)}
+                    className="rounded-lg border border-amber-200 px-3 py-1.5 text-xs text-amber-700 hover:bg-amber-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-gray-100 px-5 py-4">
           <p className="text-[11px] text-gray-400">
@@ -227,7 +277,7 @@ export function SplitEditor({
             </button>
             <button
               onClick={handleSave}
-              disabled={!canSave || hasDuplicateCCs}
+              disabled={!canSave || hasDuplicateCCs || conflictPending}
               title={!sumOk ? "Percentages must total 100% before saving" : undefined}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
             >

@@ -169,8 +169,11 @@ function computeTotals(txs: ExpandedTx[]): { byMonth: Record<string, number>; to
 }
 
 function toLeaf(tx: ExpandedTx): TxLeaf {
+  // Include cost_center_id so that virtual copies produced by fanOutBySplits
+  // (same tx.id fanned to multiple CCs) each get a distinct leaf key.
+  const base = tx.cost_center_id ? `${tx.id}:${tx.cost_center_id}` : tx.id;
   return {
-    id: tx._opGroup ? `${tx.id}::${tx._opGroup[0]}` : tx.id,
+    id: tx._opGroup ? `${base}::${tx._opGroup[0]}` : base,
     month: tx.month ?? "Unknown",
     mvmt: tx.movement ?? 0,
     desc: tx.check_description,
