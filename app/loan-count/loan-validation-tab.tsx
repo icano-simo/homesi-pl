@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
 import { ChevronDown, ChevronRight, Download, AlertTriangle, CheckCircle, TrendingUp } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { downloadCSV } from "@/lib/csv";
@@ -340,6 +340,468 @@ function ValidationSection({
   );
 }
 
+// ─── All Loans: types & helpers ───────────────────────────────────────────────
+
+type AllLoansView = "detail" | "analytics";
+
+const MONTH_ORDER = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
+
+function sortMonthKey(a: string, b: string): number {
+  const parse = (s: string) => {
+    const parts = s.split(" ");
+    const yr = parseInt(parts[parts.length - 1], 10) || 0;
+    const ms = parts.slice(0, -1).join(" ");
+    const mi = MONTH_ORDER.findIndex((m) => m.toLowerCase().startsWith(ms.slice(0, 3).toLowerCase()));
+    return yr * 100 + (mi >= 0 ? mi : 99);
+  };
+  return parse(a) - parse(b);
+}
+
+function monthKey(r: ValidationRow): string {
+  return r.month && r.year ? `${r.month} ${r.year}` : r.month ?? "";
+}
+
+interface AnalyticsLONode {
+  lo: string;
+  loans: ValidationRow[];
+  byMonth: Record<string, number>;
+  total: number;
+}
+interface AnalyticsBranchNode {
+  branch: string;
+  los: AnalyticsLONode[];
+  byMonth: Record<string, number>;
+  total: number;
+}
+
+function buildAnalyticsTree(rows: ValidationRow[]): AnalyticsBranchNode[] {
+  const branchMap = new Map<string, Map<string, ValidationRow[]>>();
+  for (const row of rows) {
+    const b = row.branch ?? "(No Branch)";
+    const lo = row.loan_officer ?? "(Unknown LO)";
+    if (!branchMap.has(b)) branchMap.set(b, new Map());
+    const lm = branchMap.get(b)!;
+    if (!lm.has(lo)) lm.set(lo, []);
+    lm.get(lo)!.push(row);
+  }
+  return [...branchMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([branch, lm]) => {
+    const los: AnalyticsLONode[] = [...lm.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([lo, loans]) => {
+        const byMonth: Record<string, number> = {};
+        let total = 0;
+        for (const l of loans) {
+          const k = monthKey(l);
+          byMonth[k] = (byMonth[k] ?? 0) + (l.loan_amount ?? 0);
+          total += l.loan_amount ?? 0;
+        }
+        return { lo, loans, byMonth, total };
+      });
+    const byMonth: Record<string, number> = {};
+    let total = 0;
+    for (const n of los) {
+      for (const [k, v] of Object.entries(n.byMonth)) byMonth[k] = (byMonth[k] ?? 0) + v;
+      total += n.total;
+    }
+    return { branch, los, byMonth, total };
+  });
+}
+
+// ─── All Loans: Analytics view ────────────────────────────────────────────────
+
+function AnalyticsView({ rows }: { rows: ValidationRow[] }) {
+  const months = useMemo(() => {
+    const ms = new Set<string>();
+    for (const r of rows) { const k = monthKey(r); if (k) ms.add(k); }
+    return [...ms].sort(sortMonthKey);
+  }, [rows]);
+
+  const tree = useMemo(() => buildAnalyticsTree(rows), [rows]);
+
+  const [expandedBranches, setExpandedBranches] = useState<Set<string>>(new Set());
+  const [expandedLOs, setExpandedLOs] = useState<Set<string>>(new Set());
+
+  const grandByMonth: Record<string, number> = {};
+  let grandTotal = 0;
+  for (const bn of tree) {
+    for (const [k, v] of Object.entries(bn.byMonth)) grandByMonth[k] = (grandByMonth[k] ?? 0) + v;
+    grandTotal += bn.total;
+  }
+
+  const toggleBranch = (b: string) =>
+    setExpandedBranches((p) => { const n = new Set(p); n.has(b) ? n.delete(b) : n.add(b); return n; });
+  const toggleLO = (k: string) =>
+    setExpandedLOs((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
+
+  if (rows.length === 0) return (
+    <div className="rounded-xl border border-gray-100 bg-white px-6 py-10 text-center text-sm text-gray-400">
+      No loans match the current filters.
+    </div>
+  );
+
+  return (
+    <div className="overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm max-h-[520px]">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 z-10 bg-gray-50">
+          <tr className="border-b border-gray-100 text-gray-500">
+            <th className="px-3 py-2 font-medium text-left min-w-[220px]">Branch / Loan Officer / Loan</th>
+            {months.map((m) => (
+              <th key={m} className="px-3 py-2 font-medium text-right whitespace-nowrap">{m}</th>
+            ))}
+            <th className="px-3 py-2 font-semibold text-right text-gray-700 whitespace-nowrap">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {/* Grand Total */}
+          <tr className="border-b border-blue-100 bg-blue-50/50 font-semibold">
+            <td className="px-3 py-2 text-blue-800">Total</td>
+            {months.map((m) => (
+              <td key={m} className="px-3 py-2 text-right font-mono text-blue-700">
+                {grandByMonth[m] ? fmtUSD(grandByMonth[m]) : <span className="text-gray-300">—</span>}
+              </td>
+            ))}
+            <td className="px-3 py-2 text-right font-mono text-blue-800">{fmtUSD(grandTotal)}</td>
+          </tr>
+
+          {tree.map((bn) => {
+            const bExp = expandedBranches.has(bn.branch);
+            return (
+              <Fragment key={`branch-${bn.branch}`}>
+                <tr
+                  className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer select-none"
+                  onClick={() => toggleBranch(bn.branch)}
+                >
+                  <td className="px-3 py-2 font-medium text-gray-800">
+                    <span className="mr-1.5 text-gray-400 text-[10px]">{bExp ? "▾" : "▸"}</span>
+                    Branch {bn.branch}
+                    <span className="ml-2 text-gray-400 font-normal text-[10px]">
+                      ({bn.los.length} LO{bn.los.length !== 1 ? "s" : ""})
+                    </span>
+                  </td>
+                  {months.map((m) => (
+                    <td key={m} className="px-3 py-2 text-right font-mono text-gray-700">
+                      {bn.byMonth[m] ? fmtUSD(bn.byMonth[m]) : <span className="text-gray-200">—</span>}
+                    </td>
+                  ))}
+                  <td className="px-3 py-2 text-right font-mono font-semibold text-gray-800">{fmtUSD(bn.total)}</td>
+                </tr>
+
+                {bExp && bn.los.map((ln) => {
+                  const loKey = `${bn.branch}::${ln.lo}`;
+                  const lExp = expandedLOs.has(loKey);
+                  return (
+                    <Fragment key={`lo-${loKey}`}>
+                      <tr
+                        className="border-b border-gray-50 bg-gray-50/40 hover:bg-gray-100/60 cursor-pointer select-none"
+                        onClick={() => toggleLO(loKey)}
+                      >
+                        <td className="px-3 py-1.5 pl-8 text-gray-700">
+                          <span className="mr-1.5 text-gray-400 text-[10px]">{lExp ? "▾" : "▸"}</span>
+                          {ln.lo}
+                          <span className="ml-2 text-gray-400 font-normal text-[10px]">({ln.loans.length})</span>
+                        </td>
+                        {months.map((m) => (
+                          <td key={m} className="px-3 py-1.5 text-right font-mono text-gray-600">
+                            {ln.byMonth[m] ? fmtUSD(ln.byMonth[m]) : <span className="text-gray-200">—</span>}
+                          </td>
+                        ))}
+                        <td className="px-3 py-1.5 text-right font-mono font-medium text-gray-700">{fmtUSD(ln.total)}</td>
+                      </tr>
+
+                      {lExp && ln.loans.map((loan) => {
+                        const lk = monthKey(loan);
+                        return (
+                          <tr key={`loan-${loan.loan_number}-${lk}`} className="border-b border-gray-50 bg-white hover:bg-gray-50/50">
+                            <td className="px-3 py-1 pl-14 text-gray-700">
+                              <span className="font-mono text-gray-800">{loan.loan_number}</span>
+                              {loan.borrower_name && (
+                                <span className="ml-2 text-gray-500">{loan.borrower_name}</span>
+                              )}
+                            </td>
+                            {months.map((m) => (
+                              <td key={m} className="px-3 py-1 text-right font-mono">
+                                {lk === m && loan.loan_amount != null
+                                  ? <span className="text-gray-700">{fmtUSD(loan.loan_amount)}</span>
+                                  : <span className="text-gray-200">—</span>}
+                              </td>
+                            ))}
+                            <td className="px-3 py-1 text-right font-mono text-gray-700">
+                              {loan.loan_amount != null ? fmtUSD(loan.loan_amount) : "—"}
+                              {loan.bps != null && (
+                                <span className="ml-2 text-gray-400 text-[10px]">{fmtBPS(loan.bps)}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── All Loans: Detail view ───────────────────────────────────────────────────
+
+function DetailView({
+  rows,
+  colFilters,
+  onColFilterChange,
+}: {
+  rows: ValidationRow[];
+  colFilters: Record<string, string>;
+  onColFilterChange: (col: string, val: string) => void;
+}) {
+  const visible = rows.filter((r) => {
+    if (colFilters.borrower_name && !(r.borrower_name ?? "").toLowerCase().includes(colFilters.borrower_name.toLowerCase())) return false;
+    if (colFilters.loan_officer && !(r.loan_officer ?? "").toLowerCase().includes(colFilters.loan_officer.toLowerCase())) return false;
+    return true;
+  });
+
+  function filterHeader(colKey: string, label: string) {
+    return (
+      <th className="px-3 py-2 font-medium text-left">
+        <div className="whitespace-nowrap">{label}</div>
+        <input
+          value={colFilters[colKey] ?? ""}
+          onChange={(e) => onColFilterChange(colKey, e.target.value)}
+          placeholder="Filter…"
+          className="mt-0.5 w-full min-w-[80px] rounded border border-gray-200 px-1.5 py-0.5 text-[10px] font-normal placeholder-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-200"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </th>
+    );
+  }
+
+  if (visible.length === 0) return (
+    <div className="rounded-xl border border-gray-100 bg-white px-6 py-10 text-center text-sm text-gray-400">
+      No loans found for this filter combination.
+    </div>
+  );
+
+  return (
+    <div className="overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm max-h-[480px]">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 z-10 bg-gray-50">
+          <tr className="border-b border-gray-100 text-gray-500 align-top">
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Status</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Number</th>
+            {filterHeader("borrower_name", "Borrower Name")}
+            {filterHeader("loan_officer", "Loan Officer")}
+            <th className="px-3 py-2 font-medium text-left">Branch</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month / Year</th>
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">DM Margin</th>
+            <th className="px-3 py-2 font-medium text-right">BPS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((row) => {
+            const missing = row.status === "missing";
+            return (
+              <tr
+                key={`${row.loan_number}-${row.month}-${row.year}`}
+                className={`border-b border-gray-50 hover:brightness-95 ${missing ? "bg-amber-50/70" : ""}`}
+              >
+                <td className="px-3 py-1.5">
+                  {missing ? (
+                    <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                      <AlertTriangle size={9} /> Missing
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">
+                      <CheckCircle size={9} /> Match
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-1.5 font-mono text-gray-800 whitespace-nowrap">{row.loan_number}</td>
+                <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.borrower_name ?? ""}>{row.borrower_name ?? "—"}</td>
+                <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.loan_officer ?? ""}>{row.loan_officer ?? "—"}</td>
+                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
+                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">
+                  {row.month ?? "—"}{row.year ? ` ${row.year}` : ""}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(row.loan_amount)}</td>
+                <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                  {missing ? <span className="text-gray-300">—</span> : fmtMov(row.accounting_total)}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap">
+                  {missing ? <span className="text-gray-300">—</span> : fmtBPS(row.bps)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── All Loans: metric card ───────────────────────────────────────────────────
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{label}</div>
+      <div className="mt-1 text-base font-semibold text-gray-800">{value}</div>
+    </div>
+  );
+}
+
+// ─── All Loans section ────────────────────────────────────────────────────────
+
+function AllLoansSection({
+  months,
+  years,
+  branches,
+  filterLoanNumber,
+}: {
+  months: string[];
+  years: string[];
+  branches: string[];
+  filterLoanNumber: string;
+}) {
+  const [view, setView] = useState<AllLoansView>("detail");
+  const [data, setData] = useState<ValidationResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [filterLO, setFilterLO] = useState<string[]>([]);
+  const [filterStatus, setFilterStatus] = useState<string[]>([]);
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const p = new URLSearchParams({ type: "all_loans" });
+      months.forEach((m) => p.append("month", m));
+      years.forEach((y) => p.append("year", y));
+      branches.forEach((b) => p.append("branch", b));
+      const res = await fetch(`/api/loan-validation?${p}`);
+      const json = await res.json();
+      if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
+      setData(json);
+    } finally {
+      setLoading(false);
+    }
+  }, [months, years, branches]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const loOptions = useMemo(
+    () => [...new Set((data?.rows ?? []).map((r) => r.loan_officer).filter((x): x is string => x != null))].sort(),
+    [data],
+  );
+
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    const lnSearch = filterLoanNumber.trim().toLowerCase();
+    return data.rows.filter((r) => {
+      if (lnSearch && !r.loan_number.toLowerCase().includes(lnSearch)) return false;
+      if (filterLO.length > 0 && !filterLO.includes(r.loan_officer ?? "")) return false;
+      if (filterStatus.length > 0) {
+        const ok =
+          (filterStatus.includes("Matched") && r.status === "match") ||
+          (filterStatus.includes("Missing in Accounting") && r.status === "missing");
+        if (!ok) return false;
+      }
+      return true;
+    });
+  }, [data, filterLoanNumber, filterLO, filterStatus]);
+
+  const matchedRows = filteredRows.filter((r) => r.status === "match");
+  const loanCount = filteredRows.length;
+  const amtRows = filteredRows.filter((r) => r.loan_amount != null);
+  const avgLoanAmount = amtRows.length > 0 ? amtRows.reduce((s, r) => s + r.loan_amount!, 0) / amtRows.length : null;
+  const bpsRows = matchedRows.filter((r) => r.bps != null);
+  const avgBPS = bpsRows.length > 0 ? bpsRows.reduce((s, r) => s + r.bps!, 0) / bpsRows.length : null;
+
+  const showSurplus =
+    !!data && data.surplus.length > 0 &&
+    (filterStatus.length === 0 || filterStatus.includes("Extra in Accounting"));
+
+  return (
+    <div className="space-y-4">
+      {/* Sub-tab switcher */}
+      <div className="flex gap-1 border-b border-gray-200">
+        {(["detail", "analytics"] as AllLoansView[]).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={[
+              "px-4 py-2 text-xs font-medium border-b-2 -mb-px transition-colors",
+              view === v
+                ? "border-blue-600 text-blue-700"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300",
+            ].join(" ")}
+          >
+            {v.charAt(0).toUpperCase() + v.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-gray-500 font-medium">Filter:</span>
+        {loOptions.length > 0 && (
+          <ReportFilter label="Loan Officer" options={loOptions} selected={filterLO} onChange={setFilterLO} />
+        )}
+        <ReportFilter
+          label="Status"
+          options={["Matched", "Missing in Accounting", "Extra in Accounting"]}
+          selected={filterStatus}
+          onChange={setFilterStatus}
+        />
+        {(filterLO.length > 0 || filterStatus.length > 0) && (
+          <button
+            onClick={() => { setFilterLO([]); setFilterStatus([]); }}
+            className="text-xs text-gray-400 hover:text-gray-600 underline"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="py-12 text-center">
+          <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-300 border-t-blue-600" />
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-600">{error}</div>
+      ) : data ? (
+        <>
+          {/* Metric cards */}
+          <div className="grid grid-cols-3 gap-3">
+            <MetricCard label="Loan Count" value={loanCount.toLocaleString()} />
+            <MetricCard label="Avg Loan Amount" value={avgLoanAmount != null ? fmtUSD(avgLoanAmount) : "—"} />
+            <MetricCard label="Avg BPS" value={avgBPS != null ? fmtBPS(avgBPS) : "—"} />
+          </div>
+
+          {view === "detail" ? (
+            <DetailView
+              rows={filteredRows}
+              colFilters={colFilters}
+              onColFilterChange={(col, val) => setColFilters((p) => ({ ...p, [col]: val }))}
+            />
+          ) : (
+            <AnalyticsView rows={filteredRows} />
+          )}
+
+          {showSurplus && <SurplusSection rows={data.surplus} />}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 // ─── Loan Validation Tab (root export) ───────────────────────────────────────
 
 export function LoanValidationTab({
@@ -404,17 +866,26 @@ export function LoanValidationTab({
       </div>
 
       {/* Active section */}
-      {SUB_TABS.filter((t) => t.type === activeType).map((t) => (
-        <ValidationSection
-          key={t.type}
-          type={t.type}
-          glLabel={t.glLabel}
+      {activeType === "all_loans" ? (
+        <AllLoansSection
           months={selMonths}
           years={selYears}
           branches={selBranches}
           filterLoanNumber={filterLoanNumber}
         />
-      ))}
+      ) : (
+        SUB_TABS.filter((t) => t.type === activeType).map((t) => (
+          <ValidationSection
+            key={t.type}
+            type={t.type}
+            glLabel={t.glLabel}
+            months={selMonths}
+            years={selYears}
+            branches={selBranches}
+            filterLoanNumber={filterLoanNumber}
+          />
+        ))
+      )}
     </div>
   );
 }

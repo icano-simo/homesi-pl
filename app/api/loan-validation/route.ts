@@ -8,8 +8,10 @@ type ValType = "b2b" | "on_demand" | "processing" | "all_loans" | "recruitment";
 export interface ValidationRow {
   loan_number: string;
   borrower_name: string | null;
+  loan_officer: string | null;
   branch: string | null;
   month: string | null;
+  year: number | null;
   loan_amount: number | null;
   accounting_total: number;
   bps: number | null;
@@ -49,7 +51,7 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let loQuery: any = supabase
     .from("loan_officials")
-    .select("loan_number, borrower_name, branch, loan_amount, month")
+    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year")
     .order("loan_number");
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
@@ -114,8 +116,10 @@ export async function GET(req: NextRequest) {
     return {
       loan_number: loanNum,
       borrower_name: lo.borrower_name as string | null,
+      loan_officer: lo.loan_officer as string | null,
       branch: lo.branch as string | null,
       month: lo.month as string | null,
+      year: lo.year as number | null,
       loan_amount,
       accounting_total,
       bps,
