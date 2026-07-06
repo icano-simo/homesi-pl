@@ -395,8 +395,8 @@ function buildAnalyticsTree(rows: ValidationRow[]): AnalyticsBranchNode[] {
         let total = 0;
         for (const l of loans) {
           const k = monthKey(l);
-          byMonth[k] = (byMonth[k] ?? 0) + (l.loan_amount ?? 0);
-          total += l.loan_amount ?? 0;
+          byMonth[k] = (byMonth[k] ?? 0) + 1;
+          total += 1;
         }
         return { lo, loans, byMonth, total };
       });
@@ -460,10 +460,10 @@ function AnalyticsView({ rows }: { rows: ValidationRow[] }) {
             <td className="px-3 py-2 text-blue-800">Total</td>
             {months.map((m) => (
               <td key={m} className="px-3 py-2 text-right font-mono text-blue-700">
-                {grandByMonth[m] ? fmtUSD(grandByMonth[m]) : <span className="text-gray-300">—</span>}
+                {grandByMonth[m] ? grandByMonth[m].toLocaleString() : <span className="text-gray-300">—</span>}
               </td>
             ))}
-            <td className="px-3 py-2 text-right font-mono text-blue-800">{fmtUSD(grandTotal)}</td>
+            <td className="px-3 py-2 text-right font-mono text-blue-800">{grandTotal.toLocaleString()}</td>
           </tr>
 
           {tree.map((bn) => {
@@ -483,10 +483,10 @@ function AnalyticsView({ rows }: { rows: ValidationRow[] }) {
                   </td>
                   {months.map((m) => (
                     <td key={m} className="px-3 py-2 text-right font-mono text-gray-700">
-                      {bn.byMonth[m] ? fmtUSD(bn.byMonth[m]) : <span className="text-gray-200">—</span>}
+                      {bn.byMonth[m] ? bn.byMonth[m].toLocaleString() : <span className="text-gray-200">—</span>}
                     </td>
                   ))}
-                  <td className="px-3 py-2 text-right font-mono font-semibold text-gray-800">{fmtUSD(bn.total)}</td>
+                  <td className="px-3 py-2 text-right font-mono font-semibold text-gray-800">{bn.total.toLocaleString()}</td>
                 </tr>
 
                 {bExp && bn.los.map((ln) => {
@@ -505,10 +505,10 @@ function AnalyticsView({ rows }: { rows: ValidationRow[] }) {
                         </td>
                         {months.map((m) => (
                           <td key={m} className="px-3 py-1.5 text-right font-mono text-gray-600">
-                            {ln.byMonth[m] ? fmtUSD(ln.byMonth[m]) : <span className="text-gray-200">—</span>}
+                            {ln.byMonth[m] ? ln.byMonth[m].toLocaleString() : <span className="text-gray-200">—</span>}
                           </td>
                         ))}
-                        <td className="px-3 py-1.5 text-right font-mono font-medium text-gray-700">{fmtUSD(ln.total)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-medium text-gray-700">{ln.total.toLocaleString()}</td>
                       </tr>
 
                       {lExp && ln.loans.map((loan) => {
@@ -523,8 +523,8 @@ function AnalyticsView({ rows }: { rows: ValidationRow[] }) {
                             </td>
                             {months.map((m) => (
                               <td key={m} className="px-3 py-1 text-right font-mono">
-                                {lk === m && loan.loan_amount != null
-                                  ? <span className="text-gray-700">{fmtUSD(loan.loan_amount)}</span>
+                                {lk === m
+                                  ? <span className="text-gray-600">1</span>
                                   : <span className="text-gray-200">—</span>}
                               </td>
                             ))}
