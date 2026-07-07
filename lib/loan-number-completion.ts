@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export interface CompletionStats {
   processed: number;
   completed_direct: number;
+  completed_from_11: number;
   completed_from_10: number;
   completed_from_9: number;
   incomplete_no_match: number;
@@ -39,10 +40,16 @@ export async function runLoanNumberCompletion(
     ),
   ] as string[];
 
-  // 2. Build prefix maps: first-10-digits and first-9-digits → [loan_numbers]
+  // 2. Build prefix maps: first-11, first-10, and first-9-digits → [loan_numbers]
+  const prefix11Map = new Map<string, string[]>();
   const prefix10Map = new Map<string, string[]>();
   const prefix9Map  = new Map<string, string[]>();
   for (const ln of allLoanNumbers) {
+    const p11 = ln.slice(0, 11);
+    const arr11 = prefix11Map.get(p11) ?? [];
+    arr11.push(ln);
+    prefix11Map.set(p11, arr11);
+
     const p10 = ln.slice(0, 10);
     const arr10 = prefix10Map.get(p10) ?? [];
     arr10.push(ln);
@@ -71,13 +78,14 @@ export async function runLoanNumberCompletion(
   }
 
   if (txs.length === 0) {
-    return { processed: 0, completed_direct: 0, completed_from_10: 0, completed_from_9: 0, incomplete_no_match: 0, incomplete_ambiguous: 0 };
+    return { processed: 0, completed_direct: 0, completed_from_11: 0, completed_from_10: 0, completed_from_9: 0, incomplete_no_match: 0, incomplete_ambiguous: 0 };
   }
 
   // 4. Compute outcome for each transaction
   type Update = { id: string; loan_number: string; loan_number_incomplete: boolean };
   const updates: Update[] = [];
   let completed_direct = 0;
+  let completed_from_11 = 0;
   let completed_from_10 = 0;
   let completed_from_9 = 0;
   let incomplete_no_match = 0;
@@ -89,6 +97,16 @@ export async function runLoanNumberCompletion(
     if (raw.length === 12) {
       updates.push({ id: tx.id, loan_number: raw, loan_number_incomplete: false });
       completed_direct++;
+    } else if (raw.length === 11) {
+      const matches = prefix11Map.get(raw) ?? [];
+      if (matches.length === 1) {
+        updates.push({ id: tx.id, loan_number: matches[0], loan_number_incomplete: false });
+        completed_from_11++;
+      } else {
+        updates.push({ id: tx.id, loan_number: raw, loan_number_incomplete: true });
+        if (matches.length === 0) incomplete_no_match++;
+        else incomplete_ambiguous++;
+      }
     } else if (raw.length === 10) {
       const matches = prefix10Map.get(raw) ?? [];
       if (matches.length === 1) {
@@ -110,7 +128,7 @@ export async function runLoanNumberCompletion(
         else incomplete_ambiguous++;
       }
     }
-    // Other lengths (shouldn't occur) are silently skipped
+    // Other lengths are silently skipped
   }
 
   // 5. Batch update
@@ -130,6 +148,7 @@ export async function runLoanNumberCompletion(
   return {
     processed: txs.length,
     completed_direct,
+    completed_from_11,
     completed_from_10,
     completed_from_9,
     incomplete_no_match,

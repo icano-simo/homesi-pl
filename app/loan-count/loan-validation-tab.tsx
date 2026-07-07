@@ -8,14 +8,13 @@ import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
 
-type ValType = "b2b" | "on_demand" | "processing" | "all_loans" | "recruitment";
+type ValType = "b2b" | "on_demand" | "processing" | "all_loans";
 
 const SUB_TABS: { type: ValType; label: string; glLabel: string }[] = [
-  { type: "b2b",         label: "B2B",          glLabel: "DM Margin (41309)" },
-  { type: "on_demand",   label: "On Demand",     glLabel: "Other HUD Fees (41205)" },
-  { type: "processing",  label: "Processing",    glLabel: "Processing Fee (55275)" },
-  { type: "recruitment", label: "Recruitment",   glLabel: "DM Margin (41309)" },
-  { type: "all_loans",   label: "All Loans",     glLabel: "DM Margin (41309)" },
+  { type: "all_loans",  label: "All Loans",  glLabel: "DM Margin (41309)" },
+  { type: "b2b",        label: "B2B",        glLabel: "B2B Success Fee" },
+  { type: "on_demand",  label: "On Demand",  glLabel: "Other HUD Fees (41205)" },
+  { type: "processing", label: "Processing", glLabel: "Processing Fee (55275)" },
 ];
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -60,19 +59,42 @@ function SummaryStrip({ summary }: { summary: ValidationResult["summary"] }) {
 
 // ─── Surplus section ──────────────────────────────────────────────────────────
 
-function SurplusSection({ rows }: { rows: SurplusRow[] }) {
+function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
   const [open, setOpen] = useState(false);
   if (rows.length === 0) return null;
 
-  const csvData = rows.map((r) => ({
-    loan_number: r.loan_number ?? "",
-    check_description: r.check_description ?? "",
-    movement: r.movement,
-    month: r.month ?? "",
-    year: r.year ?? "",
-    branch: r.branch ?? "",
-    incomplete: r.incomplete ? "Yes" : "No",
-  }));
+  const isFlagged = type !== "all_loans";
+  const flaggedRows    = isFlagged ? rows.filter((r) => r.surplus_reason === "loan_exists_not_flagged") : [];
+  const notFoundRows   = isFlagged ? rows.filter((r) => r.surplus_reason === "loan_not_found") : [];
+  const unresolvedRows = isFlagged ? rows.filter((r) => r.surplus_reason === "loan_number_unresolved") : [];
+  const flagName = type === "b2b" ? "b2b" : type === "on_demand" ? "support_on_demand" : "processing";
+
+  function handleExport() {
+    downloadCSV(`surplus_${type}.csv`, rows.map((r) => ({
+      loan_number:       r.loan_number ?? "",
+      borrower_name:     r.borrower_name ?? "",
+      loan_officer:      r.loan_officer ?? "",
+      check_description: r.check_description ?? "",
+      gl_code:           r.gl_code ?? "",
+      movement:          r.movement,
+      month:             r.month ?? "",
+      year:              r.year ?? "",
+      branch:            r.branch ?? "",
+      surplus_reason:    r.surplus_reason ?? "",
+      incomplete:        r.incomplete ? "Yes" : "No",
+    })), [
+      { key: "loan_number",       label: "Loan Number" },
+      { key: "borrower_name",     label: "Borrower Name" },
+      { key: "loan_officer",      label: "Loan Officer" },
+      { key: "check_description", label: "Description" },
+      { key: "gl_code",           label: "GL Code" },
+      { key: "movement",          label: "Movement" },
+      { key: "month",             label: "Month" },
+      { key: "year",              label: "Year" },
+      { key: "branch",            label: "Branch" },
+      { key: "surplus_reason",    label: "Surplus Reason" },
+    ]);
+  }
 
   return (
     <div className="rounded-xl border border-blue-100 bg-blue-50/40 overflow-hidden">
@@ -81,23 +103,33 @@ function SurplusSection({ rows }: { rows: SurplusRow[] }) {
         className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-blue-50/80 transition-colors"
       >
         {open ? <ChevronDown size={13} className="text-blue-500" /> : <ChevronRight size={13} className="text-blue-500" />}
-        <span className="text-xs font-semibold text-blue-700">
-          {rows.length} surplus in accounting
-        </span>
-        <span className="text-xs text-blue-500">
-          — transactions with this GL code whose loan number is not in the filtered Loan Officials set
-        </span>
+        <span className="text-xs font-semibold text-blue-700">{rows.length} surplus in accounting</span>
+        {isFlagged ? (
+          <span className="flex items-center gap-1.5 ml-1">
+            {flaggedRows.length > 0 && (
+              <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-medium text-orange-700">
+                {flaggedRows.length} {flagName}=false
+              </span>
+            )}
+            {notFoundRows.length > 0 && (
+              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+                {notFoundRows.length} not in officials
+              </span>
+            )}
+            {unresolvedRows.length > 0 && (
+              <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">
+                {unresolvedRows.length} loan# unresolved
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-xs text-blue-500">
+            — transactions with this GL code whose loan number is not in the filtered Loan Officials set
+          </span>
+        )}
         {open && (
           <button
-            onClick={(e) => { e.stopPropagation(); downloadCSV("surplus.csv", csvData, [
-              { key: "loan_number", label: "Loan Number" },
-              { key: "check_description", label: "Description" },
-              { key: "movement", label: "Movement" },
-              { key: "month", label: "Month" },
-              { key: "year", label: "Year" },
-              { key: "branch", label: "Branch" },
-              { key: "incomplete", label: "Incomplete Loan#" },
-            ]); }}
+            onClick={(e) => { e.stopPropagation(); handleExport(); }}
             className="ml-auto flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2 py-1 text-[11px] text-blue-600 hover:bg-blue-50"
           >
             <Download size={11} /> CSV
@@ -106,38 +138,154 @@ function SurplusSection({ rows }: { rows: SurplusRow[] }) {
       </button>
 
       {open && (
-        <div className="overflow-auto max-h-72 border-t border-blue-100">
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 bg-blue-50">
-              <tr className="text-left text-blue-600/70 border-b border-blue-100">
-                <th className="px-3 py-2 font-medium">Loan Number</th>
-                <th className="px-3 py-2 font-medium">Description</th>
-                <th className="px-3 py-2 font-medium text-right">Movement</th>
-                <th className="px-3 py-2 font-medium">Month</th>
-                <th className="px-3 py-2 font-medium">Year</th>
-                <th className="px-3 py-2 font-medium">Branch</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-b border-blue-50 hover:bg-blue-50/60">
-                  <td className="px-3 py-1.5 font-mono text-gray-700">
-                    {r.loan_number ?? <span className="text-gray-400 italic">no loan#</span>}
-                    {r.incomplete && (
-                      <span className="ml-1 rounded bg-orange-100 px-1 py-0.5 text-[10px] font-medium text-orange-600">ambiguous</span>
-                    )}
-                  </td>
-                  <td className="max-w-[200px] truncate px-3 py-1.5 text-gray-600" title={r.check_description ?? ""}>
-                    {r.check_description ?? "—"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right">{fmtMov(r.movement)}</td>
-                  <td className="px-3 py-1.5 text-gray-600">{r.month ?? "—"}</td>
-                  <td className="px-3 py-1.5 text-gray-600">{r.year ?? "—"}</td>
-                  <td className="px-3 py-1.5 text-gray-600">{r.branch ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="border-t border-blue-100">
+          {isFlagged ? (
+            <div>
+              {/* Sub-group 1: Loan exists but not flagged */}
+              {flaggedRows.length > 0 && (
+                <div>
+                  <div className="px-4 py-1.5 bg-orange-50 border-b border-orange-100">
+                    <span className="text-[11px] font-semibold text-orange-700">
+                      {flaggedRows.length} — Loan exists but {flagName} = false
+                    </span>
+                  </div>
+                  <div className="overflow-auto max-h-72">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-orange-50">
+                        <tr className="text-left text-orange-600/80 border-b border-orange-100">
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Number</th>
+                          <th className="px-3 py-2 font-medium">Borrower Name</th>
+                          <th className="px-3 py-2 font-medium">Loan Officer</th>
+                          <th className="px-3 py-2 font-medium">Branch</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
+                          <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
+                          <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Fee (Acct.)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {flaggedRows.map((r, i) => (
+                          <tr key={i} className="border-b border-orange-50 hover:bg-orange-50/60">
+                            <td className="px-3 py-1.5 font-mono text-gray-700 whitespace-nowrap">{r.loan_number}</td>
+                            <td className="max-w-[160px] truncate px-3 py-1.5 text-gray-700" title={r.borrower_name ?? ""}>{r.borrower_name ?? "—"}</td>
+                            <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-600" title={r.loan_officer ?? ""}>{r.loan_officer ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.branch ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.month ?? "—"}{r.year ? ` ${r.year}` : ""}</td>
+                            <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(r.loan_amount)}</td>
+                            <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtMov(r.movement)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-group 2: Loan not found in officials at all */}
+              {notFoundRows.length > 0 && (
+                <div className={flaggedRows.length > 0 ? "border-t border-blue-100" : ""}>
+                  <div className="px-4 py-1.5 bg-gray-50 border-b border-gray-100">
+                    <span className="text-[11px] font-semibold text-gray-600">
+                      {notFoundRows.length} — Loan number complete but not found in Loan Officials
+                    </span>
+                  </div>
+                  <div className="overflow-auto max-h-60">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-gray-50">
+                        <tr className="text-left text-gray-500 border-b border-gray-100">
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Number</th>
+                          <th className="px-3 py-2 font-medium">Description</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">GL Code</th>
+                          <th className="px-3 py-2 font-medium">Branch</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
+                          <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Movement</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {notFoundRows.map((r, i) => (
+                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
+                            <td className="px-3 py-1.5 font-mono text-gray-700 whitespace-nowrap">{r.loan_number ?? "—"}</td>
+                            <td className="max-w-[220px] truncate px-3 py-1.5 text-gray-600" title={r.check_description ?? ""}>{r.check_description ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.gl_code ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.branch ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.month ?? "—"}{r.year ? ` ${r.year}` : ""}</td>
+                            <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtMov(r.movement)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-group 3: Loan number null or ambiguous */}
+              {unresolvedRows.length > 0 && (
+                <div className={(flaggedRows.length > 0 || notFoundRows.length > 0) ? "border-t border-blue-100" : ""}>
+                  <div className="px-4 py-1.5 bg-purple-50 border-b border-purple-100">
+                    <span className="text-[11px] font-semibold text-purple-700">
+                      {unresolvedRows.length} — Loan number not resolved (null or ambiguous)
+                    </span>
+                  </div>
+                  <div className="overflow-auto max-h-60">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-purple-50">
+                        <tr className="text-left text-purple-600/80 border-b border-purple-100">
+                          <th className="px-3 py-2 font-medium">Description</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">GL Code</th>
+                          <th className="px-3 py-2 font-medium">Branch</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
+                          <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Movement</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unresolvedRows.map((r, i) => (
+                          <tr key={i} className="border-b border-purple-50 hover:bg-purple-50/60">
+                            <td className="px-3 py-1.5 text-gray-700 text-[11px] max-w-[320px] break-all">{r.check_description ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.gl_code ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.branch ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.month ?? "—"}{r.year ? ` ${r.year}` : ""}</td>
+                            <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtMov(r.movement)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Original all_loans display */
+            <div className="overflow-auto max-h-72">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-blue-50">
+                  <tr className="text-left text-blue-600/70 border-b border-blue-100">
+                    <th className="px-3 py-2 font-medium">Loan Number</th>
+                    <th className="px-3 py-2 font-medium">Description</th>
+                    <th className="px-3 py-2 font-medium text-right">Movement</th>
+                    <th className="px-3 py-2 font-medium">Month</th>
+                    <th className="px-3 py-2 font-medium">Year</th>
+                    <th className="px-3 py-2 font-medium">Branch</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i} className="border-b border-blue-50 hover:bg-blue-50/60">
+                      <td className="px-3 py-1.5 font-mono text-gray-700">
+                        {r.loan_number ?? <span className="text-gray-400 italic">no loan#</span>}
+                        {r.incomplete && (
+                          <span className="ml-1 rounded bg-orange-100 px-1 py-0.5 text-[10px] font-medium text-orange-600">ambiguous</span>
+                        )}
+                      </td>
+                      <td className="max-w-[200px] truncate px-3 py-1.5 text-gray-600" title={r.check_description ?? ""}>{r.check_description ?? "—"}</td>
+                      <td className="px-3 py-1.5 text-right">{fmtMov(r.movement)}</td>
+                      <td className="px-3 py-1.5 text-gray-600">{r.month ?? "—"}</td>
+                      <td className="px-3 py-1.5 text-gray-600">{r.year ?? "—"}</td>
+                      <td className="px-3 py-1.5 text-gray-600">{r.branch ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -146,7 +294,17 @@ function SurplusSection({ rows }: { rows: SurplusRow[] }) {
 
 // ─── Main table ───────────────────────────────────────────────────────────────
 
-function ValidationTable({ rows, showBps }: { rows: ValidationRow[]; showBps: boolean }) {
+function ValidationTable({
+  rows,
+  showLoanOfficer = false,
+  showLoanAmount = false,
+  showAccountingAmt = false,
+}: {
+  rows: ValidationRow[];
+  showLoanOfficer?: boolean;
+  showLoanAmount?: boolean;
+  showAccountingAmt?: boolean;
+}) {
   if (rows.length === 0) {
     return (
       <div className="rounded-xl border border-gray-100 bg-white px-6 py-10 text-center text-sm text-gray-400">
@@ -163,13 +321,11 @@ function ValidationTable({ rows, showBps }: { rows: ValidationRow[]; showBps: bo
             <th className="px-3 py-2 font-medium">Status</th>
             <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Number</th>
             <th className="px-3 py-2 font-medium">Borrower Name</th>
+            {showLoanOfficer && <th className="px-3 py-2 font-medium">Loan Officer</th>}
             <th className="px-3 py-2 font-medium">Branch</th>
             <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
-            {showBps && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>}
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">
-              {showBps ? "DM Margin" : "Accounting Amt."}
-            </th>
-            {showBps && <th className="px-3 py-2 font-medium text-right">BPS</th>}
+            {showLoanAmount && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>}
+            {showAccountingAmt && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Accounting Amt.</th>}
           </tr>
         </thead>
         <tbody>
@@ -195,19 +351,21 @@ function ValidationTable({ rows, showBps }: { rows: ValidationRow[]; showBps: bo
                 <td className="max-w-[160px] truncate px-3 py-1.5 text-gray-700" title={row.borrower_name ?? ""}>
                   {row.borrower_name ?? "—"}
                 </td>
+                {showLoanOfficer && (
+                  <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.loan_officer ?? ""}>
+                    {row.loan_officer ?? "—"}
+                  </td>
+                )}
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.month ?? "—"}</td>
-                {showBps && (
+                {showLoanAmount && (
                   <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">
                     {fmtUSD(row.loan_amount)}
                   </td>
                 )}
-                <td className="px-3 py-1.5 text-right whitespace-nowrap">
-                  {missing ? <span className="text-gray-300">—</span> : fmtMov(row.accounting_total)}
-                </td>
-                {showBps && (
-                  <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap">
-                    {missing ? <span className="text-gray-300">—</span> : fmtBPS(row.bps)}
+                {showAccountingAmt && (
+                  <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                    {missing ? <span className="text-gray-300">—</span> : fmtMov(row.accounting_total)}
                   </td>
                 )}
               </tr>
@@ -219,7 +377,7 @@ function ValidationTable({ rows, showBps }: { rows: ValidationRow[]; showBps: bo
   );
 }
 
-const STATUS_OPTS = ["Matched", "Missing in Accounting", "Extra in Accounting"] as const;
+const STATUS_OPTS = ["Matched", "Missing in Accounting", "Surplus in Accounting"] as const;
 
 // ─── Single validation section (one sub-tab) ──────────────────────────────────
 
@@ -257,7 +415,9 @@ function ValidationSection({
 
   useEffect(() => { load(); }, [load]);
 
-  const showBps = type === "b2b" || type === "all_loans" || type === "recruitment";
+  const showLoanOfficer  = type === "b2b";
+  const showLoanAmount   = type === "b2b";
+  const showAccountingAmt = type !== "b2b";
 
   // Derived view — summary strip always uses full data.summary regardless of active filters
   const visibleRows: ValidationRow[] = !data ? [] :
@@ -271,7 +431,7 @@ function ValidationSection({
 
   const showSurplus = !data ? false :
     data.surplus.length > 0 &&
-    (statusFilter.length === 0 || statusFilter.includes("Extra in Accounting"));
+    (statusFilter.length === 0 || statusFilter.includes("Surplus in Accounting"));
 
   function handleExport() {
     if (!data) return;
@@ -279,19 +439,21 @@ function ValidationSection({
       status: r.status,
       loan_number: r.loan_number,
       borrower_name: r.borrower_name ?? "",
+      ...(showLoanOfficer  ? { loan_officer:      r.loan_officer ?? "" }     : {}),
       branch: r.branch ?? "",
-      loan_amount: r.loan_amount ?? "",
-      accounting_total: r.accounting_total,
-      bps: r.bps ?? "",
+      month: r.month ?? "",
+      ...(showLoanAmount   ? { loan_amount:        r.loan_amount ?? "" }      : {}),
+      ...(showAccountingAmt ? { accounting_total:  r.accounting_total }       : {}),
     }));
     const cols = [
-      { key: "status",           label: "Status" },
-      { key: "loan_number",      label: "Loan Number" },
-      { key: "borrower_name",    label: "Borrower Name" },
-      { key: "branch",           label: "Branch" },
-      ...(showBps ? [{ key: "loan_amount", label: "Loan Amount" }] : []),
-      { key: "accounting_total", label: showBps ? "DM Margin" : "Accounting Amt." },
-      ...(showBps ? [{ key: "bps", label: "BPS" }] : []),
+      { key: "status",        label: "Status" },
+      { key: "loan_number",   label: "Loan Number" },
+      { key: "borrower_name", label: "Borrower Name" },
+      ...(showLoanOfficer   ? [{ key: "loan_officer",     label: "Loan Officer" }]    : []),
+      { key: "branch",        label: "Branch" },
+      { key: "month",         label: "Month" },
+      ...(showLoanAmount    ? [{ key: "loan_amount",       label: "Loan Amount" }]    : []),
+      ...(showAccountingAmt ? [{ key: "accounting_total", label: "Accounting Amt." }] : []),
     ];
     downloadCSV(`loan_validation_${type}.csv`, csvRows, cols);
   }
@@ -301,9 +463,15 @@ function ValidationSection({
       {/* Header row */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-xs text-gray-500">
-          GL {glLabel}
-          {type === "on_demand" && <span className="ml-1 text-gray-400">· desc contains &ldquo;LOA ON DEMAND FEE ON FILE&rdquo;</span>}
-          {type === "processing" && <span className="ml-1 text-gray-400">· desc contains &ldquo;PROCESSING FEE ON FILE&rdquo;</span>}
+          {type === "b2b" ? (
+            <span>desc contains &ldquo;B2B SUCCESS FEE&rdquo;</span>
+          ) : (
+            <>
+              GL {glLabel}
+              {type === "on_demand"  && <span className="ml-1 text-gray-400">· desc contains &ldquo;LOA ON DEMAND FEE&rdquo;</span>}
+              {type === "processing" && <span className="ml-1 text-gray-400">· desc contains &ldquo;PROCESSING FEE ON FILE&rdquo;</span>}
+            </>
+          )}
         </p>
         <div className="flex items-center gap-2">
           <ReportFilter
@@ -332,8 +500,13 @@ function ValidationSection({
       ) : data ? (
         <>
           <SummaryStrip summary={data.summary} />
-          <ValidationTable rows={visibleRows} showBps={showBps} />
-          {showSurplus && <SurplusSection rows={data.surplus} />}
+          <ValidationTable
+            rows={visibleRows}
+            showLoanOfficer={showLoanOfficer}
+            showLoanAmount={showLoanAmount}
+            showAccountingAmt={showAccountingAmt}
+          />
+          {showSurplus && <SurplusSection rows={data.surplus} type={type} />}
         </>
       ) : null}
     </div>
@@ -726,7 +899,7 @@ function AllLoansSection({
 
   const showSurplus =
     !!data && data.surplus.length > 0 &&
-    (filterStatus.length === 0 || filterStatus.includes("Extra in Accounting"));
+    (filterStatus.length === 0 || filterStatus.includes("Surplus in Accounting"));
 
   return (
     <div className="space-y-4">
@@ -795,7 +968,7 @@ function AllLoansSection({
             <AnalyticsView rows={filteredRows} />
           )}
 
-          {showSurplus && <SurplusSection rows={data.surplus} />}
+          {showSurplus && <SurplusSection rows={data.surplus} type="all_loans" />}
         </>
       ) : null}
     </div>
@@ -813,7 +986,7 @@ export function LoanValidationTab({
   allYears: number[];
   allBranches: string[];
 }) {
-  const [activeType, setActiveType] = useState<ValType>("b2b");
+  const [activeType, setActiveType] = useState<ValType>("all_loans");
   const [selMonths, setSelMonths] = useState<string[]>([]);
   const [selYears, setSelYears] = useState<string[]>([]);
   const [selBranches, setSelBranches] = useState<string[]>([]);

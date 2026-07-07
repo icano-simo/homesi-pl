@@ -3,7 +3,7 @@ import { createServerClient } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
-type ValType = "b2b" | "on_demand" | "processing" | "all_loans" | "recruitment";
+type ValType = "b2b" | "on_demand" | "processing" | "all_loans";
 
 export interface ValidationRow {
   loan_number: string;
@@ -21,11 +21,16 @@ export interface ValidationRow {
 export interface SurplusRow {
   loan_number: string | null;
   check_description: string | null;
+  gl_code: string | null;
   movement: number;
   month: string | null;
   year: number | null;
   branch: string | null;
   incomplete: boolean;
+  borrower_name: string | null;
+  loan_officer: string | null;
+  loan_amount: number | null;
+  surplus_reason: "loan_exists_not_flagged" | "loan_not_found" | "loan_number_unresolved" | null;
 }
 
 export interface ValidationResult {
@@ -61,30 +66,30 @@ export async function GET(req: NextRequest) {
   if (type === "b2b") loQuery = loQuery.eq("b2b", true);
   else if (type === "on_demand") loQuery = loQuery.eq("support_on_demand", true);
   else if (type === "processing") loQuery = loQuery.eq("processing", true);
-  else if (type === "recruitment") loQuery = loQuery.eq("recruitment", true);
   // all_loans: no flag filter
 
   const { data: loanOfficials, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
 
-  // ── 2. Determine GL code and description filter ─────────────────────────────
-  const glCode =
-    type === "b2b" || type === "all_loans" || type === "recruitment" ? "41309" :
-    type === "on_demand" ? "41205" : "55275";
-  const descFilter =
-    type === "on_demand" ? "LOA ON DEMAND FEE ON FILE" :
+  // ── 2. Determine transaction filter strategy ───────────────────────────────
+  // B2B, On Demand, Processing: match by check_description text regardless of GL code.
+  // Recruitment and all_loans: match by GL code 41309 (description text TBD for recruitment).
+  const glCode: string | null = type === "all_loans" ? "41309" : null;
+  const descFilter: string | null =
+    type === "b2b"        ? "B2B SUCCESS FEE" :
+    type === "on_demand"  ? "LOA ON DEMAND FEE" :
     type === "processing" ? "PROCESSING FEE ON FILE" : null;
 
-  // ── 3. Fetch pl_transactions for this GL code (same period, no branch filter) ─
+  // ── 3. Fetch pl_transactions matching the period (no branch filter on accounting side) ─
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let txQuery: any = supabase
     .from("pl_transactions")
-    .select("loan_number, loan_number_incomplete, check_description, movement, month, year, branch")
-    .eq("gl_code", glCode);
+    .select("loan_number, loan_number_incomplete, check_description, gl_code, movement, month, year, branch");
 
+  if (glCode)     txQuery = txQuery.eq("gl_code", glCode);
+  if (descFilter) txQuery = txQuery.ilike("check_description", `%${descFilter}%`);
   if (months.length > 0) txQuery = txQuery.in("month", months);
   if (years.length > 0) txQuery = txQuery.in("year", years);
-  if (descFilter) txQuery = txQuery.ilike("check_description", `%${descFilter}%`);
 
   const { data: transactions, error: txError } = await txQuery;
   if (txError) return NextResponse.json({ error: txError.message }, { status: 500 });
@@ -103,7 +108,7 @@ export async function GET(req: NextRequest) {
   );
 
   // ── 5. Build validation rows (one per loan in loan_officials) ───────────────
-  const showBps = type === "b2b" || type === "all_loans" || type === "recruitment";
+  const showBps = type === "all_loans";
   const rows: ValidationRow[] = (loanOfficials ?? []).map((lo: Record<string, unknown>) => {
     const loanNum = lo.loan_number as string;
     const total = txByLoan.get(loanNum);
@@ -137,12 +142,66 @@ export async function GET(req: NextRequest) {
       surplus.push({
         loan_number: loanNum,
         check_description: tx.check_description as string | null,
+        gl_code: tx.gl_code as string | null,
         movement: (tx.movement as number) ?? 0,
         month: tx.month as string | null,
         year: tx.year as number | null,
         branch: tx.branch as string | null,
         incomplete,
+        borrower_name: null,
+        loan_officer: null,
+        loan_amount: null,
+        surplus_reason: null,
       });
+    }
+  }
+
+  // ── 7. Enrich surplus for flagged types ─────────────────────────────────────
+  if (type !== "all_loans" && surplus.length > 0) {
+    const completeLns = [
+      ...new Set(
+        surplus
+          .filter((s) => s.loan_number && !s.incomplete)
+          .map((s) => s.loan_number as string)
+      ),
+    ];
+
+    const enrichMap = new Map<
+      string,
+      { borrower_name: string | null; loan_officer: string | null; branch: string | null; loan_amount: number | null }
+    >();
+
+    if (completeLns.length > 0) {
+      const { data: enrichData } = await supabase
+        .from("loan_officials")
+        .select("loan_number, borrower_name, loan_officer, branch, loan_amount")
+        .in("loan_number", completeLns);
+
+      for (const row of (enrichData ?? []) as Array<Record<string, unknown>>) {
+        enrichMap.set(row.loan_number as string, {
+          borrower_name: row.borrower_name as string | null,
+          loan_officer: row.loan_officer as string | null,
+          branch: row.branch as string | null,
+          loan_amount: row.loan_amount as number | null,
+        });
+      }
+    }
+
+    for (const s of surplus) {
+      if (!s.loan_number || s.incomplete) {
+        s.surplus_reason = "loan_number_unresolved";
+      } else {
+        const enrich = enrichMap.get(s.loan_number);
+        if (enrich) {
+          s.borrower_name = enrich.borrower_name;
+          s.loan_officer = enrich.loan_officer;
+          if (!s.branch) s.branch = enrich.branch;
+          s.loan_amount = enrich.loan_amount;
+          s.surplus_reason = "loan_exists_not_flagged";
+        } else {
+          s.surplus_reason = "loan_not_found";
+        }
+      }
     }
   }
 
