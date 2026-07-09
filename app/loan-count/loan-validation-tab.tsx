@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
 import { ChevronDown, ChevronRight, Download, AlertTriangle, CheckCircle, TrendingUp } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import * as XLSX from "xlsx";
+import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan-validation/route";
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
@@ -1116,11 +1117,14 @@ export function LoanValidationTab({
   allYears: number[];
   allBranches: string[];
 }) {
+  const { activeBranches } = useActiveBranches();
   const [activeType, setActiveType] = useState<ValType>("all_loans");
   const [selMonths, setSelMonths] = useState<string[]>([]);
   const [selYears, setSelYears] = useState<string[]>([]);
   const [selBranches, setSelBranches] = useState<string[]>([]);
   const [filterLoanNumber, setFilterLoanNumber] = useState("");
+
+  const effectiveBranches = mergeWithGlobal(activeBranches, selBranches);
 
   const yearOptions = allYears.map(String);
   const hasFilters = selMonths.length > 0 || selYears.length > 0 || selBranches.length > 0 || filterLoanNumber !== "";
@@ -1173,7 +1177,7 @@ export function LoanValidationTab({
         <AllLoansSection
           months={selMonths}
           years={selYears}
-          branches={selBranches}
+          branches={effectiveBranches}
           filterLoanNumber={filterLoanNumber}
         />
       ) : (
@@ -1184,7 +1188,7 @@ export function LoanValidationTab({
             glLabel={t.glLabel}
             months={selMonths}
             years={selYears}
-            branches={selBranches}
+            branches={effectiveBranches}
             filterLoanNumber={filterLoanNumber}
           />
         ))

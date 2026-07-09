@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
     type === "on_demand"  ? "LOA ON DEMAND FEE" :
     type === "processing" ? "PROCESSING FEE ON FILE" : null;
 
-  // ── 3. Fetch pl_transactions matching the period (no branch filter on accounting side) ─
+  // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
   // Paginate to avoid Supabase's default 1000-row cap.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const buildTxQuery = () => {
@@ -90,10 +90,11 @@ export async function GET(req: NextRequest) {
     let q: any = supabase
       .from("pl_transactions")
       .select("loan_number, loan_number_incomplete, check_description, gl_code, movement, month, year, branch");
-    if (glCode)     q = q.eq("gl_code", glCode);
-    if (descFilter) q = q.ilike("check_description", `%${descFilter}%`);
-    if (months.length > 0) q = q.in("month", months);
-    if (years.length > 0) q = q.in("year", years);
+    if (glCode)          q = q.eq("gl_code", glCode);
+    if (descFilter)      q = q.ilike("check_description", `%${descFilter}%`);
+    if (months.length  > 0) q = q.in("month",  months);
+    if (years.length   > 0) q = q.in("year",   years);
+    if (branches.length > 0) q = q.in("branch", branches);
     return q;
   };
 
