@@ -35,14 +35,17 @@ export async function GET(req: NextRequest) {
   const months = searchParams.getAll("month");
   const years  = searchParams.getAll("year").map(Number).filter((n) => !isNaN(n));
 
-  // ── 1. Fetch LOA ON DEMAND FEE transactions — NO branch filter ────────────────
+  // ── 1. Fetch LOA ON DEMAND FEE transactions — exclude branch 700 ─────────────
+  // Branch 700 holds the central accounting contra-entries; the real per-branch
+  // transactions live in branches 707, 716, 724, etc. and carry the correct branch.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const buildTxQuery = () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let q: any = supabase
       .from("pl_transactions")
       .select("branch, check_description, movement")
-      .ilike("check_description", "%LOA ON DEMAND FEE%");
+      .ilike("check_description", "%LOA ON DEMAND FEE%")
+      .neq("branch", "700");
     if (months.length > 0) q = q.in("month", months);
     if (years.length  > 0) q = q.in("year",  years);
     return q;
@@ -72,6 +75,7 @@ export async function GET(req: NextRequest) {
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
 
   // ── 3. Group transactions: branch → (description → { tx_count, net_movement }) ─
+  // Uses pl_transactions.branch directly (branch 700 already excluded above).
   const txByBranch = new Map<string, Map<string, { tx_count: number; net_movement: number }>>();
   for (const tx of txRows) {
     const branch = tx.branch ?? "(No Branch)";
