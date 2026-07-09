@@ -8,6 +8,7 @@ import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
+import { runLoanNumberCompletion } from "@/lib/loan-number-completion";
 import type { ApiError, UploadPLResponse, PLTransaction, SplitRuleWithDetails } from "@/types";
 
 function apiError(message: string, status = 500): NextResponse<ApiError> {
@@ -86,6 +87,9 @@ export async function POST(req: NextRequest) {
         .insert(chunk);
       if (chunkErr) throw new Error(`Insert error (chunk ${i}): ${chunkErr.message}`);
     }
+
+    // ── 6b. Resolve loan_number_raw → loan_number for this upload ────────
+    await runLoanNumberCompletion(supabase, { uploadId: id });
 
     // ── 7. Apply cost center rules to the newly inserted transactions ─────
     const [splitRules, loMap] = await Promise.all([

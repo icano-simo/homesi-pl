@@ -23,7 +23,8 @@ export interface CompletionStats {
  * - Otherwise (0 or 2+ matches) → keep raw value, loan_number_incomplete = true
  */
 export async function runLoanNumberCompletion(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  options?: { uploadId?: string }
 ): Promise<CompletionStats> {
   // 1. Get all unique 12-digit loan numbers from loan_officials
   const { data: loansData, error: loansErr } = await supabase
@@ -61,15 +62,17 @@ export async function runLoanNumberCompletion(
     prefix9Map.set(p9, arr9);
   }
 
-  // 3. Fetch all pl_transactions with loan_number_raw (paginated)
+  // 3. Fetch pl_transactions with loan_number_raw (scoped to uploadId if provided)
   const txs: { id: string; loan_number_raw: string }[] = [];
   let offset = 0;
   while (true) {
-    const { data, error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q: any = supabase
       .from("pl_transactions")
       .select("id,loan_number_raw")
-      .not("loan_number_raw", "is", null)
-      .range(offset, offset + 999);
+      .not("loan_number_raw", "is", null);
+    if (options?.uploadId) q = q.eq("upload_id", options.uploadId);
+    const { data, error } = await q.range(offset, offset + 999);
     if (error) throw new Error(`pl_transactions fetch: ${error.message}`);
     if (!data || data.length === 0) break;
     txs.push(...(data as { id: string; loan_number_raw: string }[]));

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, X, Trash2, RefreshCw } from "lucide-react";
-import type { UploadPLResponse, AddbacksUploadResponse, OffshoreAllocationsUploadResponse, UploadLoanCountResponse } from "@/types";
+import type { UploadPLResponse, AddbacksUploadResponse, OffshoreAllocationsUploadResponse, UploadLoanCountResponse, ManualAssignmentSummary } from "@/types";
 import type { DuplicateInfo } from "@/lib/check-duplicate-upload";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
@@ -16,6 +16,56 @@ function Stat({ value, label, warn = false }: { value: number; label: string; wa
         {value.toLocaleString()}
       </p>
       <p className="text-xs text-gray-500">{label}</p>
+    </div>
+  );
+}
+
+// ─── Manual assignment summary (shown after Replace) ─────────────────────────
+
+function ManualAssignmentBlock({ ma }: { ma: ManualAssignmentSummary }) {
+  const notFound       = ma.manual_not_found      + ma.conflict_resolved_not_found;
+  const requiresReview = ma.manual_requires_review + ma.conflict_resolved_requires_review;
+  const allGood        = notFound === 0 && requiresReview === 0;
+
+  const borderColor = requiresReview > 0 ? "border-orange-200" : notFound > 0 ? "border-yellow-200" : "border-green-200";
+  const bgColor     = requiresReview > 0 ? "bg-orange-50"      : notFound > 0 ? "bg-yellow-50"      : "bg-green-50";
+
+  return (
+    <div className={`rounded-lg border ${borderColor} ${bgColor} px-3 py-2.5 space-y-1.5`}>
+      <p className="text-xs font-semibold text-gray-700">Assignments after replace</p>
+      {ma.manual_reapplied > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-green-700">
+          <CheckCircle2 size={13} />
+          Manual assignments restored: {ma.manual_reapplied}
+        </div>
+      )}
+      {ma.conflict_resolved_reapplied > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-green-700">
+          <CheckCircle2 size={13} />
+          Conflict resolutions restored: {ma.conflict_resolved_reapplied}
+        </div>
+      )}
+      {notFound > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-yellow-700">
+          <AlertCircle size={13} />
+          Not found (no longer in file): {notFound}
+        </div>
+      )}
+      {requiresReview > 0 && (
+        <div className="space-y-0.5">
+          <div className="flex items-center gap-1.5 text-xs text-orange-700">
+            <AlertCircle size={13} />
+            Requires manual review: {requiresReview}
+          </div>
+          <p className="pl-5 text-[11px] text-orange-600">Find these in Cost Center Assignment → Unassigned</p>
+        </div>
+      )}
+      {allGood && ma.total_snapshotted > 0 && (
+        <p className="text-xs text-green-700">All {ma.total_snapshotted} assignment(s) restored successfully.</p>
+      )}
+      {allGood && ma.total_snapshotted === 0 && (
+        <p className="text-xs text-gray-500">No manual assignments in the replaced upload.</p>
+      )}
     </div>
   );
 }
@@ -263,6 +313,7 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
               Some rows are uncategorized. Review GL Mapping and Branches in Settings.
             </p>
           )}
+          {result.manualAssignments && <ManualAssignmentBlock ma={result.manualAssignments} />}
           <button
             onClick={reset}
             className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
