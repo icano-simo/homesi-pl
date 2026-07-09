@@ -6,6 +6,7 @@ import { ReportFilter } from "@/components/report-filter";
 import * as XLSX from "xlsx";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan-validation/route";
+import type { OnDemandResult } from "@/app/api/loan-validation/on-demand/route";
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
 
@@ -566,6 +567,225 @@ function ValidationSection({
             showTxColumns={showTxColumns}
           />
           {showSurplus && <SurplusSection rows={data.surplus} type={type} />}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── On Demand: diff badge ────────────────────────────────────────────────────
+
+function DiffBadge({ diff }: { diff: number }) {
+  if (diff === 0) return (
+    <span className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">
+      <CheckCircle size={9} /> 0
+    </span>
+  );
+  if (diff < 0) return (
+    <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+      <AlertTriangle size={9} /> {diff}
+    </span>
+  );
+  return (
+    <span className="inline-flex items-center gap-1 rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
+      <AlertTriangle size={9} /> +{diff}
+    </span>
+  );
+}
+
+// ─── On Demand: pivot section (Branch vs LOA On Demand) ───────────────────────
+
+function OnDemandSection({ months, years }: {
+  months: string[];
+  years: string[];
+}) {
+  const [data, setData] = useState<OnDemandResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const p = new URLSearchParams();
+      months.forEach((m) => p.append("month", m));
+      years.forEach((y) => p.append("year", y));
+      const res = await fetch(`/api/loan-validation/on-demand?${p}`);
+      const json = await res.json();
+      if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
+      setData(json);
+    } finally {
+      setLoading(false);
+    }
+  }, [months, years]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = (branch: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(branch) ? next.delete(branch) : next.add(branch);
+      return next;
+    });
+
+  const totalAccounting = data?.branches.reduce((s, r) => s + r.accounting_count, 0) ?? 0;
+  const totalOfficial   = data?.branches.reduce((s, r) => s + r.official_count, 0) ?? 0;
+  const totalDiff       = totalAccounting - totalOfficial;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-gray-500">
+        Branch comparison — <span className="font-medium">LOA ON DEMAND FEE</span> in accounting vs{" "}
+        <span className="font-medium">support_on_demand = true</span> in Loan Officials.{" "}
+        <span className="text-gray-400">Branch filter not applied — all branches shown.</span>
+      </p>
+
+      {loading ? (
+        <div className="py-12 text-center">
+          <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-300 border-t-blue-600" />
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-600">{error}</div>
+      ) : data ? (
+        <>
+          {/* Summary strip */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5">
+              <span className="text-xs font-semibold text-gray-700">{totalAccounting}</span>
+              <span className="text-xs text-gray-500">unique descriptions in accounting</span>
+            </div>
+            <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5">
+              <span className="text-xs font-semibold text-gray-700">{totalOfficial}</span>
+              <span className="text-xs text-gray-500">loans in Loan Officials</span>
+            </div>
+            <div className={[
+              "flex items-center gap-1.5 rounded-lg border px-3 py-1.5",
+              totalDiff === 0 ? "border-green-200 bg-green-50" :
+              totalDiff  < 0 ? "border-amber-200 bg-amber-50" :
+                               "border-orange-200 bg-orange-50",
+            ].join(" ")}>
+              <span className={[
+                "text-xs font-semibold",
+                totalDiff === 0 ? "text-green-700" : totalDiff < 0 ? "text-amber-700" : "text-orange-700",
+              ].join(" ")}>
+                {totalDiff === 0
+                  ? "✓ All branches match"
+                  : `${totalDiff > 0 ? "+" : ""}${totalDiff} overall`}
+              </span>
+            </div>
+          </div>
+
+          {/* Pivot table */}
+          <div className="overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 z-10 bg-gray-50">
+                <tr className="border-b border-gray-100 text-gray-500">
+                  <th className="px-3 py-2 font-medium text-left">Branch</th>
+                  <th className="px-3 py-2 font-medium text-right whitespace-nowrap">In Accounting</th>
+                  <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Marked as On Demand</th>
+                  <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Difference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.branches.map((row) => {
+                  const exp = expanded.has(row.branch);
+                  return (
+                    <Fragment key={`od-${row.branch}`}>
+                      <tr
+                        onClick={() => toggle(row.branch)}
+                        className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer select-none"
+                      >
+                        <td className="px-3 py-2.5 font-medium text-gray-800">
+                          <span className="mr-1.5 text-[10px] text-gray-400">{exp ? "▾" : "▸"}</span>
+                          Branch {row.branch}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-mono text-gray-700">{row.accounting_count}</td>
+                        <td className="px-3 py-2.5 text-right font-mono text-gray-700">{row.official_count}</td>
+                        <td className="px-3 py-2.5 text-right"><DiffBadge diff={row.difference} /></td>
+                      </tr>
+
+                      {exp && (
+                        <tr className="border-b border-gray-100">
+                          <td colSpan={4} className="p-0">
+                            <div className="grid grid-cols-2 gap-3 p-3 bg-gray-50/50 border-t border-gray-100">
+
+                              {/* Accounting sub-table */}
+                              <div>
+                                <p className="mb-1.5 text-[11px] font-semibold text-gray-600">
+                                  {row.accounting_count} unique LOA ON DEMAND description{row.accounting_count !== 1 ? "s" : ""}
+                                </p>
+                                <div className="overflow-auto max-h-56 rounded-lg border border-gray-200 bg-white">
+                                  {row.accounting_items.length === 0 ? (
+                                    <p className="px-3 py-4 text-center text-[11px] text-gray-400">No transactions</p>
+                                  ) : (
+                                    <table className="w-full text-[11px]">
+                                      <thead className="sticky top-0 bg-gray-50">
+                                        <tr className="border-b border-gray-100 text-left text-gray-500">
+                                          <th className="px-2 py-1.5 font-medium">Description</th>
+                                          <th className="px-2 py-1.5 font-medium text-right whitespace-nowrap"># Txns</th>
+                                          <th className="px-2 py-1.5 font-medium text-right whitespace-nowrap">Net Movement</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {row.accounting_items.map((item, i) => (
+                                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
+                                            <td className="max-w-[220px] truncate px-2 py-1.5 text-gray-700" title={item.description}>
+                                              {item.description}
+                                            </td>
+                                            <td className="px-2 py-1.5 text-right font-mono text-gray-600">{item.tx_count}</td>
+                                            <td className="px-2 py-1.5 text-right whitespace-nowrap">{fmtMov(item.net_movement)}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Loan Officials sub-table */}
+                              <div>
+                                <p className="mb-1.5 text-[11px] font-semibold text-gray-600">
+                                  {row.official_count} On Demand loan{row.official_count !== 1 ? "s" : ""} in Loan Officials
+                                </p>
+                                <div className="overflow-auto max-h-56 rounded-lg border border-gray-200 bg-white">
+                                  {row.official_loans.length === 0 ? (
+                                    <p className="px-3 py-4 text-center text-[11px] text-gray-400">No loans</p>
+                                  ) : (
+                                    <table className="w-full text-[11px]">
+                                      <thead className="sticky top-0 bg-gray-50">
+                                        <tr className="border-b border-gray-100 text-left text-gray-500">
+                                          <th className="px-2 py-1.5 font-medium whitespace-nowrap">Loan Number</th>
+                                          <th className="px-2 py-1.5 font-medium">Borrower Name</th>
+                                          <th className="px-2 py-1.5 font-medium">Loan Officer</th>
+                                          <th className="px-2 py-1.5 font-medium text-right whitespace-nowrap">Loan Amount</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {row.official_loans.map((loan, i) => (
+                                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
+                                            <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{loan.loan_number}</td>
+                                            <td className="max-w-[140px] truncate px-2 py-1.5 text-gray-700" title={loan.borrower_name ?? ""}>{loan.borrower_name ?? "—"}</td>
+                                            <td className="max-w-[120px] truncate px-2 py-1.5 text-gray-600" title={loan.loan_officer ?? ""}>{loan.loan_officer ?? "—"}</td>
+                                            <td className="px-2 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(loan.loan_amount)}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+                                </div>
+                              </div>
+
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </>
       ) : null}
     </div>
@@ -1180,6 +1400,8 @@ export function LoanValidationTab({
           branches={effectiveBranches}
           filterLoanNumber={filterLoanNumber}
         />
+      ) : activeType === "on_demand" ? (
+        <OnDemandSection months={selMonths} years={selYears} />
       ) : (
         SUB_TABS.filter((t) => t.type === activeType).map((t) => (
           <ValidationSection
