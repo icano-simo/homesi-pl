@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, AlertTriangle } from "lucide-react";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { Plus, Trash2, ChevronDown, ChevronRight, RefreshCw, X, AlertTriangle, Search } from "lucide-react";
 import { CC_FIELDS, operatorsForField, defaultOperator, getFieldKind, defaultValue } from "@/lib/cost-center-constants";
 import type { SplitRuleWithDetails, SplitRuleCondition, SplitRuleAllocation } from "@/types";
 
@@ -516,6 +516,7 @@ function RuleRow({
   ccNames,
   costCenters,
   vendorManualSplits,
+  secondaryAllocations,
   onUpdate,
   onDelete,
 }: {
@@ -523,6 +524,7 @@ function RuleRow({
   ccNames: Map<string, string>;
   costCenters: CCOption[];
   vendorManualSplits: Set<string>; // normalized (lowercase) vendor names with active manual splits
+  secondaryAllocations?: Array<{ ccId: string; ccName: string; percentage: number }>;
   onUpdate: (updated: SplitRuleWithDetails) => void;
   onDelete: (id: string) => void;
 }) {
@@ -612,9 +614,16 @@ function RuleRow({
           {rule.description && (
             <p className="text-xs text-gray-500 truncate">{rule.description}</p>
           )}
-          <p className="text-xs text-blue-600 truncate mt-0.5">
-            {allocationSummary(rule.allocations, ccNames)}
-          </p>
+          <div className="flex items-center gap-2 mt-0.5 min-w-0">
+            <p className="text-xs text-blue-600 truncate">
+              {allocationSummary(rule.allocations, ccNames)}
+            </p>
+            {secondaryAllocations && secondaryAllocations.length > 0 && (
+              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 border border-gray-200 whitespace-nowrap">
+                also: {secondaryAllocations.map((s) => `${s.ccName} ${s.percentage}%`).join(" · ")}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
@@ -689,8 +698,40 @@ export default function SplitRulesPage() {
   const [creating, setCreating] = useState(false);
   const [reapplying, setReapplying] = useState(false);
   const [reapplyMsg, setReapplyMsg] = useState("");
+  const [search, setSearch] = useState("");
 
-  const ccNames = new Map(costCenters.map((cc) => [cc.id, cc.name]));
+  const ccNames = useMemo(
+    () => new Map(costCenters.map((cc) => [cc.id, cc.name])),
+    [costCenters]
+  );
+
+  // Filter rules by search term (case-insensitive name match)
+  const filteredRules = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? rules.filter((r) => r.name.toLowerCase().includes(q)) : rules;
+  }, [rules, search]);
+
+  // Group filtered rules by their primary cost center (highest % allocation)
+  const groupedRules = useMemo(() => {
+    const groups = new Map<string, SplitRuleWithDetails[]>();
+    for (const rule of filteredRules) {
+      const primary =
+        rule.allocations.length > 0
+          ? rule.allocations.reduce((max, a) => (a.percentage > max.percentage ? a : max))
+          : null;
+      const key = primary?.cost_center_id ?? "__unallocated__";
+      const arr = groups.get(key) ?? [];
+      arr.push(rule);
+      groups.set(key, arr);
+    }
+    return [...groups.entries()]
+      .map(([ccId, groupRules]) => ({
+        ccId,
+        ccName: ccId === "__unallocated__" ? "No allocation" : (ccNames.get(ccId) ?? ccId),
+        rules: groupRules,
+      }))
+      .sort((a, b) => a.ccName.localeCompare(b.ccName));
+  }, [filteredRules, ccNames]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -807,6 +848,19 @@ export default function SplitRulesPage() {
         />
       )}
 
+      {!loading && rules.length > 0 && (
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search rules by name…"
+            className="w-full pl-8 pr-4 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400 shadow-sm"
+          />
+        </div>
+      )}
+
       {loading ? (
         <div className="text-sm text-gray-400">Loading…</div>
       ) : rules.length === 0 && !creating ? (
@@ -816,20 +870,51 @@ export default function SplitRulesPage() {
             Create a rule to automatically split a transaction across multiple cost centers.
           </p>
         </div>
+      ) : filteredRules.length === 0 ? (
+        <div className="text-sm text-gray-400 py-4 text-center">
+          No rules match &ldquo;{search}&rdquo;
+        </div>
       ) : (
-        <div className="space-y-2">
-          {rules.map((rule) => (
-            <RuleRow
-              key={rule.id}
-              rule={rule}
-              ccNames={ccNames}
-              costCenters={costCenters}
-              vendorManualSplits={vendorManualSplits}
-              onUpdate={(updated) =>
-                setRules((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
-              }
-              onDelete={(id) => setRules((prev) => prev.filter((r) => r.id !== id))}
-            />
+        <div className="space-y-6">
+          {groupedRules.map((group) => (
+            <div key={group.ccId}>
+              {/* Cost Center section header */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  {group.ccName}
+                </span>
+                <span className="text-xs text-gray-400">({group.rules.length})</span>
+                <div className="flex-1 h-px bg-gray-200" />
+              </div>
+              {/* Rules in this group */}
+              <div className="space-y-2">
+                {group.rules.map((rule) => {
+                  const primaryId = group.ccId;
+                  const secondary = rule.allocations
+                    .filter((a) => a.cost_center_id !== primaryId)
+                    .sort((a, b) => b.percentage - a.percentage)
+                    .map((a) => ({
+                      ccId: a.cost_center_id,
+                      ccName: ccNames.get(a.cost_center_id) ?? a.cost_center_id,
+                      percentage: a.percentage,
+                    }));
+                  return (
+                    <RuleRow
+                      key={rule.id}
+                      rule={rule}
+                      ccNames={ccNames}
+                      costCenters={costCenters}
+                      vendorManualSplits={vendorManualSplits}
+                      secondaryAllocations={secondary.length > 0 ? secondary : undefined}
+                      onUpdate={(updated) =>
+                        setRules((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
+                      }
+                      onDelete={(id) => setRules((prev) => prev.filter((r) => r.id !== id))}
+                    />
+                  );
+                })}
+              </div>
+            </div>
           ))}
         </div>
       )}
