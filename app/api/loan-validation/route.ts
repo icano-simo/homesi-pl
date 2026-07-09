@@ -83,18 +83,30 @@ export async function GET(req: NextRequest) {
     type === "processing" ? "PROCESSING FEE ON FILE" : null;
 
   // ── 3. Fetch pl_transactions matching the period (no branch filter on accounting side) ─
+  // Paginate to avoid Supabase's default 1000-row cap.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let txQuery: any = supabase
-    .from("pl_transactions")
-    .select("loan_number, loan_number_incomplete, check_description, gl_code, movement, month, year, branch");
+  const buildTxQuery = () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q: any = supabase
+      .from("pl_transactions")
+      .select("loan_number, loan_number_incomplete, check_description, gl_code, movement, month, year, branch");
+    if (glCode)     q = q.eq("gl_code", glCode);
+    if (descFilter) q = q.ilike("check_description", `%${descFilter}%`);
+    if (months.length > 0) q = q.in("month", months);
+    if (years.length > 0) q = q.in("year", years);
+    return q;
+  };
 
-  if (glCode)     txQuery = txQuery.eq("gl_code", glCode);
-  if (descFilter) txQuery = txQuery.ilike("check_description", `%${descFilter}%`);
-  if (months.length > 0) txQuery = txQuery.in("month", months);
-  if (years.length > 0) txQuery = txQuery.in("year", years);
-
-  const { data: transactions, error: txError } = await txQuery;
-  if (txError) return NextResponse.json({ error: txError.message }, { status: 500 });
+  const transactions: Array<Record<string, unknown>> = [];
+  let txOffset = 0;
+  while (true) {
+    const { data: txPage, error: txError } = await buildTxQuery().range(txOffset, txOffset + 999);
+    if (txError) return NextResponse.json({ error: txError.message }, { status: 500 });
+    if (!txPage || txPage.length === 0) break;
+    transactions.push(...(txPage as Array<Record<string, unknown>>));
+    if (txPage.length < 1000) break;
+    txOffset += 1000;
+  }
 
   // ── 4. Aggregate transactions by loan_number ────────────────────────────────
   const txByLoan = new Map<string, number>();

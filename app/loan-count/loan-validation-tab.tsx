@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
 import { ChevronDown, ChevronRight, Download, AlertTriangle, CheckCircle, TrendingUp } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
-import { downloadCSV } from "@/lib/csv";
+import * as XLSX from "xlsx";
 import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan-validation/route";
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
@@ -31,6 +31,24 @@ function fmtMov(n: number) {
   const cls = n >= 0 ? "text-emerald-700" : "text-red-600";
   const s = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(Math.abs(n));
   return <span className={`font-mono ${cls}`}>{n < 0 ? `(${s})` : s}</span>;
+}
+
+// ─── xlsx export helper ───────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function exportToXlsx(filename: string, rows: Record<string, any>[], cols: { key: string; label: string }[]) {
+  const aoa = [
+    cols.map((c) => c.label),
+    ...rows.map((r) => cols.map((c) => r[c.key] ?? "")),
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Data");
+  XLSX.writeFile(wb, filename);
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // ─── Summary strip ────────────────────────────────────────────────────────────
@@ -70,29 +88,28 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
   const flagName = type === "b2b" ? "b2b" : type === "on_demand" ? "support_on_demand" : "processing";
 
   function handleExport() {
-    downloadCSV(`surplus_${type}.csv`, rows.map((r) => ({
+    exportToXlsx(`surplus-${type}-${todayISO()}.xlsx`, rows.map((r) => ({
       loan_number:       r.loan_number ?? "",
-      borrower_name:     r.borrower_name ?? "",
-      loan_officer:      r.loan_officer ?? "",
       check_description: r.check_description ?? "",
       gl_code:           r.gl_code ?? "",
-      movement:          r.movement,
+      branch:            r.branch ?? "",
       month:             r.month ?? "",
       year:              r.year ?? "",
-      branch:            r.branch ?? "",
-      surplus_reason:    r.surplus_reason ?? "",
-      incomplete:        r.incomplete ? "Yes" : "No",
+      movement:          r.movement,
+      status:            r.surplus_reason === "loan_exists_not_flagged"
+                           ? `${flagName}=false`
+                           : r.surplus_reason === "loan_not_found"
+                           ? "Not in master list"
+                           : "Loan # unresolved",
     })), [
       { key: "loan_number",       label: "Loan Number" },
-      { key: "borrower_name",     label: "Borrower Name" },
-      { key: "loan_officer",      label: "Loan Officer" },
-      { key: "check_description", label: "Description" },
+      { key: "check_description", label: "Check Description" },
       { key: "gl_code",           label: "GL Code" },
-      { key: "movement",          label: "Movement" },
+      { key: "branch",            label: "Branch" },
       { key: "month",             label: "Month" },
       { key: "year",              label: "Year" },
-      { key: "branch",            label: "Branch" },
-      { key: "surplus_reason",    label: "Surplus Reason" },
+      { key: "movement",          label: "Movement" },
+      { key: "status",            label: "Status" },
     ]);
   }
 
@@ -135,7 +152,7 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
             onClick={(e) => { e.stopPropagation(); handleExport(); }}
             className="ml-auto flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2 py-1 text-[11px] text-blue-600 hover:bg-blue-50"
           >
-            <Download size={11} /> CSV
+            <Download size={11} /> Excel
           </button>
         )}
       </div>
@@ -157,24 +174,26 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
                       <thead className="sticky top-0 bg-orange-50">
                         <tr className="text-left text-orange-600/80 border-b border-orange-100">
                           <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Number</th>
-                          <th className="px-3 py-2 font-medium">Borrower Name</th>
-                          <th className="px-3 py-2 font-medium">Loan Officer</th>
+                          <th className="px-3 py-2 font-medium">Check Description</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">GL Code</th>
                           <th className="px-3 py-2 font-medium">Branch</th>
                           <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
-                          <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
-                          <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Fee (Acct.)</th>
+                          <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Movement</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">Status</th>
                         </tr>
                       </thead>
                       <tbody>
                         {flaggedRows.map((r, i) => (
                           <tr key={i} className="border-b border-orange-50 hover:bg-orange-50/60">
                             <td className="px-3 py-1.5 font-mono text-gray-700 whitespace-nowrap">{r.loan_number}</td>
-                            <td className="max-w-[160px] truncate px-3 py-1.5 text-gray-700" title={r.borrower_name ?? ""}>{r.borrower_name ?? "—"}</td>
-                            <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-600" title={r.loan_officer ?? ""}>{r.loan_officer ?? "—"}</td>
+                            <td className="max-w-[240px] truncate px-3 py-1.5 text-gray-600 text-[11px]" title={r.check_description ?? ""}>{r.check_description ?? "—"}</td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.gl_code ?? "—"}</td>
                             <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.branch ?? "—"}</td>
                             <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.month ?? "—"}{r.year ? ` ${r.year}` : ""}</td>
-                            <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(r.loan_amount)}</td>
                             <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtMov(r.movement)}</td>
+                            <td className="px-3 py-1.5 whitespace-nowrap">
+                              <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-medium text-orange-700">{flagName}=false</span>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -188,7 +207,7 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
                 <div className={flaggedRows.length > 0 ? "border-t border-blue-100" : ""}>
                   <div className="px-4 py-1.5 bg-gray-50 border-b border-gray-100">
                     <span className="text-[11px] font-semibold text-gray-600">
-                      {notFoundRows.length} — Loan number complete but not found in Loan Officials
+                      {notFoundRows.length} — Loan not in master list
                     </span>
                   </div>
                   <div className="overflow-auto max-h-60">
@@ -196,22 +215,26 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
                       <thead className="sticky top-0 bg-gray-50">
                         <tr className="text-left text-gray-500 border-b border-gray-100">
                           <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Number</th>
-                          <th className="px-3 py-2 font-medium">Description</th>
+                          <th className="px-3 py-2 font-medium">Check Description</th>
                           <th className="px-3 py-2 font-medium whitespace-nowrap">GL Code</th>
                           <th className="px-3 py-2 font-medium">Branch</th>
                           <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
                           <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Movement</th>
+                          <th className="px-3 py-2 font-medium whitespace-nowrap">Status</th>
                         </tr>
                       </thead>
                       <tbody>
                         {notFoundRows.map((r, i) => (
                           <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
                             <td className="px-3 py-1.5 font-mono text-gray-700 whitespace-nowrap">{r.loan_number ?? "—"}</td>
-                            <td className="max-w-[220px] truncate px-3 py-1.5 text-gray-600" title={r.check_description ?? ""}>{r.check_description ?? "—"}</td>
+                            <td className="max-w-[240px] truncate px-3 py-1.5 text-gray-600 text-[11px]" title={r.check_description ?? ""}>{r.check_description ?? "—"}</td>
                             <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.gl_code ?? "—"}</td>
                             <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.branch ?? "—"}</td>
                             <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.month ?? "—"}{r.year ? ` ${r.year}` : ""}</td>
                             <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtMov(r.movement)}</td>
+                            <td className="px-3 py-1.5 whitespace-nowrap">
+                              <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">Not in master list</span>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -489,7 +512,7 @@ function ValidationSection({
                                 { key: "tx_movement",      label: "Movement (Branch 700)" },
                                 { key: "tx_bps",           label: "BPS (Branch 700)" }]         : []),
     ];
-    downloadCSV(`loan_validation_${type}.csv`, csvRows, cols);
+    exportToXlsx(`loan-validation-${type}-${todayISO()}.xlsx`, csvRows, cols);
   }
 
   return (
@@ -519,7 +542,7 @@ function ValidationSection({
               onClick={handleExport}
               className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 shadow-sm"
             >
-              <Download size={13} /> Export CSV
+              <Download size={13} /> Export Excel
             </button>
           )}
         </div>
@@ -936,6 +959,70 @@ function AllLoansSection({
     !!data && data.surplus.length > 0 &&
     (filterStatus.length === 0 || filterStatus.includes("Surplus in Accounting"));
 
+  function handleExport() {
+    if (!data || filteredRows.length === 0) return;
+    const today = todayISO();
+    if (view === "analytics") {
+      const tree = buildAnalyticsTree(filteredRows);
+      const exportRows: Record<string, unknown>[] = [];
+      for (const bn of tree) {
+        for (const ln of bn.los) {
+          for (const loan of ln.loans) {
+            exportRows.push({
+              branch:        bn.branch,
+              loan_officer:  ln.lo,
+              loan_number:   loan.loan_number,
+              borrower_name: loan.borrower_name ?? "",
+              month:         monthKey(loan),
+              loan_amount:   loan.loan_amount ?? "",
+              bps:           loan.bps ?? "",
+              status:        loan.status === "missing" ? "Missing" : "Match",
+            });
+          }
+        }
+      }
+      exportToXlsx(`loan-validation-all-loans-analytics-${today}.xlsx`, exportRows, [
+        { key: "branch",        label: "Branch" },
+        { key: "loan_officer",  label: "Loan Officer" },
+        { key: "loan_number",   label: "Loan Number" },
+        { key: "borrower_name", label: "Borrower Name" },
+        { key: "month",         label: "Month" },
+        { key: "loan_amount",   label: "Loan Amount" },
+        { key: "bps",           label: "BPS" },
+        { key: "status",        label: "Status" },
+      ]);
+    } else {
+      const exportRows = filteredRows
+        .filter((r) => {
+          if (colFilters.borrower_name && !(r.borrower_name ?? "").toLowerCase().includes(colFilters.borrower_name.toLowerCase())) return false;
+          if (colFilters.loan_officer && !(r.loan_officer ?? "").toLowerCase().includes(colFilters.loan_officer.toLowerCase())) return false;
+          return true;
+        })
+        .map((r) => ({
+          status:        r.status === "missing" ? "Missing" : "Match",
+          loan_number:   r.loan_number,
+          borrower_name: r.borrower_name ?? "",
+          loan_officer:  r.loan_officer ?? "",
+          branch:        r.branch ?? "",
+          month_year:    `${r.month ?? ""}${r.year ? ` ${r.year}` : ""}`,
+          loan_amount:   r.loan_amount ?? "",
+          dm_margin:     r.accounting_total ?? "",
+          bps:           r.bps ?? "",
+        }));
+      exportToXlsx(`loan-validation-all-loans-detail-${today}.xlsx`, exportRows, [
+        { key: "status",        label: "Status" },
+        { key: "loan_number",   label: "Loan Number" },
+        { key: "borrower_name", label: "Borrower Name" },
+        { key: "loan_officer",  label: "Loan Officer" },
+        { key: "branch",        label: "Branch" },
+        { key: "month_year",    label: "Month / Year" },
+        { key: "loan_amount",   label: "Loan Amount" },
+        { key: "dm_margin",     label: "DM Margin" },
+        { key: "bps",           label: "BPS" },
+      ]);
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Sub-tab switcher */}
@@ -974,6 +1061,14 @@ function AllLoansSection({
             className="text-xs text-gray-400 hover:text-gray-600 underline"
           >
             Clear
+          </button>
+        )}
+        {data && filteredRows.length > 0 && (
+          <button
+            onClick={handleExport}
+            className="ml-auto flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 shadow-sm"
+          >
+            <Download size={13} /> Export Excel
           </button>
         )}
       </div>
