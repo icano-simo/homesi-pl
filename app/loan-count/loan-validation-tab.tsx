@@ -98,9 +98,12 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
 
   return (
     <div className="rounded-xl border border-blue-100 bg-blue-50/40 overflow-hidden">
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-blue-50/80 transition-colors"
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((o) => !o); } }}
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-blue-50/80 transition-colors cursor-pointer"
       >
         {open ? <ChevronDown size={13} className="text-blue-500" /> : <ChevronRight size={13} className="text-blue-500" />}
         <span className="text-xs font-semibold text-blue-700">{rows.length} surplus in accounting</span>
@@ -135,7 +138,7 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
             <Download size={11} /> CSV
           </button>
         )}
-      </button>
+      </div>
 
       {open && (
         <div className="border-t border-blue-100">
@@ -299,11 +302,13 @@ function ValidationTable({
   showLoanOfficer = false,
   showLoanAmount = false,
   showAccountingAmt = false,
+  showTxColumns = false,
 }: {
   rows: ValidationRow[];
   showLoanOfficer?: boolean;
   showLoanAmount?: boolean;
   showAccountingAmt?: boolean;
+  showTxColumns?: boolean;
 }) {
   if (rows.length === 0) {
     return (
@@ -326,6 +331,9 @@ function ValidationTable({
             <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
             {showLoanAmount && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>}
             {showAccountingAmt && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Accounting Amt.</th>}
+            {showTxColumns && <th className="px-3 py-2 font-medium whitespace-nowrap">Description <span className="font-normal text-gray-400">(Br. 700)</span></th>}
+            {showTxColumns && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Movement <span className="font-normal text-gray-400">(Br. 700)</span></th>}
+            {showTxColumns && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">BPS</th>}
           </tr>
         </thead>
         <tbody>
@@ -366,6 +374,23 @@ function ValidationTable({
                 {showAccountingAmt && (
                   <td className="px-3 py-1.5 text-right whitespace-nowrap">
                     {missing ? <span className="text-gray-300">—</span> : fmtMov(row.accounting_total)}
+                  </td>
+                )}
+                {showTxColumns && (
+                  <td className="max-w-[200px] truncate px-3 py-1.5 text-gray-600 text-[11px]" title={row.tx_description ?? ""}>
+                    {row.tx_description ?? <span className="text-gray-300">—</span>}
+                  </td>
+                )}
+                {showTxColumns && (
+                  <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                    {row.tx_movement != null ? fmtMov(row.tx_movement) : <span className="text-gray-300">—</span>}
+                  </td>
+                )}
+                {showTxColumns && (
+                  <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap">
+                    {row.tx_movement != null && row.tx_movement !== 0 && row.loan_amount
+                      ? `${((row.tx_movement / row.loan_amount) * 10000).toFixed(2)} bps`
+                      : <span className="text-gray-300">—</span>}
                   </td>
                 )}
               </tr>
@@ -415,9 +440,10 @@ function ValidationSection({
 
   useEffect(() => { load(); }, [load]);
 
-  const showLoanOfficer  = type === "b2b";
-  const showLoanAmount   = type === "b2b";
+  const showLoanOfficer   = type === "b2b";
+  const showLoanAmount    = type === "b2b";
   const showAccountingAmt = type !== "b2b";
+  const showTxColumns     = type === "b2b";
 
   // Derived view — summary strip always uses full data.summary regardless of active filters
   const visibleRows: ValidationRow[] = !data ? [] :
@@ -439,21 +465,29 @@ function ValidationSection({
       status: r.status,
       loan_number: r.loan_number,
       borrower_name: r.borrower_name ?? "",
-      ...(showLoanOfficer  ? { loan_officer:      r.loan_officer ?? "" }     : {}),
+      ...(showLoanOfficer   ? { loan_officer:      r.loan_officer ?? "" }      : {}),
       branch: r.branch ?? "",
       month: r.month ?? "",
-      ...(showLoanAmount   ? { loan_amount:        r.loan_amount ?? "" }      : {}),
-      ...(showAccountingAmt ? { accounting_total:  r.accounting_total }       : {}),
+      ...(showLoanAmount    ? { loan_amount:        r.loan_amount ?? "" }       : {}),
+      ...(showAccountingAmt ? { accounting_total:   r.accounting_total }        : {}),
+      ...(showTxColumns     ? { tx_description:     r.tx_description ?? "",
+                                tx_movement:        r.tx_movement ?? "",
+                                tx_bps:             (r.tx_movement != null && r.tx_movement !== 0 && r.loan_amount)
+                                                      ? ((r.tx_movement / r.loan_amount) * 10000).toFixed(2)
+                                                      : "" }                    : {}),
     }));
     const cols = [
-      { key: "status",        label: "Status" },
-      { key: "loan_number",   label: "Loan Number" },
-      { key: "borrower_name", label: "Borrower Name" },
-      ...(showLoanOfficer   ? [{ key: "loan_officer",     label: "Loan Officer" }]    : []),
-      { key: "branch",        label: "Branch" },
-      { key: "month",         label: "Month" },
-      ...(showLoanAmount    ? [{ key: "loan_amount",       label: "Loan Amount" }]    : []),
-      ...(showAccountingAmt ? [{ key: "accounting_total", label: "Accounting Amt." }] : []),
+      { key: "status",           label: "Status" },
+      { key: "loan_number",      label: "Loan Number" },
+      { key: "borrower_name",    label: "Borrower Name" },
+      ...(showLoanOfficer    ? [{ key: "loan_officer",     label: "Loan Officer" }]              : []),
+      { key: "branch",           label: "Branch" },
+      { key: "month",            label: "Month" },
+      ...(showLoanAmount     ? [{ key: "loan_amount",       label: "Loan Amount" }]              : []),
+      ...(showAccountingAmt  ? [{ key: "accounting_total", label: "Accounting Amt." }]           : []),
+      ...(showTxColumns      ? [{ key: "tx_description",   label: "Description (Branch 700)" },
+                                { key: "tx_movement",      label: "Movement (Branch 700)" },
+                                { key: "tx_bps",           label: "BPS (Branch 700)" }]         : []),
     ];
     downloadCSV(`loan_validation_${type}.csv`, csvRows, cols);
   }
@@ -505,6 +539,7 @@ function ValidationSection({
             showLoanOfficer={showLoanOfficer}
             showLoanAmount={showLoanAmount}
             showAccountingAmt={showAccountingAmt}
+            showTxColumns={showTxColumns}
           />
           {showSurplus && <SurplusSection rows={data.surplus} type={type} />}
         </>

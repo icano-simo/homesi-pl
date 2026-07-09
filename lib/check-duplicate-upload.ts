@@ -76,10 +76,34 @@ export async function checkDuplicateUpload(
   };
 }
 
+const DELETE_CHUNK = 500;
+
 /**
- * Deletes an upload record and all its associated transactions.
+ * Deletes an upload and all associated rows.
+ * Cleans up related tables first to avoid orphaned rows:
+ * conflict_snapshots → cc_allocation_splits (transaction) → pl_transactions → pl_uploads
  */
 export async function deleteUpload(supabase: SupabaseClient, uploadId: string): Promise<void> {
+  // Fetch all transaction IDs so we can clean up linked rows
+  const { data: txRows } = await supabase
+    .from("pl_transactions")
+    .select("id")
+    .eq("upload_id", uploadId);
+
+  const txIds = (txRows ?? []).map((r: { id: string }) => r.id);
+
+  if (txIds.length > 0) {
+    for (let i = 0; i < txIds.length; i += DELETE_CHUNK) {
+      const chunk = txIds.slice(i, i + DELETE_CHUNK);
+      await supabase.from("conflict_snapshots").delete().in("transaction_id", chunk);
+      await supabase
+        .from("cc_allocation_splits")
+        .delete()
+        .eq("assign_type", "transaction")
+        .in("assign_value", chunk);
+    }
+  }
+
   await supabase.from("pl_transactions").delete().eq("upload_id", uploadId);
   await supabase.from("pl_uploads").delete().eq("id", uploadId);
 }

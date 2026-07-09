@@ -6,6 +6,7 @@ import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-s
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
+import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
 import type {
   OffshoreAllocationsUploadResponse,
   ApiError,
@@ -51,6 +52,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ duplicate: true, info: dupeResult.info }, { status: 409 });
       }
     }
+    // ── 3b. Snapshot manual assignments before deleting the old upload ────
+    const manualSnapshot = replaceId
+      ? await snapshotManualAssignments(supabase, replaceId)
+      : [];
     if (replaceId) await deleteUpload(supabase, replaceId);
 
     // ── 4. Create upload record ───────────────────────────────────────────
@@ -191,6 +196,11 @@ export async function POST(req: NextRequest) {
       await syncRuleSplitAllocations(supabase, ccUpdates.map((u) => u.id), ruleSplitEntries);
     }
 
+    // ── 7b. Re-apply manual snapshot after rule assignment ────────────────
+    const manualSummary = replaceId
+      ? await reapplyManualSnapshot(supabase, id, manualSnapshot)
+      : null;
+
     // ── 8. Mark completed ─────────────────────────────────────────────────
     await supabase
       .from("pl_uploads")
@@ -204,6 +214,7 @@ export async function POST(req: NextRequest) {
       unknownBranchCount,
       parseWarnings: warnings.length,
     };
+    if (manualSummary) response.manualAssignments = manualSummary;
     return NextResponse.json(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

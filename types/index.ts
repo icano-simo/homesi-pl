@@ -182,12 +182,23 @@ export interface ApiError {
   details?: unknown;
 }
 
+export interface ManualAssignmentSummary {
+  total_snapshotted:                 number;
+  manual_reapplied:                  number;
+  manual_not_found:                  number;
+  manual_requires_review:            number;
+  conflict_resolved_reapplied:       number;
+  conflict_resolved_not_found:       number;
+  conflict_resolved_requires_review: number;
+}
+
 export interface UploadPLResponse {
   uploadId: string;
   rowCount: number;
   uncategorizedCount: number;
   unknownBranchCount: number;
   parseWarnings: number;
+  manualAssignments?: ManualAssignmentSummary;
 }
 
 export interface AddbacksUploadResponse {
@@ -196,6 +207,7 @@ export interface AddbacksUploadResponse {
   uncategorizedCount: number;
   unknownBranchCount: number;
   parseWarnings: number;
+  manualAssignments?: ManualAssignmentSummary;
 }
 
 export interface OffshoreAllocationsUploadResponse {
@@ -204,6 +216,7 @@ export interface OffshoreAllocationsUploadResponse {
   uncategorizedCount: number;
   unknownBranchCount: number;
   parseWarnings: number;
+  manualAssignments?: ManualAssignmentSummary;
 }
 
 export interface TransactionFilters {

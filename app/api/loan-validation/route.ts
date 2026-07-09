@@ -16,6 +16,8 @@ export interface ValidationRow {
   accounting_total: number;
   bps: number | null;
   status: "match" | "missing";
+  tx_description: string | null;
+  tx_movement: number | null;
 }
 
 export interface SurplusRow {
@@ -102,6 +104,24 @@ export async function GET(req: NextRequest) {
     txByLoan.set(loanNum, (txByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
   }
 
+  // ── 4b. Branch-700 aggregation for B2B description / movement columns ─────────
+  const txB700ByLoan = new Map<string, { movement: number; description: string | null }>();
+  if (type === "b2b") {
+    for (const tx of (transactions ?? []) as Array<Record<string, unknown>>) {
+      const loanNum = (tx.loan_number as string | null)?.trim();
+      if (!loanNum || (tx.loan_number_incomplete as boolean) || (tx.branch as string) !== "700") continue;
+      const existing = txB700ByLoan.get(loanNum);
+      if (existing) {
+        existing.movement += (tx.movement as number) ?? 0;
+      } else {
+        txB700ByLoan.set(loanNum, {
+          movement: (tx.movement as number) ?? 0,
+          description: tx.check_description as string | null,
+        });
+      }
+    }
+  }
+
   // Set of loan_numbers from the filtered loan_officials
   const loSet = new Set<string>(
     (loanOfficials ?? []).map((lo: Record<string, unknown>) => lo.loan_number as string)
@@ -118,6 +138,7 @@ export async function GET(req: NextRequest) {
       showBps && total !== undefined && loan_amount
         ? (accounting_total / loan_amount) * 10000
         : null;
+    const b700 = txB700ByLoan.get(loanNum);
     return {
       loan_number: loanNum,
       borrower_name: lo.borrower_name as string | null,
@@ -129,6 +150,8 @@ export async function GET(req: NextRequest) {
       accounting_total,
       bps,
       status: total !== undefined ? "match" : "missing",
+      tx_description: b700?.description ?? null,
+      tx_movement: b700 != null ? b700.movement : null,
     };
   });
 
