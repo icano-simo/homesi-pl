@@ -63,7 +63,8 @@ export async function GET(req: NextRequest) {
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
   if (years.length > 0) loQuery = loQuery.in("year", years);
-  if (branches.length > 0) loQuery = loQuery.in("branch", branches);
+  // branch filter intentionally NOT applied to loan_officials — the master loan list
+  // is always the full universe; branch only restricts the accounting-side transactions.
 
   if (type === "b2b") loQuery = loQuery.eq("b2b", true);
   else if (type === "on_demand") loQuery = loQuery.eq("support_on_demand", true);
