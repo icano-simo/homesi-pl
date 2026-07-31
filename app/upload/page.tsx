@@ -314,6 +314,11 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
             </p>
           )}
           {result.manualAssignments && <ManualAssignmentBlock ma={result.manualAssignments} />}
+          {"employeeFeeLines" in result && result.employeeFeeLines && (
+            <p className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              Employee fee lines generated: {result.employeeFeeLines.employees} employee{result.employeeFeeLines.employees !== 1 ? "s" : ""} × {result.employeeFeeLines.months} new month{result.employeeFeeLines.months !== 1 ? "s" : ""} = {result.employeeFeeLines.transactions} transactions
+            </p>
+          )}
           <button
             onClick={reset}
             className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"

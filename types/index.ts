@@ -76,7 +76,7 @@ export interface PLTransaction {
   cost_center_conflicts: string[] | null;
   loan_number_incomplete: boolean | null;
   cost_centers?: { name: string } | null;
-  source: "original" | "addback" | "offshore_allocations" | "manual_entry" | null;
+  source: "original" | "addback" | "offshore_allocations" | "manual_entry" | "employee_fee" | null;
   check_description_2: string | null;
   check_description_3: string | null;
   category: string | null;
@@ -217,6 +217,16 @@ export interface OffshoreAllocationsUploadResponse {
   unknownBranchCount: number;
   parseWarnings: number;
   manualAssignments?: ManualAssignmentSummary;
+  employeeFeeLines?: { employees: number; months: number; transactions: number };
+}
+
+export interface EmployeeFeeConfig {
+  id: string;
+  check_description_3: string;
+  not_recoverable: boolean;
+  fee_amount: number | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TransactionFilters {

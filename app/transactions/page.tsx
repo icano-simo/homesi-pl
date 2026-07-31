@@ -85,6 +85,7 @@ function buildParams(uploadId: string, f: ServerFilters, ccList: CCRef[], global
     else if (val === "Addback") p.append("source", "addback");
     else if (val === "Offshore") p.append("source", "offshore_allocations");
     else if (val === "Manual Entry") p.append("source", "manual_entry");
+    else if (val === "Employee Fee") p.append("source", "employee_fee");
   }
   return p;
 }
@@ -974,7 +975,7 @@ export default function TransactionsPage() {
               </TH>
               <TH label="Source">
                 <ColumnFilter label="Source" type="categorical"
-                  options={["Original", "Addback", "Offshore", "Manual Entry"]} selected={serverFilters.source}
+                  options={["Original", "Addback", "Offshore", "Manual Entry", "Employee Fee"]} selected={serverFilters.source}
                   onChange={(v) => setSF("source", v)} />
               </TH>
             </tr>

@@ -7,6 +7,7 @@ import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
+import { generateEmployeeFeeLines } from "@/lib/generate-employee-fee-lines";
 import type {
   OffshoreAllocationsUploadResponse,
   ApiError,
@@ -201,6 +202,11 @@ export async function POST(req: NextRequest) {
       ? await reapplyManualSnapshot(supabase, id, manualSnapshot)
       : null;
 
+    // ── 7c. Auto-generate employee fee lines for all not_recoverable employees
+    // Uses idempotency: only creates lines for (employee, month, year) combos
+    // that don't already have employee_fee lines.
+    const feeSummary = await generateEmployeeFeeLines(supabase);
+
     // ── 8. Mark completed ─────────────────────────────────────────────────
     await supabase
       .from("pl_uploads")
@@ -215,6 +221,13 @@ export async function POST(req: NextRequest) {
       parseWarnings: warnings.length,
     };
     if (manualSummary) response.manualAssignments = manualSummary;
+    if (feeSummary.transactions_inserted > 0) {
+      response.employeeFeeLines = {
+        employees:    feeSummary.employees_processed,
+        months:       feeSummary.new_months,
+        transactions: feeSummary.transactions_inserted,
+      };
+    }
     return NextResponse.json(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

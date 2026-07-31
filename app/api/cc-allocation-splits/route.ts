@@ -24,21 +24,41 @@ export async function GET(req: NextRequest) {
 
   const supabase = createServerClient();
 
+  // "All splits" fetch (no type/value params) — paginate to bypass the
+  // Supabase PostgREST 1000-row default limit (table has 1900+ rows).
+  if (!(type && rawValue !== null)) {
+    const PAGE_SIZE = 1000;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allData: any[] = [];
+    let offset = 0;
+    while (true) {
+      const { data: page, error: pageErr } = await supabase
+        .from("cc_allocation_splits")
+        .select("id,assign_type,assign_value,cost_center_id,percentage,is_operational,cost_centers(name)")
+        .order("percentage", { ascending: false })
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 });
+      if (!page || page.length === 0) break;
+      allData.push(...page);
+      if (page.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+    return NextResponse.json(allData);
+  }
+
+  // Single-key lookup (type + value provided) — always small, no pagination needed.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q: any = supabase
     .from("cc_allocation_splits")
     .select("id,assign_type,assign_value,cost_center_id,percentage,is_operational,cost_centers(name)")
     .order("percentage", { ascending: false });
 
-  if (type && rawValue !== null) {
-    const normValue = norm(rawValue);
-    q = q.eq("assign_type", type);
-    // Try both the raw and normalized assign_value to handle whitespace variants
-    if (normValue !== rawValue) {
-      q = q.in("assign_value", [rawValue, normValue]);
-    } else {
-      q = q.eq("assign_value", rawValue);
-    }
+  const normValueKey = norm(rawValue!);
+  q = q.eq("assign_type", type);
+  if (normValueKey !== rawValue) {
+    q = q.in("assign_value", [rawValue, normValueKey]);
+  } else {
+    q = q.eq("assign_value", rawValue);
   }
 
   const { data, error } = await q;
