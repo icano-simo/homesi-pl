@@ -83,6 +83,7 @@ export interface PLTransaction {
   position: string | null;
   branch_allocation: string | null;
   operational_pct: number;
+  assignment_origin: "manual" | "rule" | "rule_split" | "conflict_resolved" | null;
   created_at: string;
   // Loan Officials tags — populated by Transaction Review API (not stored on pl_transactions)
   b2b?: boolean | null;

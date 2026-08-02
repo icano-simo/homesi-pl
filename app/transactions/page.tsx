@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw, AlertTriangle, Download, Search, X, Pencil, Trash2, ChevronsUpDown, ArrowUpAZ, ArrowDownAZ } from "lucide-react";
-import { downloadCSV } from "@/lib/csv";
+import * as XLSX from "xlsx";
 import { ColumnFilter } from "@/components/column-filter";
 import { buildSplitsMap } from "@/lib/apply-splits";
 import { SplitDisplay } from "@/components/split-display";
@@ -796,31 +796,89 @@ export default function TransactionsPage() {
   const splitsMap = useMemo(() => buildSplitsMap(allSplits), [allSplits]);
 
   function handleExport() {
-    const data = displayedRows.map((r) => ({
-      ...r,
-      cost_center_name: (r.cost_centers as { name: string } | null)?.name ?? "",
-    })) as Record<string, unknown>[];
-    downloadCSV("transactions.csv", data, [
-      { key: "journal_post_date", label: "Date" },
-      { key: "month",             label: "Month" },
-      { key: "branch",            label: "Branch" },
-      { key: "gl_code",           label: "GL Code" },
-      { key: "gl_name",           label: "GL Name" },
-      { key: "vendor",            label: "Vendor" },
-      { key: "check_description", label: "Description" },
-      { key: "check_description_2", label: "CD2" },
-      { key: "check_description_3", label: "CD3" },
-      { key: "ref_numb",          label: "Ref #" },
-      { key: "loan_number",       label: "Loan #" },
-      { key: "loan_number_raw",   label: "Loan # Raw" },
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Build transaction-type split lookup keyed by transaction ID
+    const txSplitsById = new Map<string, SplitEntry[]>();
+    for (const s of allSplits) {
+      if (s.assign_type !== "transaction") continue;
+      const arr = txSplitsById.get(s.assign_value) ?? [];
+      arr.push(s);
+      txSplitsById.set(s.assign_value, arr);
+    }
+
+    const cols = [
+      { key: "journal_post_date",      label: "Journal Post Date" },
+      { key: "month",                  label: "Month" },
+      { key: "year",                   label: "Year" },
+      { key: "branch",                 label: "Branch" },
+      { key: "gl_code",                label: "GL Code" },
+      { key: "gl_name",                label: "GL Name" },
+      { key: "vendor",                 label: "Vendor" },
+      { key: "check_description",      label: "Check Description" },
+      { key: "check_description_2",    label: "CD2" },
+      { key: "check_description_3",    label: "CD3" },
+      { key: "ref_numb",               label: "Ref #" },
+      { key: "loan_number",            label: "Loan #" },
       { key: "loan_number_incomplete", label: "Loan # Incomplete" },
-      { key: "debit",             label: "Debit" },
-      { key: "credit",            label: "Credit" },
-      { key: "movement",          label: "Movement" },
-      { key: "source",            label: "Source" },
-      { key: "cost_center_name",  label: "Cost Center" },
-      { key: "cost_center_status",label: "CC Status" },
-    ]);
+      { key: "debit",                  label: "Debit" },
+      { key: "credit",                 label: "Credit" },
+      { key: "movement",               label: "Movement" },
+      { key: "source",                 label: "Source" },
+      { key: "_cc_name",               label: "Cost Center" },
+      { key: "cost_center_status",     label: "CC Status" },
+      { key: "_assignment_origin",     label: "Assignment Origin" },
+      { key: "_operational",           label: "Operational" },
+      { key: "_split_detail",          label: "Split Detail" },
+    ];
+
+    const rows = displayedRows.map((tx) => {
+      // Cost Center label
+      let ccName: string;
+      if (tx.cost_center_status === "unassigned") ccName = "Unassigned";
+      else if (tx.cost_center_status === "conflict") ccName = "Conflict";
+      else ccName = (tx.cost_centers as { name: string } | null)?.name ?? "";
+
+      // Split Detail — transaction-type splits, sorted by percentage DESC
+      const txSplits = (txSplitsById.get(tx.id) ?? [])
+        .slice()
+        .sort((a, b) => Number(b.percentage) - Number(a.percentage));
+      let splitDetail: string;
+      if (txSplits.length >= 2) {
+        splitDetail = txSplits
+          .map((s) => `${s.cost_centers?.name ?? s.cost_center_id} (${s.percentage}%)`)
+          .join(", ");
+      } else if (txSplits.length === 1) {
+        splitDetail = txSplits[0].cost_centers?.name ?? txSplits[0].cost_center_id;
+      } else {
+        splitDetail = ccName === "Unassigned" || ccName === "Conflict" ? "" : ccName;
+      }
+
+      // Operational classification
+      const opPct = tx.operational_pct;
+      let operational: string;
+      if (opPct == null) operational = "";
+      else if (opPct >= 100) operational = "Operational";
+      else if (opPct <= 0) operational = "Non-Operational";
+      else operational = `Mixed (${opPct}%)`;
+
+      return {
+        ...tx,
+        _cc_name: ccName,
+        _assignment_origin: tx.assignment_origin ?? "",
+        _operational: operational,
+        _split_detail: splitDetail,
+      };
+    }) as unknown as Record<string, unknown>[];
+
+    const aoa = [
+      cols.map((c) => c.label),
+      ...rows.map((r) => cols.map((c) => r[c.key] ?? "")),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+    XLSX.writeFile(wb, `transaction-review-${today}.xlsx`);
   }
 
   return (

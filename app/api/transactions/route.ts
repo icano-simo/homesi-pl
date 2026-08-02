@@ -9,7 +9,8 @@ const SELECT_DATA =
   "check_description,check_description_2,check_description_3,debit,credit,movement," +
   "category_1,category_5,category_6,upload_id,year,month," +
   "cost_center_id,cost_center_status,cost_centers(name),source," +
-  "loan_number,loan_number_incomplete";
+  "loan_number,loan_number_incomplete," +
+  "assignment_origin,operational_pct";
 
 type LoanTags = { b2b: boolean; processing: boolean; support_on_demand: boolean; affinity: boolean; recruitment: boolean };
 
@@ -123,7 +124,7 @@ export async function GET(req: NextRequest) {
       const { data, error } = await withFilters(
         supabase.from("pl_transactions").select(SELECT_DATA),
         filters
-      ).order("journal_post_date", { ascending: true }).range(offset, offset + 999);
+      ).order("journal_post_date", { ascending: true }).order("id", { ascending: true }).range(offset, offset + 999);
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       if (!data?.length) break;
       allRows.push(...data);
@@ -144,7 +145,7 @@ export async function GET(req: NextRequest) {
     withFilters(supabase.from("pl_transactions").select("id", { count: "exact", head: true }), filters),
     withFilters(supabase.from("pl_transactions").select("debit,credit,movement"), filters),
     withFilters(
-      supabase.from("pl_transactions").select(SELECT_DATA).order("journal_post_date", { ascending: true }).range(rangeFrom, rangeTo),
+      supabase.from("pl_transactions").select(SELECT_DATA).order("journal_post_date", { ascending: true }).order("id", { ascending: true }).range(rangeFrom, rangeTo),
       filters
     ),
   ]);

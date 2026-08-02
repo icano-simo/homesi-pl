@@ -22,7 +22,10 @@ export async function GET(req: NextRequest) {
 
   while (true) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = supabase.from("pl_transactions").select(SELECT).range(offset, offset + 999);
+    let q: any = supabase.from("pl_transactions").select(SELECT)
+      .order("journal_post_date", { ascending: true })
+      .order("id", { ascending: true })
+      .range(offset, offset + 999);
     if (years.length > 0)    q = q.in("year", years.map((y) => parseInt(y, 10)));
     if (branches.length > 0) q = q.in("branch", branches);
     if (sources.length > 0)  q = q.in("source", sources);
