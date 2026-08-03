@@ -150,15 +150,30 @@ export async function reapplyManualSnapshot(
 
   if (snapshot.length === 0) return summary;
 
-  // Fetch all new transactions for key matching
-  const { data: newTxs, error: fetchErr } = await supabase
-    .from("pl_transactions")
-    .select("id, gl_code, branch, check_description, journal_post_date")
-    .eq("upload_id", newUploadId);
+  // Fetch all new transactions for key matching — paginate to avoid PostgREST 1000-row cap
+  const allNewTxs: Array<{
+    id: string;
+    gl_code: string | null;
+    branch: string | null;
+    check_description: string | null;
+    journal_post_date: string | null;
+  }> = [];
+  let fetchOffset = 0;
+  while (true) {
+    const { data: page, error: fetchErr } = await supabase
+      .from("pl_transactions")
+      .select("id, gl_code, branch, check_description, journal_post_date")
+      .eq("upload_id", newUploadId)
+      .order("id", { ascending: true })
+      .range(fetchOffset, fetchOffset + PAGE_SIZE - 1);
+    if (fetchErr) throw new Error(`reapply fetch new txs: ${fetchErr.message}`);
+    if (!page || page.length === 0) break;
+    allNewTxs.push(...(page as typeof allNewTxs));
+    if (page.length < PAGE_SIZE) break;
+    fetchOffset += PAGE_SIZE;
+  }
 
-  if (fetchErr) throw new Error(`reapply fetch new txs: ${fetchErr.message}`);
-
-  const txList = (newTxs ?? []) as Array<{
+  const txList = allNewTxs as Array<{
     id: string;
     gl_code: string | null;
     branch: string | null;
