@@ -1,13 +1,11 @@
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
+import {
+  findApplicableVersion,
+  type VersionedSplitsMap,
+} from "@/lib/split-version-utils";
 
 type SupabaseClient = ReturnType<typeof createServerClient>;
-
-export type EmpSplitRow = {
-  cost_center_id: string;
-  percentage: number;
-  is_operational: boolean | null;
-};
 
 export interface ApplyCostSplitsResult {
   synced: number;
@@ -17,20 +15,22 @@ export interface ApplyCostSplitsResult {
 /**
  * Copies an employee's cc_allocation_splits (assign_type='description3')
  * onto Cost fee transactions (GL 90002) as transaction-level split rows.
+ * Respects temporal versioning: each transaction is matched to the version
+ * of the employee's split rule that was in effect at the transaction's period.
  *
  * Called from:
  *   - generateEmployeeFeeLines (step 7b) for newly created lines
  *   - POST /api/employee-fee-config/resync-cost-splits for retroactive backfill
  *
- * Transactions with no split in empSplitMap are left untouched (unassigned).
+ * Transactions with no applicable version in empSplitMap are left unassigned.
  *
- * @param costTxs    Array of {id, vendor} — must all be GL 90002
- * @param empSplitMap Pre-loaded: employee name → split rows from cc_allocation_splits
+ * @param costTxs    Array of {id, vendor, year?, month?} — must all be GL 90002
+ * @param empSplitMap Pre-loaded: VersionedSplitsMap keyed "description3:{empName}"
  */
 export async function applyEmployeeFeeCostSplits(
   supabase: SupabaseClient,
-  costTxs: Array<{ id: string; vendor: string | null }>,
-  empSplitMap: Map<string, EmpSplitRow[]>,
+  costTxs: Array<{ id: string; vendor: string | null; year?: number | null; month?: string | null }>,
+  empSplitMap: VersionedSplitsMap,
 ): Promise<ApplyCostSplitsResult> {
   type SplitInsertRow = {
     assign_type:    string;
@@ -49,10 +49,14 @@ export async function applyEmployeeFeeCostSplits(
   }> = [];
 
   for (const tx of costTxs) {
-    const emp    = (tx.vendor ?? "").trim();
-    const splits = empSplitMap.get(emp);
-    if (!splits || splits.length === 0) continue; // leaves unassigned
+    const emp     = (tx.vendor ?? "").trim().replace(/\s+/g, " ");
+    const versions = empSplitMap.get(`description3:${emp}`);
+    if (!versions || versions.length === 0) continue;
 
+    const ver = findApplicableVersion(versions, tx.year, tx.month);
+    if (!ver) continue;
+
+    const splits = ver.splits;
     for (const s of splits) {
       splitsToInsert.push({
         assign_type:    "transaction",
@@ -63,8 +67,6 @@ export async function applyEmployeeFeeCostSplits(
       });
     }
 
-    // Primary CC = highest-percentage row — so cost_center_id on the transaction
-    // is never null for an assigned row, consistent with all other split txs.
     const primaryCC = splits.reduce((best, s) =>
       s.percentage > best.percentage ? s : best,
     ).cost_center_id;

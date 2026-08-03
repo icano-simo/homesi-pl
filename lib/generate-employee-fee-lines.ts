@@ -3,6 +3,7 @@ import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
 import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { applyEmployeeFeeCostSplits } from "@/lib/apply-employee-fee-cost-splits";
+import { buildVersionedSplitsMap, type SplitVersionRow } from "@/lib/split-version-utils";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
 
@@ -52,31 +53,26 @@ export async function generateEmployeeFeeLines(
   }
 
   // ── 1b. Pre-load each employee's cc_allocation_splits (description3) ────────
-  // Cost lines inherit these splits directly instead of going through the rules
-  // engine. Loaded once here to avoid N+1 queries in the generation loop.
-  type EmpSplitRow = { cost_center_id: string; percentage: number; is_operational: boolean | null };
-
+  // Cost lines inherit these splits respecting temporal versioning: each cost
+  // transaction's (month, year) determines which version of the split applies.
   const empNames = (configs as Array<{ check_description_3: string }>).map((c) => c.check_description_3);
   const { data: rawEmpSplits } = await supabase
     .from("cc_allocation_splits")
-    .select("assign_value, cost_center_id, percentage, is_operational")
+    .select("assign_value, cost_center_id, percentage, is_operational, effective_from_year, effective_from_month")
     .eq("assign_type", "description3")
     .in("assign_value", empNames);
 
-  const empSplitMap = new Map<string, EmpSplitRow[]>();
-  for (const row of (rawEmpSplits ?? []) as Array<{
-    assign_value: string;
-    cost_center_id: string;
-    percentage: number;
-    is_operational: boolean | null;
-  }>) {
-    if (!empSplitMap.has(row.assign_value)) empSplitMap.set(row.assign_value, []);
-    empSplitMap.get(row.assign_value)!.push({
-      cost_center_id: row.cost_center_id,
-      percentage: row.percentage,
-      is_operational: row.is_operational,
-    });
-  }
+  const empSplitMap = buildVersionedSplitsMap(
+    (rawEmpSplits ?? []).map((r) => ({
+      assign_type:          "description3" as const,
+      assign_value:         r.assign_value as string,
+      cost_center_id:       r.cost_center_id as string,
+      percentage:           r.percentage as number,
+      is_operational:       ((r.is_operational ?? true) as boolean),
+      effective_from_year:  (r.effective_from_year ?? null) as number | null,
+      effective_from_month: (r.effective_from_month ?? null) as number | null,
+    })) as SplitVersionRow[],
+  );
 
   // ── 2. Load GL mapping for 90001 and 90002 ─────────────────────────────────
   const { data: glRows, error: glErr } = await supabase
@@ -244,7 +240,7 @@ export async function generateEmployeeFeeLines(
       .eq("upload_id", uploadId);
 
     if (newTxs && newTxs.length > 0) {
-      type TxRow = { id: string; gl_code: string; vendor: string | null; [key: string]: unknown };
+      type TxRow = { id: string; gl_code: string; vendor: string | null; year: number | null; month: string | null; [key: string]: unknown };
       const txRows  = newTxs as unknown as TxRow[];
       const incomeTxs = txRows.filter((tx) => tx.gl_code === "90001");
       const costTxs   = txRows.filter((tx) => tx.gl_code === "90002");

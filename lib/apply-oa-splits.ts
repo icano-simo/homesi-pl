@@ -1,45 +1,45 @@
 import { createServerClient } from "@/lib/supabase-server";
+import {
+  buildVersionedSplitsMap,
+  findApplicableVersion,
+  toPeriod,
+  txMonthPeriod,
+  type SplitVersionRow,
+  type VersionedSplitsMap,
+} from "@/lib/split-version-utils";
 
 type SupabaseClient = ReturnType<typeof createServerClient>;
 
 const CHUNK = 500;
 
-type SplitRow = {
-  assign_type: "description3" | "vendor";
-  assign_value: string;
-  cost_center_id: string;
-  percentage: number;
-  is_operational: boolean;
-};
-
 function norm(v: string) {
   return v.trim().replace(/\s+/g, " ");
 }
 
-async function loadOASplits(supabase: SupabaseClient) {
+async function loadVersionedOASplits(supabase: SupabaseClient): Promise<VersionedSplitsMap> {
   const { data, error } = await supabase
     .from("cc_allocation_splits")
-    .select("assign_type,assign_value,cost_center_id,percentage,is_operational")
+    .select("assign_type,assign_value,cost_center_id,percentage,is_operational,effective_from_year,effective_from_month")
     .in("assign_type", ["description3", "vendor"]);
   if (error) throw new Error(error.message);
-  const splits = (data ?? []) as SplitRow[];
-  const byKey = new Map<string, SplitRow[]>();
-  for (const s of splits) {
-    const key = `${s.assign_type}:${norm(s.assign_value)}`;
-    if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key)!.push(s);
-  }
-  return byKey;
+  return buildVersionedSplitsMap((data ?? []) as SplitVersionRow[]);
 }
 
-async function fetchUnassignedOATxs(supabase: SupabaseClient) {
-  type TxRow = { id: string; check_description_3: string | null; vendor: string | null };
+type TxRow = {
+  id: string;
+  check_description_3: string | null;
+  vendor: string | null;
+  year: number | null;
+  month: string | null;
+};
+
+async function fetchUnassignedOATxs(supabase: SupabaseClient): Promise<TxRow[]> {
   const rows: TxRow[] = [];
   let offset = 0;
   while (true) {
     const { data, error } = await supabase
       .from("pl_transactions")
-      .select("id,check_description_3,vendor")
+      .select("id,check_description_3,vendor,year,month")
       .eq("source", "offshore_allocations")
       .or("cost_center_status.eq.unassigned,cost_center_status.is.null")
       .order("id", { ascending: true })
@@ -59,37 +59,51 @@ export interface ApplyOASplitsResult {
 }
 
 /**
- * Button 1 — apply existing description3/vendor split rules to all unassigned OA transactions.
- * Writes assignment_origin='split_propagated' so auto-propagation can update these assignments
- * when a split rule changes; 'manual' is reserved for explicit per-transaction exceptions.
+ * Button 1 — apply description3/vendor split rules (respecting temporal versions)
+ * to all unassigned OA transactions. Each transaction is matched to the version of
+ * the rule that was in effect at the transaction's month/year.
  */
 export async function applyOASplits(supabase: SupabaseClient): Promise<ApplyOASplitsResult> {
-  const byKey = await loadOASplits(supabase);
-  if (byKey.size === 0) return { assigned: 0, breakdown: [] };
+  const vMap = await loadVersionedOASplits(supabase);
+  if (vMap.size === 0) return { assigned: 0, breakdown: [] };
 
   const txRows = await fetchUnassignedOATxs(supabase);
 
-  const matchedGroups = new Map<string, string[]>();
+  type GroupKey = string;
+  type GroupData = { splits: { cost_center_id: string; percentage: number; is_operational: boolean }[]; txIds: string[]; displayKey: string };
+  const matchedGroups = new Map<GroupKey, GroupData>();
+
   for (const tx of txRows) {
     const normVendor = tx.vendor ? norm(tx.vendor) : null;
-    const normCd3 = tx.check_description_3 ? norm(tx.check_description_3) : null;
-    const key =
-      (normVendor && byKey.has(`vendor:${normVendor}`))   ? `vendor:${normVendor}` :
-      (normCd3   && byKey.has(`description3:${normCd3}`)) ? `description3:${normCd3}` :
+    const normCd3    = tx.check_description_3 ? norm(tx.check_description_3) : null;
+    const keyStr =
+      (normVendor && vMap.has(`vendor:${normVendor}`))         ? `vendor:${normVendor}` :
+      (normCd3   && vMap.has(`description3:${normCd3}`))       ? `description3:${normCd3}` :
       null;
-    if (key) {
-      if (!matchedGroups.has(key)) matchedGroups.set(key, []);
-      matchedGroups.get(key)!.push(tx.id);
+    if (!keyStr) continue;
+
+    const versions = vMap.get(keyStr)!;
+    const ver = findApplicableVersion(versions, tx.year, tx.month);
+    if (!ver) continue;
+
+    const groupKey = `${keyStr}::${ver.period}`;
+    if (!matchedGroups.has(groupKey)) {
+      matchedGroups.set(groupKey, {
+        splits:     ver.splits,
+        txIds:      [],
+        displayKey: keyStr.replace(/^(vendor|description3):/, ""),
+      });
     }
+    matchedGroups.get(groupKey)!.txIds.push(tx.id);
   }
 
-  const breakdown: { key: string; count: number }[] = [];
+  const countByDisplayKey = new Map<string, number>();
   let totalAssigned = 0;
 
-  for (const [key, txIds] of matchedGroups) {
-    const keySplits = byKey.get(key)!;
-    const primaryCcId = [...keySplits].sort((a, b) => b.percentage - a.percentage)[0].cost_center_id;
-    const operationalPct = keySplits.reduce((sum, s) => sum + (s.is_operational ? s.percentage : 0), 0);
+  for (const [, group] of matchedGroups) {
+    const { splits: keySplits, txIds, displayKey } = group;
+    const primaryCcId     = [...keySplits].sort((a, b) => b.percentage - a.percentage)[0].cost_center_id;
+    const operationalPct  = keySplits.reduce((sum, s) => sum + (s.is_operational ? s.percentage : 0), 0);
 
     for (let i = 0; i < txIds.length; i += CHUNK) {
       const { error: updErr } = await supabase
@@ -128,45 +142,41 @@ export async function applyOASplits(supabase: SupabaseClient): Promise<ApplyOASp
       if (splErr) throw new Error(splErr.message);
     }
 
-    breakdown.push({ key: key.replace(/^(vendor|description3):/, ""), count: txIds.length });
+    countByDisplayKey.set(displayKey, (countByDisplayKey.get(displayKey) ?? 0) + txIds.length);
     totalAssigned += txIds.length;
   }
 
+  const breakdown = [...countByDisplayKey.entries()].map(([key, count]) => ({ key, count }));
   return { assigned: totalAssigned, breakdown };
 }
 
 /**
- * GET helper — count of unassigned OA txs with a matching description3/vendor split rule.
+ * GET helper — count of unassigned OA txs that have an applicable version.
  */
 export async function countMatchableOATxs(supabase: SupabaseClient): Promise<{
   count: number;
   breakdown: { key: string; count: number }[];
 }> {
-  const byKey = await loadOASplits(supabase);
-  if (byKey.size === 0) return { count: 0, breakdown: [] };
+  const vMap = await loadVersionedOASplits(supabase);
+  if (vMap.size === 0) return { count: 0, breakdown: [] };
   const txRows = await fetchUnassignedOATxs(supabase);
 
   const countMap = new Map<string, number>();
   for (const tx of txRows) {
     const normVendor = tx.vendor ? norm(tx.vendor) : null;
-    const normCd3 = tx.check_description_3 ? norm(tx.check_description_3) : null;
-    const key =
-      (normVendor && byKey.has(`vendor:${normVendor}`))   ? `vendor:${normVendor}` :
-      (normCd3   && byKey.has(`description3:${normCd3}`)) ? `description3:${normCd3}` :
+    const normCd3    = tx.check_description_3 ? norm(tx.check_description_3) : null;
+    const keyStr =
+      (normVendor && vMap.has(`vendor:${normVendor}`))   ? `vendor:${normVendor}` :
+      (normCd3   && vMap.has(`description3:${normCd3}`)) ? `description3:${normCd3}` :
       null;
-    if (key) countMap.set(key, (countMap.get(key) ?? 0) + 1);
+    if (!keyStr) continue;
+    const versions = vMap.get(keyStr)!;
+    if (!findApplicableVersion(versions, tx.year, tx.month)) continue;
+    const dk = keyStr.replace(/^(vendor|description3):/, "");
+    countMap.set(dk, (countMap.get(dk) ?? 0) + 1);
   }
 
-  const breakdown = [...countMap.entries()].map(([key, count]) => ({
-    key: key.replace(/^(vendor|description3):/, ""),
-    count,
-  }));
-
-  const count = txRows.filter((tx) => {
-    const nv = tx.vendor ? norm(tx.vendor) : null;
-    const nc = tx.check_description_3 ? norm(tx.check_description_3) : null;
-    return (nv && byKey.has(`vendor:${nv}`)) || (nc && byKey.has(`description3:${nc}`));
-  }).length;
-
+  const breakdown = [...countMap.entries()].map(([key, count]) => ({ key, count }));
+  const count = breakdown.reduce((s, r) => s + r.count, 0);
   return { count, breakdown };
 }
