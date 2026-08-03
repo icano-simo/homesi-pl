@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw, AlertTriangle, Download, Search, X, Pencil, Trash2, ChevronsUpDown, ArrowUpAZ, ArrowDownAZ } from "lucide-react";
+import { RefreshCw, AlertTriangle, Download, Search, X, Pencil, Trash2, ChevronsUpDown, ArrowUpAZ, ArrowDownAZ, Clock } from "lucide-react";
 import * as XLSX from "xlsx";
 import { ColumnFilter } from "@/components/column-filter";
 import { buildSplitsMap } from "@/lib/apply-splits";
@@ -602,7 +602,7 @@ function LoanResolvePicker({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-const COL_COUNT = 15;
+const BASE_COL_COUNT = 15;
 
 export default function TransactionsPage() {
   const { activeBranches, isLoaded: branchFilterLoaded } = useActiveBranches();
@@ -653,6 +653,9 @@ export default function TransactionsPage() {
     setResolvingTx(tx);
     setResolveAnchor(e.currentTarget as HTMLElement);
   }
+  const [showCcUpdated, setShowCcUpdated] = useState(false);
+  const colCount = showCcUpdated ? BASE_COL_COUNT + 1 : BASE_COL_COUNT;
+
   const [allSplits, setAllSplits] = useState<SplitEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -923,6 +926,18 @@ export default function TransactionsPage() {
               <Download size={14} /> Export CSV
             </button>
           )}
+          <button
+            onClick={() => setShowCcUpdated((v) => !v)}
+            title={showCcUpdated ? "Hide CC assignment date column" : "Show CC assignment date column"}
+            className={[
+              "flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm",
+              showCcUpdated
+                ? "border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                : "border-gray-200 bg-white text-gray-500 hover:bg-gray-50",
+            ].join(" ")}
+          >
+            <Clock size={14} /> CC Date
+          </button>
         </div>
       </div>
 
@@ -944,10 +959,11 @@ export default function TransactionsPage() {
       >
         <table className="text-xs table-fixed border-collapse" style={{ minWidth: "100%", width: "max-content" }}>
           <colgroup>
-            {/* CC | Month | Year | GL Code | GL Name | Branch | Desc | CD2 | CD3 | Vendor | Ref | Movement | Loan# | Loan Tags | Source */}
+            {/* CC | Month | Year | GL Code | GL Name | Branch | Desc | CD2 | CD3 | Vendor | Ref | Movement | Loan# | Loan Tags | Source [| CC Date] */}
             {["160px","72px","52px","80px","150px","72px","230px","120px","120px","130px","80px","100px","140px","160px","72px"].map((w, i) => (
               <col key={i} style={{ width: w }} />
             ))}
+            {showCcUpdated && <col style={{ width: "110px" }} />}
           </colgroup>
           <thead className="sticky top-0 z-20 bg-gray-50">
             <tr className="border-b border-gray-200 text-gray-500">
@@ -1036,26 +1052,31 @@ export default function TransactionsPage() {
                   options={["Original", "Addback", "Offshore", "Manual Entry", "Employee Fee"]} selected={serverFilters.source}
                   onChange={(v) => setSF("source", v)} />
               </TH>
+              {showCcUpdated && (
+                <TH label="CC Date"
+                  className="text-[10px] text-gray-400"
+                />
+              )}
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr style={{ height: 200 }}>
-                <td colSpan={COL_COUNT} className="text-center align-middle text-gray-400">
+                <td colSpan={colCount} className="text-center align-middle text-gray-400">
                   <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-300 border-t-blue-600" />
                   <span className="ml-2">Loading all transactions…</span>
                 </td>
               </tr>
             ) : N === 0 ? (
               <tr style={{ height: 120 }}>
-                <td colSpan={COL_COUNT} className="text-center align-middle text-gray-400">
+                <td colSpan={colCount} className="text-center align-middle text-gray-400">
                   No transactions found with the current filters.
                 </td>
               </tr>
             ) : (
               <>
                 {topPad > 0 && (
-                  <tr aria-hidden="true"><td colSpan={COL_COUNT} style={{ height: topPad, padding: 0 }} /></tr>
+                  <tr aria-hidden="true"><td colSpan={colCount} style={{ height: topPad, padding: 0 }} /></tr>
                 )}
                 {visibleRows.map((tx) => (
                   <tr
@@ -1127,10 +1148,20 @@ export default function TransactionsPage() {
                         <span className="text-gray-400 text-[10px]">Original</span>
                       )}
                     </td>
+                    {showCcUpdated && (
+                      <td
+                        className="px-2 py-0 text-[10px] text-gray-500 whitespace-nowrap overflow-hidden"
+                        title={tx.updated_at ? `CC last assigned: ${new Date(tx.updated_at).toLocaleString()}` : "No CC assignment date"}
+                      >
+                        {tx.updated_at
+                          ? new Date(tx.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                    )}
                   </tr>
                 ))}
                 {botPad > 0 && (
-                  <tr aria-hidden="true"><td colSpan={COL_COUNT} style={{ height: botPad, padding: 0 }} /></tr>
+                  <tr aria-hidden="true"><td colSpan={colCount} style={{ height: botPad, padding: 0 }} /></tr>
                 )}
               </>
             )}

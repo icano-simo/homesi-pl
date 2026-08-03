@@ -6,14 +6,14 @@ export const dynamic = "force-dynamic";
 
 const SELECT =
   "id,gl_code,gl_name,month,year,branch,check_description,check_description_2,check_description_3," +
-  "vendor,debit,credit,movement,cost_center_id,cost_center_status,assignment_origin,operational_pct,cost_centers(name)";
+  "vendor,debit,credit,movement,cost_center_id,cost_center_status,assignment_origin,operational_pct,updated_at,cost_centers(name)";
 
 type Row = {
   id: string; gl_code: string|null; gl_name: string|null; month: string|null; year: number|null;
   branch: string|null; check_description: string|null; check_description_2: string|null; check_description_3: string|null;
   vendor: string|null; debit: number; credit: number; movement: number|null;
   cost_center_id: string|null; cost_center_status: string|null; assignment_origin: string|null;
-  operational_pct: number;
+  operational_pct: number; updated_at: string|null;
   cost_centers: { name: string } | null;
 };
 
@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
       cost_center_name: tx.cost_centers?.name ?? null,
       assignment_origin: tx.assignment_origin,
       operational_pct: tx.operational_pct ?? 100,
+      updated_at: tx.updated_at ?? null,
     });
   }
 

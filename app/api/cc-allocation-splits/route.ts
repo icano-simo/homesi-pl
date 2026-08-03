@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     while (true) {
       const { data: page, error: pageErr } = await supabase
         .from("cc_allocation_splits")
-        .select("id,assign_type,assign_value,cost_center_id,percentage,is_operational,cost_centers(name)")
+        .select("id,assign_type,assign_value,cost_center_id,percentage,is_operational,created_at,cost_centers(name)")
         .order("percentage", { ascending: false })
         .range(offset, offset + PAGE_SIZE - 1);
       if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 });
@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q: any = supabase
     .from("cc_allocation_splits")
-    .select("id,assign_type,assign_value,cost_center_id,percentage,is_operational,cost_centers(name)")
+    .select("id,assign_type,assign_value,cost_center_id,percentage,is_operational,created_at,cost_centers(name)")
     .order("percentage", { ascending: false });
 
   const normValueKey = norm(rawValue!);

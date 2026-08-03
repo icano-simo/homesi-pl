@@ -10,7 +10,7 @@ const SELECT_DATA =
   "category_1,category_5,category_6,upload_id,year,month," +
   "cost_center_id,cost_center_status,cost_centers(name),source," +
   "loan_number,loan_number_incomplete," +
-  "assignment_origin,operational_pct";
+  "assignment_origin,operational_pct,updated_at";
 
 type LoanTags = { b2b: boolean; processing: boolean; support_on_demand: boolean; affinity: boolean; recruitment: boolean };
 

@@ -787,6 +787,7 @@ function ManualTab({ branches, costCenters, glFilter, txSearch, ccFilter }: { br
                     <th className="px-3 py-1 font-medium">Vendor</th>
                     <th className="px-3 py-1 text-right font-medium">Movement</th>
                     <th className="px-3 py-1 font-medium">Assigned to</th>
+                    <th className="px-3 py-1 font-medium text-gray-400" title="Date the CC assignment was last changed">Assigned</th>
                     <th className="px-3 py-1 font-medium">Status</th>
                     <th className="px-3 py-1 font-medium">Allocation</th>
                   </tr>
@@ -821,6 +822,14 @@ function ManualTab({ branches, costCenters, glFilter, txSearch, ccFilter }: { br
                               ? <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800 text-[10px] font-medium">{tx.cost_center_name}</span>
                               : <span className="text-gray-400">—</span>;
                           })()}
+                        </td>
+                        <td
+                          className="px-3 py-1 text-[10px] text-gray-400 whitespace-nowrap"
+                          title={tx.updated_at ? `CC last assigned: ${new Date(tx.updated_at).toLocaleString()}` : undefined}
+                        >
+                          {tx.updated_at
+                            ? new Date(tx.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                            : "—"}
                         </td>
                         <td className="px-3 py-1">
                           <OpBadge

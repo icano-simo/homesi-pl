@@ -85,6 +85,9 @@ export interface PLTransaction {
   operational_pct: number;
   assignment_origin: "manual" | "rule" | "rule_split" | "conflict_resolved" | null;
   created_at: string;
+  // updated_at is set by DB trigger only when cost_center_id/cost_center_status/assignment_origin changes.
+  // Rows that existed before the 2026-08-02 migration show that date — not the real assignment time.
+  updated_at?: string | null;
   // Loan Officials tags — populated by Transaction Review API (not stored on pl_transactions)
   b2b?: boolean | null;
   processing?: boolean | null;
@@ -338,6 +341,7 @@ export interface AssignmentTx {
   cost_center_name: string | null;
   assignment_origin: string | null;
   operational_pct: number;
+  updated_at?: string | null;
 }
 
 export interface AssignmentGroup {

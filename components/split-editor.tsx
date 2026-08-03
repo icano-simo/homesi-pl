@@ -23,10 +23,11 @@ interface SplitEditorProps {
 export function SplitEditor({
   assignType, assignValue, displayName, txCount, costCenters, onClose, onSaved,
 }: SplitEditorProps) {
-  const [rows, setRows]       = useState<SplitRow[]>([{ cost_center_id: "", percentage: "100", is_operational: true }]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving]   = useState(false);
-  const [errMsg, setErrMsg]   = useState("");
+  const [rows, setRows]         = useState<SplitRow[]>([{ cost_center_id: "", percentage: "100", is_operational: true }]);
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [errMsg, setErrMsg]     = useState("");
+  const [configuredOn, setConfiguredOn] = useState<string | null>(null);
 
   // Conflict detection: set when a split rule already covers this vendor/description3
   const [ruleConflict, setRuleConflict] = useState<{ rule_id: string; rule_name: string } | null>(null);
@@ -43,13 +44,16 @@ export function SplitEditor({
       fetch(conflictUrl).then((r) => r.json()),
     ])
       .then(([splits, conflictData]) => {
-        const data = splits as { cost_center_id: string; percentage: number; is_operational?: boolean }[];
+        const data = splits as { cost_center_id: string; percentage: number; is_operational?: boolean; created_at?: string }[];
         if (data.length > 0) {
           setRows(data.map((d) => ({
             cost_center_id: d.cost_center_id,
             percentage: String(d.percentage),
             is_operational: d.is_operational ?? true,
           })));
+          // Show the oldest created_at among the split rows (all rows for a split share the same date)
+          const dates = data.map((d) => d.created_at).filter(Boolean) as string[];
+          if (dates.length > 0) setConfiguredOn(dates.sort()[0]);
         }
         const cd = conflictData as { rule_conflict: { rule_id: string; rule_name: string } | null };
         setRuleConflict(cd.rule_conflict ?? null);
@@ -139,6 +143,16 @@ export function SplitEditor({
             </div>
           ) : (
             <>
+              {/* Split creation date */}
+              {configuredOn && (
+                <p className="text-[11px] text-gray-400">
+                  Split configured{" "}
+                  <span className="font-medium text-gray-500">
+                    {new Date(configuredOn).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                  </span>
+                </p>
+              )}
+
               {/* Column labels */}
               <div className="grid grid-cols-[1fr_6rem_5rem_1.5rem] gap-2 px-0.5">
                 <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">Cost Center</span>
