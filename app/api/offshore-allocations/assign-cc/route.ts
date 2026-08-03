@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
         cost_center_id,
         cost_center_status: "assigned",
         cost_center_conflicts: null,
-        assignment_origin: "manual",
+        assignment_origin: "split_propagated",
       })
       .in("id", batch);
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });

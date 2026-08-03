@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
 
     for (const tx of rows) {
       // Manual assignments are permanent — never re-evaluate
-      if (tx.assignment_origin === "manual") {
+      if (tx.assignment_origin === "manual" || tx.assignment_origin === "split_propagated") {
         totalSkipped++;
         continue;
       }

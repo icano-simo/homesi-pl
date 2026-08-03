@@ -73,7 +73,7 @@ export async function applyEmployeeFeeCostSplits(
       id:                 tx.id,
       cost_center_id:     primaryCC,
       cost_center_status: "assigned",
-      assignment_origin:  "manual",
+      assignment_origin:  "split_propagated",
     });
   }
 

@@ -166,7 +166,7 @@ export async function PUT(req: NextRequest) {
   const primaryCcId = [...splits].sort((a, b) => b.percentage - a.percentage)[0].cost_center_id;
   const operationalPct = splits.reduce((s, r) => s + ((r.is_operational ?? true) ? r.percentage : 0), 0);
 
-  // 3. Find matching transaction IDs — for vendor type, try both raw and normalized names
+  // 3. Find split_propagated and unassigned transactions — manual exceptions are never overwritten
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let txQ: any = supabase.from("pl_transactions").select("id");
   if (assign_type === "vendor") {
@@ -178,13 +178,14 @@ export async function PUT(req: NextRequest) {
     // description3 — only OA source
     txQ = txQ.eq("source", "offshore_allocations").eq("check_description_3", assign_value);
   }
+  txQ = txQ.or("assignment_origin.eq.split_propagated,cost_center_status.eq.unassigned");
 
   const { data: txRows, error: txErr } = await txQ;
   if (txErr) return NextResponse.json({ error: txErr.message }, { status: 500 });
 
   const txIds: string[] = (txRows ?? []).map((r: { id: string }) => r.id);
 
-  // 4. Update pl_transactions with primary CC and operational_pct
+  // 4. Update matching transactions and sync per-tx split rows; manual exceptions stay intact
   if (txIds.length > 0) {
     for (let i = 0; i < txIds.length; i += CHUNK) {
       const { error: updErr } = await supabase
@@ -193,11 +194,35 @@ export async function PUT(req: NextRequest) {
           cost_center_id:        primaryCcId,
           cost_center_status:    "assigned",
           cost_center_conflicts: null,
-          assignment_origin:     "manual",
+          assignment_origin:     "split_propagated",
           operational_pct:       operationalPct,
         })
         .in("id", txIds.slice(i, i + CHUNK));
       if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+    }
+
+    // Sync per-transaction splits: delete old, insert new
+    for (let i = 0; i < txIds.length; i += CHUNK) {
+      await supabase
+        .from("cc_allocation_splits")
+        .delete()
+        .eq("assign_type", "transaction")
+        .in("assign_value", txIds.slice(i, i + CHUNK));
+    }
+    const splitRows = txIds.flatMap((txId) =>
+      splits.map((s) => ({
+        assign_type:    "transaction" as const,
+        assign_value:   txId,
+        cost_center_id: s.cost_center_id,
+        percentage:     s.percentage,
+        is_operational: s.is_operational ?? true,
+      }))
+    );
+    for (let i = 0; i < splitRows.length; i += CHUNK) {
+      const { error: splErr } = await supabase
+        .from("cc_allocation_splits")
+        .insert(splitRows.slice(i, i + CHUNK));
+      if (splErr) return NextResponse.json({ error: splErr.message }, { status: 500 });
     }
   }
 
@@ -237,7 +262,7 @@ export async function DELETE(req: NextRequest) {
     if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });
   }
 
-  // 2. Find matching transactions (raw + normalized)
+  // 2. Find split_propagated transactions — manual exceptions keep their assignment when a rule is deleted
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let txQ: any = supabase.from("pl_transactions").select("id");
   if (assign_type === "vendor") {
@@ -246,12 +271,14 @@ export async function DELETE(req: NextRequest) {
   } else {
     txQ = txQ.eq("source", "offshore_allocations").eq("check_description_3", assign_value);
   }
+  txQ = txQ.eq("assignment_origin", "split_propagated");
+
   const { data: txRows, error: txErr } = await txQ;
   if (txErr) return NextResponse.json({ error: txErr.message }, { status: 500 });
 
   const txIds: string[] = (txRows ?? []).map((r: { id: string }) => r.id);
 
-  // 3. Reset to unassigned in chunks
+  // 3. Reset split_propagated to unassigned; manual exceptions are left intact
   if (txIds.length > 0) {
     for (let i = 0; i < txIds.length; i += CHUNK) {
       const { error: updErr } = await supabase
