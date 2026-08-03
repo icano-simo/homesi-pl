@@ -15,6 +15,7 @@ export async function POST() {
       .eq("source", "employee_fee")
       .eq("gl_code", "90002")
       .eq("cost_center_status", "unassigned")
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;

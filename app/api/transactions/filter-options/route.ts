@@ -34,6 +34,7 @@ async function distinctValues(
       .from("pl_transactions")
       .select(col)
       .not(col, "is", null)
+      .order("id", { ascending: true })
       .range(offset, offset + BATCH - 1);
     if (uploadId) q = q.eq("upload_id", uploadId);
 

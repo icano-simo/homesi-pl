@@ -56,6 +56,7 @@ export async function GET(req: NextRequest) {
       .from("pl_transactions")
       .select(SELECT)
       .eq("source", "offshore_allocations")
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
     if (branches.length > 0) q = q.in("branch", branches);
     const { data, error } = await q;

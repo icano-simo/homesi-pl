@@ -72,7 +72,7 @@ export async function runLoanNumberCompletion(
       .select("id,loan_number_raw")
       .not("loan_number_raw", "is", null);
     if (options?.uploadId) q = q.eq("upload_id", options.uploadId);
-    const { data, error } = await q.range(offset, offset + 999);
+    const { data, error } = await q.order("id", { ascending: true }).range(offset, offset + 999);
     if (error) throw new Error(`pl_transactions fetch: ${error.message}`);
     if (!data || data.length === 0) break;
     txs.push(...(data as { id: string; loan_number_raw: string }[]));

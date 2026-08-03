@@ -58,6 +58,7 @@ async function fetchUnassignedByVendors(
         .select("id,vendor")
         .in("vendor", chunk)
         .or("cost_center_status.eq.unassigned,cost_center_status.is.null")
+        .order("id", { ascending: true })
         .range(offset, offset + 999);
       if (error) throw new Error(error.message);
       if (!data || data.length === 0) break;

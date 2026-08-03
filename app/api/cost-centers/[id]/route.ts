@@ -96,6 +96,7 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
         .select("transaction_id")
         .eq("is_resolved", false)
         .contains("conflicting_cc_ids", [id])
+        .order("id", { ascending: true })
         .range(offset, offset + 999);
       if (!data || data.length === 0) break;
       conflictTxIds.push(...(data as { transaction_id: string }[]).map((r) => r.transaction_id));

@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
       .select("vendor,branch,month,year,gl_code,gl_name,cost_center_id,cost_center_status")
       .not("vendor", "is", null)
       .neq("vendor", "")
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
     if (branches.length > 0) q = q.in("branch", branches);
     if (months.length > 0)   q = q.in("month", months);

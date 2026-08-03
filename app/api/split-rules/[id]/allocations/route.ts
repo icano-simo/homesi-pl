@@ -66,6 +66,7 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
       .from("pl_transactions")
       .select("id")
       .in("assignment_origin", ["rule", "rule_split"])
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
     if (activeBranches.length > 0) q = q.in("branch", activeBranches);
     const { data: txData } = await q;

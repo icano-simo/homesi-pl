@@ -38,6 +38,7 @@ export async function POST(): Promise<NextResponse> {
       .select("id, check_description")
       .is("loan_number_raw", null)
       .not("check_description", "is", null)
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;

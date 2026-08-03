@@ -69,6 +69,7 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
         .from("pl_transactions")
         .select("id")
         .eq("cost_center_id", id)
+        .order("id", { ascending: true })
         .range(offset, offset + 999);
       if (!data || data.length === 0) break;
       directTxIds.push(...(data as { id: string }[]).map((r) => r.id));
@@ -87,6 +88,7 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
         .select("transaction_id")
         .eq("is_resolved", false)
         .contains("conflicting_cc_ids", [id])
+        .order("id", { ascending: true })
         .range(offset, offset + 999);
       if (!data || data.length === 0) break;
       conflictTxIds.push(...(data as { transaction_id: string }[]).map((r) => r.transaction_id));

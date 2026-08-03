@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
   const transactions: Array<Record<string, unknown>> = [];
   let txOffset = 0;
   while (true) {
-    const { data: txPage, error: txError } = await buildTxQuery().range(txOffset, txOffset + 999);
+    const { data: txPage, error: txError } = await buildTxQuery().order("id", { ascending: true }).range(txOffset, txOffset + 999);
     if (txError) return NextResponse.json({ error: txError.message }, { status: 500 });
     if (!txPage || txPage.length === 0) break;
     transactions.push(...(txPage as Array<Record<string, unknown>>));

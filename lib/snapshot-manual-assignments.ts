@@ -51,6 +51,7 @@ export async function snapshotManualAssignments(
       .select("id, gl_code, branch, check_description, journal_post_date, cost_center_id, assignment_origin")
       .eq("upload_id", uploadId)
       .in("assignment_origin", ["manual", "conflict_resolved"])
+      .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw new Error(`snapshot fetch txs: ${error.message}`);
     if (!data || data.length === 0) break;

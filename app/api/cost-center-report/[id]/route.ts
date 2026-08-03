@@ -31,6 +31,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
         "debit,credit,movement,gl_code,gl_name,category_6"
       )
       .eq("cost_center_id", id)
+      .order("id", { ascending: true })
       .range(offset, offset + BATCH - 1);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

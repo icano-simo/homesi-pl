@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
       .select(SELECT)
       .eq("cost_center_status", "assigned")
       .eq("assignment_origin", "manual")
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
     if (branches.length > 0) q = q.in("branch", branches);
     const { data, error } = await q;

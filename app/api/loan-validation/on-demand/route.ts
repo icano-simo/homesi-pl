@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
   const txRows: Array<{ branch: string | null; check_description: string | null; movement: number | null }> = [];
   let txOffset = 0;
   while (true) {
-    const { data, error } = await buildTxQuery().range(txOffset, txOffset + 999);
+    const { data, error } = await buildTxQuery().order("id", { ascending: true }).range(txOffset, txOffset + 999);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;
     txRows.push(...(data as typeof txRows));

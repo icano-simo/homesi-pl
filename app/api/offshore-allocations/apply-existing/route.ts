@@ -48,6 +48,7 @@ async function fetchUnassignedOATxs(supabase: ReturnType<typeof createServerClie
       .select("id,check_description_3,vendor")
       .eq("source", "offshore_allocations")
       .or("cost_center_status.eq.unassigned,cost_center_status.is.null")
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
     if (error) throw new Error(error.message);
     if (!data || data.length === 0) break;

@@ -87,6 +87,7 @@ export async function POST(req: NextRequest) {
         "ref_numb,category_5,category_6,doc_type,month,year,debit,credit,movement,assignment_origin," +
         "loan_number,loan_number_incomplete"
       )
+      .order("id", { ascending: true })
       .range(offset, offset + FETCH_BATCH - 1);
     if (branches.length > 0) q = q.in("branch", branches);
     const { data, error: fetchErr } = await q;

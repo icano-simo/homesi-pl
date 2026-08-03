@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
   while (true) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = supabase.from("pl_transactions").select(SELECT).range(offset, offset + 999);
+    let q: any = supabase.from("pl_transactions").select(SELECT).order("id", { ascending: true }).range(offset, offset + 999);
 
     // Build CC filter — may combine UUIDs with status sentinels via OR
     const ccIds = ccs.filter((c) => c !== "unassigned" && c !== "conflict");

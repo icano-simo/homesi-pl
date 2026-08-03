@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
         .from("cc_allocation_splits")
         .select("id,assign_type,assign_value,cost_center_id,percentage,is_operational,created_at,cost_centers(name)")
         .order("percentage", { ascending: false })
+        .order("id", { ascending: true })
         .range(offset, offset + PAGE_SIZE - 1);
       if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 });
       if (!page || page.length === 0) break;

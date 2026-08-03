@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
       )
       .eq("cost_center_status", "conflict")
       .order("journal_post_date", { ascending: true })
+      .order("id", { ascending: true })
       .range(rangeFrom, rangeTo),
   ]);
 

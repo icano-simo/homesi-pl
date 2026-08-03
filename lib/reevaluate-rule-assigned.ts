@@ -141,6 +141,7 @@ export async function getRuleAssignedTxIds(
       .select("id")
       .eq("cost_center_id", ccId)
       .or("assignment_origin.neq.manual,assignment_origin.is.null")
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
 
     if (!data || data.length === 0) break;

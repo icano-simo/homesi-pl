@@ -52,6 +52,7 @@ export async function POST() {
       .select(TX_FIELDS)
       .eq("source", "offshore_allocations")
       .eq("assignment_origin", "manual")
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

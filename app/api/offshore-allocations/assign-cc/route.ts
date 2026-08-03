@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       .select("id")
       .eq("source", "offshore_allocations")
       .eq(field, value)
+      .order("id", { ascending: true })
       .range(offset, offset + 999);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
