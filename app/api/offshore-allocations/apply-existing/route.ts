@@ -149,6 +149,31 @@ export async function POST() {
       if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
     }
 
+    // Write per-transaction split rows mirroring the matched description3/vendor split
+    // so Transaction Review shows full Split Detail instead of a single flattened CC.
+    for (let i = 0; i < txIds.length; i += CHUNK) {
+      await supabase
+        .from("cc_allocation_splits")
+        .delete()
+        .eq("assign_type", "transaction")
+        .in("assign_value", txIds.slice(i, i + CHUNK));
+    }
+    const splitRows = txIds.flatMap((txId) =>
+      keySplits.map((s) => ({
+        assign_type: "transaction" as const,
+        assign_value: txId,
+        cost_center_id: s.cost_center_id,
+        percentage: s.percentage,
+        is_operational: s.is_operational,
+      }))
+    );
+    for (let i = 0; i < splitRows.length; i += CHUNK) {
+      const { error: splErr } = await supabase
+        .from("cc_allocation_splits")
+        .insert(splitRows.slice(i, i + CHUNK));
+      if (splErr) return NextResponse.json({ error: splErr.message }, { status: 500 });
+    }
+
     breakdown.push({ key: key.replace(/^(vendor|description3):/, ""), count: txIds.length });
     totalAssigned += txIds.length;
   }
