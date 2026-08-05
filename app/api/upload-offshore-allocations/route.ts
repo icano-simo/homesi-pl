@@ -8,6 +8,8 @@ import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
 import { generateEmployeeFeeLines } from "@/lib/generate-employee-fee-lines";
+import { applyOASplits } from "@/lib/apply-oa-splits";
+import { resyncEmployeeSplits } from "@/lib/resync-employee-splits";
 import type {
   OffshoreAllocationsUploadResponse,
   ApiError,
@@ -206,6 +208,12 @@ export async function POST(req: NextRequest) {
     // Uses idempotency: only creates lines for (employee, month, year) combos
     // that don't already have employee_fee lines.
     const feeSummary = await generateEmployeeFeeLines(supabase);
+
+    // ── 7d. Apply OA split rules to all unassigned OA transactions (Button 1 auto)
+    await applyOASplits(supabase);
+
+    // ── 7e. Sync employee cost splits for unassigned GL 90002 lines (Button 2 auto)
+    await resyncEmployeeSplits(supabase);
 
     // ── 8. Mark completed ─────────────────────────────────────────────────
     await supabase

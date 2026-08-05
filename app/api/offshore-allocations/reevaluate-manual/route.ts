@@ -25,7 +25,7 @@ export async function GET() {
     .from("pl_transactions")
     .select("id", { count: "exact", head: true })
     .eq("source", "offshore_allocations")
-    .eq("assignment_origin", "manual");
+    .eq("assignment_origin", "split_propagated");
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ count: count ?? 0 });
@@ -51,7 +51,7 @@ export async function POST() {
       .from("pl_transactions")
       .select(TX_FIELDS)
       .eq("source", "offshore_allocations")
-      .eq("assignment_origin", "manual")
+      .eq("assignment_origin", "split_propagated")
       .order("id", { ascending: true })
       .range(offset, offset + 999);
 
