@@ -7,6 +7,7 @@ import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-s
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
+import { relinkOrphanNotes } from "@/lib/relink-orphan-notes";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
 import type { AddbacksUploadResponse, ApiError, PLTransaction, SplitRuleWithDetails } from "@/types";
 
@@ -144,6 +145,9 @@ export async function POST(req: NextRequest) {
       ? await reapplyManualSnapshot(supabase, id, manualSnapshot)
       : null;
 
+    // ── 7c. Reattach notes orphaned by a replaced upload ──────────────────
+    const relinkSummary = await relinkOrphanNotes(supabase, id);
+
     // ── 8. Mark completed ─────────────────────────────────────────────────
     await supabase
       .from("pl_uploads")
@@ -158,6 +162,7 @@ export async function POST(req: NextRequest) {
       parseWarnings: warnings.length,
     };
     if (manualSummary) response.manualAssignments = manualSummary;
+    if (relinkSummary.notesConsidered > 0) response.orphanNotes = relinkSummary;
     return NextResponse.json(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

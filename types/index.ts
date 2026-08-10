@@ -196,6 +196,14 @@ export interface ManualAssignmentSummary {
   conflict_resolved_requires_review: number;
 }
 
+/** Outcome of the orphaned-note sweep that runs after every upload. */
+export interface RelinkSummary {
+  notesConsidered: number;
+  notesRelinked: number;
+  notesOrphaned: number;
+  notesAmbiguous: number;
+}
+
 export interface UploadPLResponse {
   uploadId: string;
   rowCount: number;
@@ -203,6 +211,8 @@ export interface UploadPLResponse {
   unknownBranchCount: number;
   parseWarnings: number;
   manualAssignments?: ManualAssignmentSummary;
+  /** Present only when orphaned transaction-level notes existed to sweep. */
+  orphanNotes?: RelinkSummary;
 }
 
 export interface AddbacksUploadResponse {
@@ -212,6 +222,8 @@ export interface AddbacksUploadResponse {
   unknownBranchCount: number;
   parseWarnings: number;
   manualAssignments?: ManualAssignmentSummary;
+  /** Present only when orphaned transaction-level notes existed to sweep. */
+  orphanNotes?: RelinkSummary;
 }
 
 export interface OffshoreAllocationsUploadResponse {
@@ -221,6 +233,8 @@ export interface OffshoreAllocationsUploadResponse {
   unknownBranchCount: number;
   parseWarnings: number;
   manualAssignments?: ManualAssignmentSummary;
+  /** Present only when orphaned transaction-level notes existed to sweep. */
+  orphanNotes?: RelinkSummary;
   employeeFeeLines?: { employees: number; months: number; transactions: number };
 }
 
@@ -289,6 +303,8 @@ export interface FilterOptionsResponse extends TransactionColumnValues {
 export interface PLReportTx {
   id: string;
   month: string | null;
+  /** Needed to anchor notes to a period — see lib/note-scope.ts. */
+  year?: number | null;
   branch: string | null;
   check_description: string | null;
   vendor: string | null;

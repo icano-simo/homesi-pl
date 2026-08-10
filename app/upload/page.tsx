@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, X, Trash2, RefreshCw } from "lucide-react";
-import type { UploadPLResponse, AddbacksUploadResponse, OffshoreAllocationsUploadResponse, UploadLoanCountResponse, ManualAssignmentSummary } from "@/types";
+import type { UploadPLResponse, AddbacksUploadResponse, OffshoreAllocationsUploadResponse, UploadLoanCountResponse, ManualAssignmentSummary, RelinkSummary } from "@/types";
 import type { DuplicateInfo } from "@/lib/check-duplicate-upload";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
@@ -16,6 +16,49 @@ function Stat({ value, label, warn = false }: { value: number; label: string; wa
         {value.toLocaleString()}
       </p>
       <p className="text-xs text-gray-500">{label}</p>
+    </div>
+  );
+}
+
+// ─── Orphaned note summary (shown when a re-upload detached notes) ───────────
+
+/**
+ * Transaction-level notes survive a replace but lose their transaction. This
+ * says what happened to them at the moment it happens — before, they simply
+ * stopped appearing and nobody was told.
+ */
+function OrphanNotesBlock({ on }: { on: RelinkSummary }) {
+  const unresolved = on.notesOrphaned + on.notesAmbiguous;
+  const border = unresolved > 0 ? "border-amber-200" : "border-green-200";
+  const bg     = unresolved > 0 ? "bg-amber-50"      : "bg-green-50";
+
+  return (
+    <div className={`rounded-lg border ${border} ${bg} px-3 py-2.5 space-y-1.5`}>
+      <p className="text-xs font-semibold text-gray-700">Notes attached to transactions</p>
+      {on.notesRelinked > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-green-700">
+          <CheckCircle2 size={13} />
+          Reattached automatically: {on.notesRelinked}
+        </div>
+      )}
+      {on.notesAmbiguous > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-orange-700">
+          <AlertCircle size={13} />
+          Several transactions matched, left for review: {on.notesAmbiguous}
+        </div>
+      )}
+      {on.notesOrphaned > 0 && (
+        <div className="flex items-center gap-1.5 text-xs text-amber-700">
+          <AlertCircle size={13} />
+          No matching transaction found: {on.notesOrphaned}
+        </div>
+      )}
+      {unresolved > 0 && (
+        <p className="text-[11px] text-gray-500">
+          These are listed under “Orphaned Notes” in P&amp;L Notes, where they can be
+          re-linked by hand or discarded. Nothing was deleted.
+        </p>
+      )}
     </div>
   );
 }
@@ -314,6 +357,7 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
             </p>
           )}
           {result.manualAssignments && <ManualAssignmentBlock ma={result.manualAssignments} />}
+          {result.orphanNotes && <OrphanNotesBlock on={result.orphanNotes} />}
           {"employeeFeeLines" in result && result.employeeFeeLines && (
             <p className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
               Employee fee lines generated: {result.employeeFeeLines.employees} employee{result.employeeFeeLines.employees !== 1 ? "s" : ""} × {result.employeeFeeLines.months} new month{result.employeeFeeLines.months !== 1 ? "s" : ""} = {result.employeeFeeLines.transactions} transactions

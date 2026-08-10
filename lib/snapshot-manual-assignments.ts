@@ -2,12 +2,18 @@
 type SupabaseClient = any;
 
 import type { ManualAssignmentSummary } from "@/types";
+import { assignmentFingerprint, ASSIGNMENT_FINGERPRINT_SELECT, type FingerprintableTx } from "@/lib/tx-fingerprint";
 
 interface ManualAssignmentEntry {
-  gl_code:           string | null;
-  branch:            string | null;
-  check_description: string | null;
-  journal_post_date: string | null;
+  /**
+   * Identity of the transaction this assignment belonged to, from the shared
+   * fingerprint module. Stored instead of the individual key columns so there
+   * is exactly one comparison path — a hand-written AND here would be a second
+   * definition of "same transaction" free to drift from the canonical one.
+   */
+  fingerprint:       string;
+  /** Kept only for error messages; never used to match. */
+  label:             string;
   cost_center_id:    string;
   assignment_origin: "manual" | "conflict_resolved";
   conflict_snapshot?: {
@@ -35,12 +41,8 @@ export async function snapshotManualAssignments(
   uploadId: string
 ): Promise<ManualAssignmentEntry[]> {
   // Paginate in case the upload has many manual assignments
-  const allTxs: Array<{
+  const allTxs: Array<FingerprintableTx & {
     id: string;
-    gl_code: string | null;
-    branch: string | null;
-    check_description: string | null;
-    journal_post_date: string | null;
     cost_center_id: string;
     assignment_origin: string;
   }> = [];
@@ -48,7 +50,7 @@ export async function snapshotManualAssignments(
   while (true) {
     const { data, error } = await supabase
       .from("pl_transactions")
-      .select("id, gl_code, branch, check_description, journal_post_date, cost_center_id, assignment_origin")
+      .select(`id, ${ASSIGNMENT_FINGERPRINT_SELECT}, cost_center_id, assignment_origin`)
       .eq("upload_id", uploadId)
       .in("assignment_origin", ["manual", "conflict_resolved"])
       .order("id", { ascending: true })
@@ -62,15 +64,7 @@ export async function snapshotManualAssignments(
 
   if (allTxs.length === 0) return [];
 
-  const txList = allTxs as Array<{
-    id: string;
-    gl_code: string | null;
-    branch: string | null;
-    check_description: string | null;
-    journal_post_date: string | null;
-    cost_center_id: string;
-    assignment_origin: string;
-  }>;
+  const txList = allTxs;
   const txIds = txList.map((t) => t.id);
 
   // Fetch transaction-level cc_allocation_splits in chunks
@@ -112,10 +106,8 @@ export async function snapshotManualAssignments(
   }
 
   return txList.map((tx) => ({
-    gl_code:           tx.gl_code,
-    branch:            tx.branch,
-    check_description: tx.check_description,
-    journal_post_date: tx.journal_post_date,
+    fingerprint:       assignmentFingerprint(tx),
+    label:             `${tx.gl_code ?? "?"} ${tx.journal_post_date ?? "?"} ${tx.check_description ?? ""}`.trim(),
     cost_center_id:    tx.cost_center_id,
     assignment_origin: tx.assignment_origin as "manual" | "conflict_resolved",
     conflict_snapshot: snapshotMap.get(tx.id),
@@ -124,8 +116,9 @@ export async function snapshotManualAssignments(
 }
 
 /**
- * Matches snapshotted manual assignments onto newly inserted transactions
- * using the 4-field composite key (gl_code, branch, check_description, journal_post_date).
+ * Matches snapshotted manual assignments onto newly inserted transactions using
+ * the shared assignment fingerprint (gl_code, branch, check_description,
+ * journal_post_date, ref_numb) from lib/tx-fingerprint.ts.
  * Call this AFTER cost center rules are applied to the new upload.
  *
  * Matching rules:
@@ -150,19 +143,15 @@ export async function reapplyManualSnapshot(
 
   if (snapshot.length === 0) return summary;
 
-  // Fetch all new transactions for key matching — paginate to avoid PostgREST 1000-row cap
-  const allNewTxs: Array<{
-    id: string;
-    gl_code: string | null;
-    branch: string | null;
-    check_description: string | null;
-    journal_post_date: string | null;
-  }> = [];
+  // Fetch all new transactions for key matching — paginate to avoid PostgREST
+  // 1000-row cap. Without this only the first page would be candidates, and on
+  // an 11k-row P&L upload virtually every assignment would fall to not_found.
+  const allNewTxs: Array<FingerprintableTx & { id: string }> = [];
   let fetchOffset = 0;
   while (true) {
     const { data: page, error: fetchErr } = await supabase
       .from("pl_transactions")
-      .select("id, gl_code, branch, check_description, journal_post_date")
+      .select(`id, ${ASSIGNMENT_FINGERPRINT_SELECT}`)
       .eq("upload_id", newUploadId)
       .order("id", { ascending: true })
       .range(fetchOffset, fetchOffset + PAGE_SIZE - 1);
@@ -173,24 +162,20 @@ export async function reapplyManualSnapshot(
     fetchOffset += PAGE_SIZE;
   }
 
-  const txList = allNewTxs as Array<{
-    id: string;
-    gl_code: string | null;
-    branch: string | null;
-    check_description: string | null;
-    journal_post_date: string | null;
-  }>;
+  // Index once by the shared fingerprint instead of re-scanning every new
+  // transaction per entry, and — more importantly — so identity is decided in
+  // exactly one place for both notes and assignments.
+  const byFingerprint = new Map<string, string[]>();
+  for (const tx of allNewTxs) {
+    const fp = assignmentFingerprint(tx);
+    const arr = byFingerprint.get(fp);
+    if (arr) arr.push(tx.id); else byFingerprint.set(fp, [tx.id]);
+  }
 
   for (const entry of snapshot) {
     const origin = entry.assignment_origin;
 
-    const matches = txList.filter(
-      (tx) =>
-        tx.gl_code           === entry.gl_code &&
-        tx.branch            === entry.branch &&
-        tx.check_description === entry.check_description &&
-        tx.journal_post_date === entry.journal_post_date
-    );
+    const matches = byFingerprint.get(entry.fingerprint) ?? [];
 
     if (matches.length === 0) {
       if (origin === "manual") summary.manual_not_found++;
@@ -204,7 +189,7 @@ export async function reapplyManualSnapshot(
       continue;
     }
 
-    const matchedId = matches[0].id;
+    const matchedId = matches[0];
 
     // Re-apply cost center assignment
     const { error: updateErr } = await supabase
