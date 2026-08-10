@@ -16,6 +16,7 @@ import {
   BookOpen,
   Percent,
   PenLine,
+  MessageSquare,
   type LucideIcon,
 } from "lucide-react";
 import { useActiveBranches } from "@/components/branch-filter-provider";
@@ -29,8 +30,8 @@ type NavItem = NavLeaf | NavGroup;
 
 const NAV_ITEMS: NavItem[] = [
   { label: "Transaction Review", href: "/transactions", icon: Table2 },
-  { label: "Cost Center Report", href: "/cost-center-report", icon: BarChart3 },
   { label: "P&L All", href: "/pl-all", icon: TrendingUp },
+  { label: "P&L Notes", href: "/pl-notes", icon: MessageSquare },
   { label: "Vendors", href: "/vendors", icon: Store },
   { label: "Offshore Allocations", href: "/offshore-allocations", icon: Globe },
   { label: "Manual Entry", href: "/manual-entry", icon: PenLine },
