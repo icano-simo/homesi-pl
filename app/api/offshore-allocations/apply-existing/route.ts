@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { applyOASplits, countMatchableOATxs } from "@/lib/apply-oa-splits";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,9 @@ export async function GET() {
 
 // POST — apply existing description3/vendor split rules to all matching unassigned OA transactions
 export async function POST() {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
   try {
     const result = await applyOASplits(supabase);

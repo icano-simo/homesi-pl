@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { generateEmployeeFeeLines } from "@/lib/generate-employee-fee-lines";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,9 @@ export const dynamic = "force-dynamic";
 // (or all not_recoverable employees if employeeName is omitted).
 // Body: { employeeName?: string }
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
   const body = await req.json() as { employeeName?: string };
 

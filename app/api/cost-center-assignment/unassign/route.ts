@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 const CHUNK = 500;
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { transaction_ids } = await req.json() as { transaction_ids: string[] };
 
   if (!transaction_ids?.length) {

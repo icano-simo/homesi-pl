@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 const MONTH_ORDER = [
   "January","February","March","April","May","June",
@@ -40,6 +41,9 @@ export async function GET() {
 }
 
 export async function DELETE(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { searchParams } = new URL(req.url);
   const month = searchParams.get("month");
   const year = searchParams.get("year");

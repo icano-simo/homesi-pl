@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useActiveBranches } from "@/components/branch-filter-provider";
+import { LogoutButton } from "@/components/logout-button";
 
 // ─── Nav tree definition ──────────────────────────────────────────────────────
 // To add a top-level module: append one entry to NAV_ITEMS.
@@ -228,6 +229,7 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-white/10 px-3 py-3 space-y-2">
+        <LogoutButton expanded={expanded} />
         {/* Active branch filter indicator */}
         {hasFilter && (
           <div className="relative h-7">

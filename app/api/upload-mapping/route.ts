@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseMappingFile } from "@/lib/parse-mapping";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;

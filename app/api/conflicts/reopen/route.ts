@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { transaction_id } = await req.json() as { transaction_id: string };
   if (!transaction_id) {
     return NextResponse.json({ error: "transaction_id is required" }, { status: 400 });

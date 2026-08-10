@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
   const { loan_number } = body as { loan_number?: string };

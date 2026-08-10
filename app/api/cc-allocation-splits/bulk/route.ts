@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,9 @@ function norm(v: string) {
  * For each target: deletes existing splits, inserts new ones, and updates pl_transactions.
  */
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const body = await req.json() as {
     targets: { assign_type: "vendor" | "description3"; assign_value: string }[];
     splits: { cost_center_id: string; percentage: number; is_operational?: boolean }[];

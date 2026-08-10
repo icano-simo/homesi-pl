@@ -5,6 +5,7 @@ import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } 
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
+import { requireSession } from "@/lib/auth";
 
 interface ManualEntryRow {
   gl_code: string;
@@ -18,6 +19,9 @@ interface ManualEntryRow {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
   let uploadId: string | null = null;
 
