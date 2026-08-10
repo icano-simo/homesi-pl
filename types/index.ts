@@ -366,14 +366,6 @@ export interface AssignmentGroup {
   transactions: AssignmentTx[];
 }
 
-/** @deprecated use PLReportTx */
-export type CCReportTx = PLReportTx & { category_6: string | null; year: number | null };
-
-export interface CCReportResponse {
-  cost_center: CostCenter;
-  transactions: PLReportTx[];
-}
-
 // ─── Split Rules ─────────────────────────────────────────────────────────────
 
 export interface SplitRule {
