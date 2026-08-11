@@ -1,4 +1,14 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { createServerClient } from "@/lib/supabase-server";
+
+/**
+ * Derived from the server client rather than imported from supabase-js, whose
+ * SupabaseClient defaults its schema parameter to "public". Since the data
+ * moved to `finance_division` that default no longer matches what
+ * createServerClient returns, and every caller would fail to type-check.
+ * Deriving it keeps this in step with the client automatically — the same
+ * pattern the other lib/ helpers already use.
+ */
+type SupabaseClient = ReturnType<typeof createServerClient>;
 
 export interface CompletionStats {
   processed: number;
