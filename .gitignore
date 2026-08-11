@@ -20,6 +20,14 @@ out/
 next-env.d.ts
 
 # ── Misc ───────────────────────────────────────────────────────────────────────
+# ── Volcados y artefactos de migración ────────────────────────────────────────
+# Contienen datos financieros reales: nombres de prestatarios, números de
+# préstamo, montos y nombres de empleados. Este repositorio es público, así que
+# no pueden entrar aquí. Se generan desde pg_dump cuando hagan falta.
+homesi_dump*.sql
+homesi_finance_division_DDL*.sql
+migracion/
+
 .DS_Store
 *.pem
 npm-debug.log*
