@@ -86,7 +86,12 @@ if (LIST) {
 console.log(`app: ${APP}    accion: ${REVOKE ? "REVOCAR" : "otorgar"}${DRY ? "    (DRY RUN)" : ""}`);
 console.log("");
 
-let done = 0, unchanged = 0, missing = 0, failed = 0;
+// `done` cuenta escrituras CONFIRMADAS releyendo la base; `simulated` es solo
+// para --dry-run. Estaban unificados y el resumen imprimia el total bajo la
+// etiqueta "aplicados", asi que un --dry-run informaba accesos otorgados sin
+// haber escrito nada. Detectado en homesi-reporte-actividad, que copio este
+// script.
+let done = 0, simulated = 0, unchanged = 0, missing = 0, failed = 0;
 
 for (const raw of emails) {
   const email = raw.toLowerCase();
@@ -109,20 +114,52 @@ for (const raw of emails) {
 
   if (DRY) {
     console.log(`  ${REVOKE ? "revocaria" : "otorgaria"} ${raw}  ${JSON.stringify(current)} -> ${JSON.stringify(next)}`);
-    done++;
+    simulated++;
     continue;
   }
 
+  // Sin `provider` ni `providers`: son claims reservados que administra GoTrue,
+  // y reenviarlos en una escritura es una causa conocida de que la
+  // actualizacion se descarte en silencio. El resto de app_metadata se
+  // conserva, para no borrar claims como must_change_password.
+  const safeMetadata = { ...(u.app_metadata ?? {}) };
+  delete safeMetadata.provider;
+  delete safeMetadata.providers;
+
   const { error } = await admin.auth.admin.updateUserById(u.id, {
-    app_metadata: { ...u.app_metadata, allowed_apps: next },
+    app_metadata: { ...safeMetadata, allowed_apps: next },
   });
 
-  if (error) { console.log(`  FALLO      ${raw}: ${error.message}`); failed++; }
-  else { console.log(`  ${REVOKE ? "revocado " : "otorgado "} ${raw}  -> ${JSON.stringify(next)}`); done++; }
+  if (error) { console.log(`  FALLO      ${raw}: ${error.message}`); failed++; continue; }
+
+  // Se relee el usuario en vez de confiar en que la API no devolvio error.
+  // Antes se contaba como aplicado apenas `error` era null; si la escritura no
+  // persistia, el script informaba exito igual. Ahora "aplicados" significa
+  // "confirmado en la base", que es lo unico que sirve para decidir.
+  const { data: check, error: checkError } = await admin.auth.admin.getUserById(u.id);
+  const persisted = Array.isArray(check?.user?.app_metadata?.allowed_apps)
+    ? check.user.app_metadata.allowed_apps
+    : [];
+  const ok = REVOKE ? !persisted.includes(APP) : persisted.includes(APP);
+
+  if (checkError) {
+    console.log(`  ??         ${raw}: escrito, pero no se pudo verificar (${checkError.message})`);
+    failed++;
+  } else if (!ok) {
+    console.log(`  NO PERSISTIO ${raw}: la API no dio error pero la base quedo en ${JSON.stringify(persisted)}`);
+    failed++;
+  } else {
+    console.log(`  ${REVOKE ? "revocado " : "otorgado "} ${raw}  -> ${JSON.stringify(persisted)}`);
+    done++;
+  }
 }
 
 console.log("");
-console.log(`aplicados  : ${done}`);
+if (DRY) {
+  console.log(`SIMULADOS  : ${simulated}   <-- DRY RUN: no se escribio nada en la base`);
+} else {
+  console.log(`aplicados  : ${done}   (releidos de la base, no solo "la API no fallo")`);
+}
 console.log(`sin cambio : ${unchanged}`);
 console.log(`no existen : ${missing}`);
 console.log(`fallidos   : ${failed}`);
