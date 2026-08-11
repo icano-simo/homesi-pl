@@ -56,7 +56,10 @@ const { data, error } = await admin.auth.admin.createUser({
   email,
   password,
   email_confirm: true,
-  app_metadata: { must_change_password: true },
+  // allowed_apps grants this app specifically. The Supabase project is shared
+  // with the other portal apps, so a session alone is not authorisation — see
+  // scripts/grant-app-access.mjs for granting or revoking it later.
+  app_metadata: { must_change_password: true, allowed_apps: ["homesi"] },
 });
 
 if (error) {

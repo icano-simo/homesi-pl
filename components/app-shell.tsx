@@ -15,7 +15,7 @@ import { BranchFilterProvider } from "@/components/branch-filter-provider";
  * decides what is *drawn*, the middleware decides what is *reachable*, and the
  * two answers have to agree.
  */
-const BARE_ROUTES = ["/login", "/change-password"];
+const BARE_ROUTES = ["/login", "/change-password", "/no-access"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

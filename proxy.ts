@@ -12,8 +12,23 @@ import { createMiddlewareClient, withAuthCookies } from "@/lib/supabase-middlewa
  * and warns on the old filename. Same execution point, same semantics.
  */
 
+/**
+ * This app's entry in app_metadata.allowed_apps.
+ *
+ * The Supabase project is shared with the other portal apps, so a valid session
+ * only proves the person works here — not that they may open Homesí. Access is
+ * granted per app, in app_metadata so that only the service role can write it.
+ */
+const APP_NAME = "homesi";
+
 /** Reachable without a session. Everything else requires one. */
 const PUBLIC_ROUTES = ["/login"];
+
+/**
+ * Reachable with a session that lacks access to this app. Exempt from the
+ * access check itself, or the redirect would chase its own tail.
+ */
+const NO_ACCESS_ROUTES = ["/no-access"];
 
 /**
  * Reachable with a session that still owes a password change. Kept separate
@@ -41,6 +56,7 @@ export async function proxy(request: NextRequest) {
   const isApi = pathname.startsWith("/api/");
   const isPublic = matches(pathname, PUBLIC_ROUTES);
   const isPasswordChange = matches(pathname, PASSWORD_CHANGE_ROUTES);
+  const isNoAccess = matches(pathname, NO_ACCESS_ROUTES);
 
   // ── Not signed in ────────────────────────────────────────────────────────
   if (!user) {
@@ -58,6 +74,35 @@ export async function proxy(request: NextRequest) {
 
     const url = request.nextUrl.clone();
     url.pathname = LOGIN_PATH;
+    url.search = "";
+    return withAuthCookies(response(), NextResponse.redirect(url));
+  }
+
+  // ── Signed in, but is this person allowed into Homesí at all? ────────────
+  // Checked before the password rule on purpose: making someone set a new
+  // password for an app they cannot open would be pointless busywork.
+  const allowedApps = user.app_metadata?.allowed_apps;
+  const hasAccess = Array.isArray(allowedApps) && allowedApps.includes(APP_NAME);
+
+  if (!hasAccess && !isNoAccess) {
+    // 403, not 401: the caller proved who they are, they simply lack the
+    // permission. A 401 would suggest signing in again would help.
+    if (isApi) {
+      return withAuthCookies(
+        response(),
+        NextResponse.json({ error: "No access to this application" }, { status: 403 }),
+      );
+    }
+    const url = request.nextUrl.clone();
+    url.pathname = "/no-access";
+    url.search = "";
+    return withAuthCookies(response(), NextResponse.redirect(url));
+  }
+
+  // Someone who does have access should never sit on /no-access.
+  if (hasAccess && isNoAccess) {
+    const url = request.nextUrl.clone();
+    url.pathname = DEFAULT_LANDING;
     url.search = "";
     return withAuthCookies(response(), NextResponse.redirect(url));
   }

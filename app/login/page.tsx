@@ -8,6 +8,9 @@ import { createClient } from "@/lib/supabase-browser";
 /** Where a user lands once they are in and have nothing left to do. */
 const DEFAULT_LANDING = "/pl-all";
 
+/** This app's entry in app_metadata.allowed_apps. Must match proxy.ts. */
+const APP_NAME = "homesi";
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -35,10 +38,22 @@ export default function LoginPage() {
         return;
       }
 
-      // A freshly created user carries a temporary password and must replace it
-      // before reaching any module. The middleware enforces this too; sending
-      // them straight there just avoids a pointless redirect hop.
-      const mustChange = data.user?.user_metadata?.must_change_password === true;
+      // app_metadata, not user_metadata: only the service role can write it, so
+      // the flag cannot be cleared from the browser to skip the change. The
+      // other apps in this shared project keep it in user_metadata; Homesí
+      // deliberately does not, and scripts/migrate-password-flag.mjs copies the
+      // existing users' flag across.
+      //
+      // Someone without access to this app is sent to /no-access rather than a
+      // module they cannot open — the gate would bounce them anyway.
+      const app = data.user?.app_metadata ?? {};
+      if (!Array.isArray(app.allowed_apps) || !app.allowed_apps.includes(APP_NAME)) {
+        router.replace("/no-access");
+        router.refresh();
+        return;
+      }
+
+      const mustChange = app.must_change_password === true;
       router.replace(mustChange ? "/change-password" : DEFAULT_LANDING);
       router.refresh();
     } catch (err) {
