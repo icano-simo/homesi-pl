@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Sidebar } from "@/components/sidebar";
-import { BranchFilterProvider } from "@/components/branch-filter-provider";
+import { AppShell } from "@/components/app-shell";
 
 export const metadata: Metadata = {
   title: "Homesí P&L",
@@ -15,11 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
+      {/* Login renders its own full-page canvas, so the shell decides both the
+          chrome and the background rather than the body forcing gray. */}
       <body className="h-screen overflow-hidden bg-gray-100">
-        <BranchFilterProvider>
-          <Sidebar />
-          <main style={{ marginLeft: "68px" }} className="h-screen overflow-y-auto p-6">{children}</main>
-        </BranchFilterProvider>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

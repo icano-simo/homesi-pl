@@ -3,6 +3,7 @@ import { parseLoanCount } from "@/lib/parse-loan-count";
 import { runLoanNumberCompletion } from "@/lib/loan-number-completion";
 import { createServerClient } from "@/lib/supabase-server";
 import type { UploadLoanCountResponse } from "@/types";
+import { requireSession } from "@/lib/auth";
 
 type ExistingRow = Record<string, unknown> & {
   id: string;
@@ -11,6 +12,9 @@ type ExistingRow = Record<string, unknown> & {
 };
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
 
   try {

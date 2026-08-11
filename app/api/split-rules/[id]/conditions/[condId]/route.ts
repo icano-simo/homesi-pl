@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 type Ctx = { params: Promise<{ id: string; condId: string }> };
 
 export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { condId } = await params;
   const supabase = createServerClient();
 
@@ -17,6 +21,9 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
 }
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { condId } = await params;
   const supabase = createServerClient();
 

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { extractLoanNumber } from "@/lib/normalize-pl";
 import { runLoanNumberCompletion, type CompletionStats } from "@/lib/loan-number-completion";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,9 @@ export interface ReextractResult {
  * runLoanNumberCompletion resolves them to final loan_number values.
  */
 export async function POST(): Promise<NextResponse> {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
 
   // 1. Fetch all transactions with null loan_number_raw but non-null check_description

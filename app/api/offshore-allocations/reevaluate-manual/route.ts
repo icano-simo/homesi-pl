@@ -8,6 +8,7 @@ import {
 } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,9 @@ export async function GET() {
 
 // POST — re-evaluate those transactions against current rules, bypassing the manual-skip guard
 export async function POST() {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
 
   // Load rules and loan officials in parallel

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -7,6 +8,9 @@ const BOOLEAN_FIELDS = new Set(["b2b", "processing", "support_on_demand", "affin
 const TEXT_FIELDS = new Set(["lead_source_lo", "bd_owner"]);
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
 

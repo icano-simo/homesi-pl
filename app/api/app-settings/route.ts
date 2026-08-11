@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,9 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const body = await req.json().catch(() => ({}));
   const active_branches: string[] = Array.isArray(body.active_branches) ? body.active_branches : [];
   const supabase = createServerClient();

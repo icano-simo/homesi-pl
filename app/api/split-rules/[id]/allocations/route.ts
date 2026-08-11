@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { loadAllSplitRules, reevaluateRuleAssigned } from "@/lib/reevaluate-rule-assigned";
+import { requireSession } from "@/lib/auth";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 // PUT /api/split-rules/[id]/allocations — replaces all allocations for a rule
 export async function PUT(req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id: split_rule_id } = await params;
   const supabase = createServerClient();
 

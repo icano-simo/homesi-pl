@@ -7,6 +7,7 @@ import {
   txMonthPeriod,
   type SplitVersionRow,
 } from "@/lib/split-version-utils";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -163,6 +164,9 @@ export async function GET(req: NextRequest) {
  * Propagates only to transactions whose applicable version matches this version's period.
  */
 export async function PUT(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const body = await req.json() as {
     assign_type: "vendor" | "description3";
     assign_value: string;
@@ -329,6 +333,9 @@ export async function PUT(req: NextRequest) {
  *    Manual exceptions are never touched.
  */
 export async function DELETE(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { searchParams } = new URL(req.url);
   const assign_type  = searchParams.get("type") as "vendor" | "description3" | null;
   const rawValue     = searchParams.get("value");

@@ -4,6 +4,7 @@ import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
 import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
+import { requireSession } from "@/lib/auth";
 
 type TxRow = {
   id: string;
@@ -30,6 +31,9 @@ const FETCH_BATCH = 1000;
 const UPDATE_PARALLEL = 100;
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const body = await req.json().catch(() => ({}));
   let branches: string[] = Array.isArray(body?.branches) ? body.branches : [];
 

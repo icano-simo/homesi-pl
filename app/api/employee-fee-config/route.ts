@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,9 @@ export async function GET() {
 // Upserts a single config row by check_description_3.
 // Body: { check_description_3: string; not_recoverable: boolean; fee_amount: number | null }
 export async function PATCH(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
   const body = await req.json() as {
     check_description_3: string;

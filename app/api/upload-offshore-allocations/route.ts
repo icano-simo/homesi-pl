@@ -18,12 +18,16 @@ import type {
   GLMapping,
   Branch,
 } from "@/types";
+import { requireSession } from "@/lib/auth";
 
 function apiError(message: string, status = 500): NextResponse<ApiError> {
   return NextResponse.json({ error: message }, { status });
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
   let uploadId: string | null = null;
 

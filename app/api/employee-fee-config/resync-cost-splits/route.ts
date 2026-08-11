@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { resyncEmployeeSplits } from "@/lib/resync-employee-splits";
+import { requireSession } from "@/lib/auth";
 
 export async function POST() {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
   try {
     const result = await resyncEmployeeSplits(supabase);

@@ -4,6 +4,7 @@ import {
   loadAllSplitRules,
   reevaluateRuleAssigned,
 } from "@/lib/reevaluate-rule-assigned";
+import { requireSession } from "@/lib/auth";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -17,6 +18,9 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 }
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id } = await params;
   const supabase = createServerClient();
 
@@ -84,6 +88,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 }
 
 export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id } = await params;
   const supabase = createServerClient();
 

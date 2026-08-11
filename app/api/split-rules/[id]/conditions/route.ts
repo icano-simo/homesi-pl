@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { requireSession } from "@/lib/auth";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function POST(req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id: split_rule_id } = await params;
   const supabase = createServerClient();
 
@@ -35,6 +39,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
 // PUT — replace all conditions for this rule
 export async function PUT(req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id: split_rule_id } = await params;
   const supabase = createServerClient();
 

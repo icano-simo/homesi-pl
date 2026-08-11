@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { loadAllSplitRules } from "@/lib/reevaluate-rule-assigned";
 import type { SplitRuleCondition, SplitRuleAllocation } from "@/types";
+import { requireSession } from "@/lib/auth";
 
 export async function GET() {
   const supabase = createServerClient();
@@ -10,6 +11,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const supabase = createServerClient();
 
   const body = await req.json().catch(() => ({}));

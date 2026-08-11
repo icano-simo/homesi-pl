@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { loadAllSplitRules, reevaluateRuleAssigned } from "@/lib/reevaluate-rule-assigned";
+import { requireSession } from "@/lib/auth";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -57,6 +58,9 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
  * they must be reopened manually.
  */
 export async function POST(_req: NextRequest, { params }: Ctx) {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   const { id } = await params;
   const supabase = createServerClient();
 
