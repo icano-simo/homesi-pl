@@ -8,6 +8,7 @@ import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
 import { generateEmployeeFeeLines } from "@/lib/generate-employee-fee-lines";
+import { relinkOrphanNotes } from "@/lib/relink-orphan-notes";
 import { applyOASplits } from "@/lib/apply-oa-splits";
 import { resyncEmployeeSplits } from "@/lib/resync-employee-splits";
 import type {
@@ -218,6 +219,13 @@ export async function POST(req: NextRequest) {
     // ── 7e. Sync employee cost splits for unassigned GL 90002 lines (Button 2 auto)
     await resyncEmployeeSplits(supabase);
 
+    // ── 7f. Reattach notes orphaned by a replaced upload ──────────────────
+    // Last of the post-insert steps on purpose: 7c inserts fee-line
+    // transactions a note could legitimately match, and 7d/7e rewrite cost
+    // center assignments. Running afterwards means the sweep sees the final
+    // state of the upload rather than an intermediate one.
+    const relinkSummary = await relinkOrphanNotes(supabase, id);
+
     // ── 8. Mark completed ─────────────────────────────────────────────────
     await supabase
       .from("pl_uploads")
@@ -232,6 +240,7 @@ export async function POST(req: NextRequest) {
       parseWarnings: warnings.length,
     };
     if (manualSummary) response.manualAssignments = manualSummary;
+    if (relinkSummary.notesConsidered > 0) response.orphanNotes = relinkSummary;
     if (feeSummary.transactions_inserted > 0) {
       response.employeeFeeLines = {
         employees:    feeSummary.employees_processed,

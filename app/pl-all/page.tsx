@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download } from "lucide-react";
+import { Download, ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
+import { NotesLog } from "@/components/notes-log";
 import { PivotTableDynamic } from "@/components/pivot-table-dynamic";
 import { ReportFilter } from "@/components/report-filter";
 import { LoanMetricsByMonthBar } from "@/components/loan-metrics-by-month";
 import { buildSplitsMap, fanOutBySplits } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
-import type { PLReportTx, PLReportTxCC, FilterOptionsResponse } from "@/types";
+import type { CostCenter, PLReportTx, PLReportTxCC, FilterOptionsResponse } from "@/types";
 import type { SplitEntry } from "@/lib/apply-splits";
 
 const MONTH_ORDER = [
@@ -44,9 +45,9 @@ function srcLabel(s: string) { return SOURCE_LABELS[s] ?? s; }
 
 function FilterChip({ label, value }: { label: string; value: string }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-100 px-2 py-0.5 text-[11px]">
-      <span className="text-blue-400 font-normal">{label}:</span>
-      <span className="font-medium text-blue-700">{value}</span>
+    <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-900">
+      <span className="font-normal text-sky-500">{label}:</span>
+      {value}
     </span>
   );
 }
@@ -62,9 +63,13 @@ export default function PLAllPage() {
 
   const [glCodes, setGlCodes] = useState<string[]>([]);
   const [months,  setMonths]  = useState<string[]>([]);
+  // Cost Center filter — absorbed from the old Cost Center Report module.
+  const [costCenterNames, setCostCenterNames] = useState<string[]>([]);
+  const [logOpen, setLogOpen] = useState(true);
 
-  const [rawTxs,    setRawTxs]    = useState<PLReportTx[]>([]);
-  const [allSplits, setAllSplits] = useState<SplitEntry[]>([]);
+  const [rawTxs,      setRawTxs]      = useState<PLReportTx[]>([]);
+  const [allSplits,   setAllSplits]   = useState<SplitEntry[]>([]);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState("");
   const [loaded,  setLoaded]  = useState(false);
@@ -103,9 +108,11 @@ export default function PLAllPage() {
     Promise.all([
       fetch("/api/transactions/filter-options").then(r => r.json()),
       fetch("/api/cc-allocation-splits").then(r => r.json()),
-    ]).then(([filterOpts, splits]: [FilterOptionsResponse, SplitEntry[]]) => {
+      fetch("/api/cost-centers").then(r => r.json()),
+    ]).then(([filterOpts, splits, ccs]: [FilterOptionsResponse, SplitEntry[], CostCenter[]]) => {
       setOpts(filterOpts);
       setAllSplits(splits);
+      setCostCenters(ccs);
       const defaultYear = filterOpts.year.length > 0
         ? [filterOpts.year[filterOpts.year.length - 1]]
         : [];
@@ -140,15 +147,54 @@ export default function PLAllPage() {
 
   const splitsMap = useMemo(() => buildSplitsMap(allSplits), [allSplits]);
 
-  const txsForCC = useMemo((): PLReportTxCC[] => {
-    if (viewMode !== "cc") return [];
-    return fanOutBySplits(txs, splitsMap);
-  }, [txs, splitsMap, viewMode]);
+  const ccOptions = useMemo(
+    () => [...costCenters.map(c => c.name).sort(), "Unassigned", "Conflict"],
+    [costCenters]
+  );
+
+  /**
+   * The cost center whose note log is shown. Only when exactly one is selected
+   * — a log belongs to one entity, and with several picked there is no single
+   * history to display.
+   */
+  const logCostCenter = useMemo(() => {
+    if (costCenterNames.length !== 1) return null;
+    const name = costCenterNames[0];
+    if (name === "Unassigned") return { id: "__unassigned__", name };
+    if (name === "Conflict")   return { id: "__conflict__",   name };
+    const cc = costCenters.find(c => c.name === name);
+    return cc ? { id: cc.id, name: cc.name } : null;
+  }, [costCenterNames, costCenters]);
+
+  /**
+   * Cost Center filter, absorbed from the old Cost Center Report.
+   *
+   * Fans out by splits first so a transaction allocated only partly to the
+   * selected center contributes its prorated share rather than all-or-nothing,
+   * then keeps the rows belonging to the selection.
+   */
+  const ccFiltered = useMemo((): PLReportTxCC[] | null => {
+    if (costCenterNames.length === 0) return null;
+    const fanned = fanOutBySplits(txs, splitsMap);
+    return fanned.filter(tx =>
+      costCenterNames.some(name => {
+        if (name === "Unassigned") return !tx.cost_center_id || tx.cost_center_status === "unassigned";
+        if (name === "Conflict")   return tx.cost_center_status === "conflict";
+        const id = costCenters.find(c => c.name === name)?.id;
+        return !!id && tx.cost_center_id === id;
+      })
+    );
+  }, [txs, costCenterNames, splitsMap, costCenters]);
+
+  // Rows the pivot renders. When the CC filter pre-fans, splitsMap must not be
+  // handed to the table too or every split row would be fanned a second time.
+  const pivotTxs: PLReportTx[] = ccFiltered ?? txs;
+  const pivotSplitsMap = ccFiltered ? undefined : splitsMap;
 
   function handleExport() {
     const suffix = loadedYears.length === 1 ? `_${loadedYears[0]}` : "";
-    if (viewMode === "cc") {
-      const flat = txsForCC.map((tx) => ({
+    if (ccFiltered) {
+      const flat = ccFiltered.map((tx) => ({
         ...tx,
         cost_center_name: (tx.cost_centers as { name: string } | null)?.name ?? "",
       })) as Record<string, unknown>[];
@@ -166,14 +212,19 @@ export default function PLAllPage() {
     loadedChips.push({ label: "Branch", value: loadedBranches.length === 1 ? loadedBranches[0] : `${loadedBranches.length} branches` });
   if (loadedSources.length > 0)
     loadedChips.push({ label: "Source", value: loadedSources.map(srcLabel).join(", ") });
+  if (costCenterNames.length > 0)
+    loadedChips.push({ label: "Cost Center", value: costCenterNames.length === 1 ? costCenterNames[0] : `${costCenterNames.length} centers` });
 
   return (
-    <div className="flex flex-col gap-3">
+    // Canvas scoped to the page rather than <body> so modules that have not had
+    // their redesign pass keep their current background.
+    <div className="-m-6 min-h-screen bg-[#FCFCFA]">
+    <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-6 py-4">
       {/* Sticky filter bar */}
-      <div className="sticky top-0 z-30 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 shadow-sm">
+      <div className="sticky top-0 z-30 rounded-2xl border border-slate-200 bg-slate-50 p-3 shadow-xs">
         {/* Controls row */}
         <div className="flex flex-wrap items-center gap-2">
-          <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Filters</span>
+          <span className="mr-1 text-xs font-bold uppercase tracking-wider text-[#001A40]">Filters:</span>
 
           <ReportFilter label="Year"   options={(opts?.year ?? []).map(String)} selected={years}    onChange={setYears} />
           <ReportFilter label="Branch" options={opts?.branch ?? []}              selected={branches} onChange={setBranches} />
@@ -187,40 +238,19 @@ export default function PLAllPage() {
           <button
             onClick={load}
             disabled={loading}
-            className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+            className="rounded-full bg-[#FF4040] px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#e03535] disabled:opacity-40"
           >
             {loading ? "Loading…" : "Run Report"}
           </button>
 
           {loaded && (
             <>
-              <span className="text-gray-300">|</span>
-              <ReportFilter label="GL Code" options={glCodeOptions} selected={glCodes} onChange={setGlCodes} />
-              <ReportFilter label="Month"   options={monthOptions}  selected={months}  onChange={setMonths} />
+              <span className="text-slate-300">|</span>
+              <ReportFilter label="Cost Center" options={ccOptions}     selected={costCenterNames} onChange={setCostCenterNames} />
+              <ReportFilter label="GL Code"     options={glCodeOptions} selected={glCodes}         onChange={setGlCodes} />
+              <ReportFilter label="Month"       options={monthOptions}  selected={months}          onChange={setMonths} />
             </>
           )}
-
-          {/* View toggle */}
-          <div className="ml-auto flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-0.5">
-            <button
-              onClick={() => setViewMode("gl")}
-              className={[
-                "rounded-md px-3 py-1 text-xs font-medium transition-colors",
-                viewMode === "gl" ? "bg-blue-600 text-white shadow-sm" : "text-gray-500 hover:text-gray-700",
-              ].join(" ")}
-            >
-              P&amp;L by GL
-            </button>
-            <button
-              onClick={() => setViewMode("cc")}
-              className={[
-                "rounded-md px-3 py-1 text-xs font-medium transition-colors",
-                viewMode === "cc" ? "bg-blue-600 text-white shadow-sm" : "text-gray-500 hover:text-gray-700",
-              ].join(" ")}
-            >
-              P&amp;L by Cost Center
-            </button>
-          </div>
         </div>
 
         {/* Active filter chips — shown after successful load */}
@@ -237,15 +267,17 @@ export default function PLAllPage() {
       {/* Page title + export */}
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">P&amp;L All</h2>
-          <p className="text-sm text-gray-500">
-            {viewMode === "cc" ? "Vendor/OA allocations prorated by % — use Pivot by: to reorder levels" : "Use Pivot by: to reorder or add hierarchy levels"}
+          <h2 className="text-xl font-bold text-[#001A40]">P&amp;L All</h2>
+          <p className="mt-0.5 text-sm text-slate-500">
+            {ccFiltered
+              ? "Filtered by Cost Center — vendor/OA allocations prorated by %. Use Pivot by: to reorder levels."
+              : "Use Pivot by: to reorder or add hierarchy levels."}
           </p>
         </div>
         {loaded && (
           <button
             onClick={handleExport}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 shadow-sm"
+            className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-xs hover:border-[#001A40]"
           >
             <Download size={13} /> Export CSV
           </button>
@@ -264,36 +296,63 @@ export default function PLAllPage() {
         />
       )}
 
+      {/* Per-cost-center note log. Collapsible and directly under the filters,
+          because it belongs to the current filter selection rather than to any
+          row of the table below. */}
+      {logCostCenter && (
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <button
+            onClick={() => setLogOpen(o => !o)}
+            className="flex w-full items-center gap-2 px-4 py-2.5 text-left"
+          >
+            {logOpen
+              ? <ChevronDown  size={14} className="shrink-0 text-slate-400" />
+              : <ChevronRight size={14} className="shrink-0 text-slate-400" />}
+            <MessageSquare size={13} className="shrink-0 text-slate-400" />
+            <span className="text-xs font-bold uppercase tracking-wider text-[#001A40]">
+              Cost Center Notes Log
+            </span>
+            <span className="truncate text-xs text-slate-500">— {logCostCenter.name}</span>
+          </button>
+          {logOpen && (
+            <div className="border-t border-slate-200 px-4 py-3">
+              <NotesLog
+                level="cost_center"
+                scope={{ cost_center_id: logCostCenter.id }}
+                entityLabel={logCostCenter.name}
+                emptyMessage="No notes for this cost center yet."
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {error && (
-        <p className="rounded-lg border border-red-100 bg-red-50 px-4 py-2 text-sm text-red-600">{error}</p>
+        <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-600">{error}</p>
       )}
 
       {!loaded && !loading && (
-        <p className="py-10 text-center text-sm text-gray-400">
+        <p className="py-10 text-center text-sm text-slate-400">
           Select filters and click Run Report to generate the report.
         </p>
       )}
 
-      {(loaded || loading) && viewMode === "gl" && (
+      {/* One pivot for both cases. The old "P&L by GL" / "P&L by Cost Center"
+          toggle only swapped the default hierarchy, and Cost Center is now
+          reachable both as a filter and as a level in "Pivot by:" — so the
+          toggle no longer selected anything the user cannot pick directly. */}
+      {(loaded || loading) && (
         <PivotTableDynamic
-          txs={txs}
-          splitsMap={splitsMap}
+          txs={pivotTxs}
+          splitsMap={pivotSplitsMap}
           defaultLevels={["op_nonop", "category_2", "category_6", "category_7", "gl"]}
           storageKey="pl_all_gl_hierarchy"
+          homesiTheme
           loading={loading}
           emptyMessage="No transactions found for the selected filters."
         />
       )}
-
-      {(loaded || loading) && viewMode === "cc" && (
-        <PivotTableDynamic
-          txs={txsForCC}
-          defaultLevels={["op_nonop", "category_6", "cost_center", "gl", "description"]}
-          storageKey="pl_all_cc_hierarchy"
-          loading={loading}
-          emptyMessage="No transactions found for the selected filters."
-        />
-      )}
+    </div>
     </div>
   );
 }
