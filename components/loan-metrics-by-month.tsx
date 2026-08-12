@@ -53,7 +53,8 @@ export function LoanMetricsByMonthBar({ years, branches, sources, costCenterIds 
   }, [key]);
 
   if (loading) {
-    return <div className="h-[80px] rounded-xl border border-gray-100 bg-gray-50 animate-pulse" />;
+    // Matches the height of the loaded card so the page does not jump.
+    return <div className="mb-6 h-[150px] animate-pulse rounded-2xl border border-slate-200/80 bg-slate-50" />;
   }
 
   if (fetchErr) {
@@ -71,16 +72,22 @@ export function LoanMetricsByMonthBar({ years, branches, sources, costCenterIds 
   if (months.length === 0) return null;
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+    <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs">
+      <div className="mb-3 text-xs font-bold uppercase tracking-wider text-[#001A40]">
         Loan Count by Month
       </div>
-      <div className="overflow-x-auto">
-        <div className="flex gap-2 min-w-max pb-0.5">
-          {months.map((month) => (
-            <MonthCard key={month} month={month} m={byMonth![month]} />
-          ))}
-        </div>
+      {/* Six columns, so a full half-year fills the width and a full year wraps
+          into two even rows. Written as a template rather than a grid-cols-6
+          class because the month list is whatever the data holds: with four
+          months, a fixed six-column grid would leave two empty tracks and make
+          the cards narrower than the strip it replaced. */}
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: `repeat(${Math.min(months.length, 6)}, minmax(0, 1fr))` }}
+      >
+        {months.map((month) => (
+          <MonthCard key={month} month={month} m={byMonth![month]} />
+        ))}
       </div>
     </div>
   );
@@ -90,29 +97,34 @@ function MonthCard({ month, m }: { month: string; m: MonthMetrics }) {
   const hasTags = m.b2b + m.processing + m.support_on_demand + m.affinity + m.recruitment > 0;
 
   return (
-    <div className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2 min-w-[100px]">
-      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">
+    <div className="flex flex-col justify-between rounded-xl border border-slate-200/60 bg-slate-50/60 p-3 transition-all hover:border-[#A6DEFF] hover:bg-white hover:shadow-xs">
+      <div className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">
         {MONTH_SHORT[month] ?? month}
       </div>
-      <div className="flex items-baseline gap-1.5">
-        <span className="text-sm font-bold text-gray-900 tabular-nums">{m.total}</span>
-        <span className="text-[10px] text-gray-400">total</span>
+
+      {/* Hero metric. The count is the number anyone reads first, so it gets the
+          size and the label shrinks beside it rather than sitting above it. */}
+      <div className="flex items-baseline">
+        <span className="text-2xl font-bold tabular-nums text-[#001A40]">{m.total}</span>
+        <span className="ml-1.5 text-xs font-medium text-slate-500">total</span>
       </div>
-      <div className="flex gap-1 mt-0.5 text-[11px]">
-        <span className="font-medium text-blue-700 tabular-nums">{m.banked}</span>
-        <span className="text-gray-300 text-[9px]">B</span>
-        <span className="text-gray-200">·</span>
-        <span className="font-medium text-indigo-700 tabular-nums">{m.brokered}</span>
-        <span className="text-gray-300 text-[9px]">Br</span>
+
+      {/* Banked / brokered as one plain line: two numbers competing with the
+          hero for attention was most of what made the old card feel crowded. */}
+      <div className="mb-2 text-[11px] font-semibold text-slate-600">
+        <span className="tabular-nums">{m.banked}</span> B
+        <span className="mx-1 text-slate-300">·</span>
+        <span className="tabular-nums">{m.brokered}</span> Br
         {m.other > 0 && (
           <>
-            <span className="text-gray-200">·</span>
-            <span className="font-medium text-orange-600 tabular-nums">{m.other}</span>
+            <span className="mx-1 text-slate-300">·</span>
+            <span className="tabular-nums">{m.other}</span> Other
           </>
         )}
       </div>
+
       {hasTags && (
-        <div className="flex flex-wrap gap-0.5 mt-1">
+        <div className="mt-1 flex flex-wrap gap-1">
           {m.b2b > 0               && <MiniTag label="B2B"  v={m.b2b} />}
           {m.processing > 0        && <MiniTag label="Proc" v={m.processing} />}
           {m.support_on_demand > 0 && <MiniTag label="OD"   v={m.support_on_demand} />}
@@ -126,9 +138,9 @@ function MonthCard({ month, m }: { month: string; m: MonthMetrics }) {
 
 function MiniTag({ label, v }: { label: string; v: number }) {
   return (
-    <span className="inline-flex items-center gap-0.5 rounded bg-indigo-50 px-1 text-[9px] text-indigo-600">
-      <span className="font-semibold tabular-nums">{v}</span>
-      <span className="text-indigo-400">{label}</span>
+    <span className="inline-flex items-center gap-1 rounded-full border border-[#A6DEFF]/40 bg-[#A6DEFF]/25 px-2 py-0.5 text-[10px] font-bold text-[#001A40]">
+      <span className="tabular-nums">{v}</span>
+      {label}
     </span>
   );
 }
