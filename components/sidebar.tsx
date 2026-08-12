@@ -199,16 +199,28 @@ export function Sidebar() {
       <div className="relative h-[70px] shrink-0 border-b border-slate-200/80 overflow-hidden">
         {/* Expanded — full branding */}
         <div
-          className={`absolute inset-0 flex flex-col justify-center px-5 transition-opacity duration-200 ${
+          className={`absolute inset-0 flex items-center gap-3 px-5 transition-opacity duration-200 ${
             expanded ? "opacity-100" : "opacity-0 pointer-events-none"
           }`}
         >
-          <p className="text-xs font-semibold uppercase tracking-widest text-[#FF4040] whitespace-nowrap">
-            Supreme Lending
-          </p>
-          <h1 className="mt-0.5 text-lg font-bold text-[#001A40] whitespace-nowrap">
-            Homesí P&amp;L
-          </h1>
+          {/* Same asset and same unoptimized rendering as the collapsed rail,
+              so the mark does not change shape as the panel opens. */}
+          <Image
+            src="/HOMESI_Icon_Home_Red.svg"
+            alt=""
+            width={32}
+            height={32}
+            unoptimized
+            className="h-8 w-8 shrink-0 rounded-full"
+          />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-widest text-[#FF4040] whitespace-nowrap">
+              Supreme Lending
+            </p>
+            <h1 className="mt-0.5 text-lg font-bold text-[#001A40] whitespace-nowrap">
+              Homesí P&amp;L
+            </h1>
+          </div>
         </div>
         {/* Collapsed — "H" monogram */}
         <div
