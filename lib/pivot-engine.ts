@@ -243,11 +243,47 @@ function sortNodes(nodes: PivotNode[]): PivotNode[] {
 
 // ─── Public engine ────────────────────────────────────────────────────────────
 
+/** Does any of these transactions carry a Description 3? */
+function anyDesc3(txs: readonly ExpandedTx[]): boolean {
+  return txs.some((t) => (t.check_description_3 ?? "").trim() !== "");
+}
+
+/**
+ * Drops levels that would insert a node without telling the reader anything.
+ *
+ * Only check_desc_3 qualifies, and only for the transactions actually under the
+ * node being built. Description 3 exists solely on Offshore Allocations rows —
+ * 792 of 27,365 measured on 2026-08-12 — so everywhere else the level collapses
+ * into a single group labelled "—" (see getGroup) that has to be expanded to
+ * reach the transactions beneath it. That extra click is why transaction-level
+ * notes were effectively unreachable: a user drilling down stops at
+ * `description`, which already looks like an individual line, rather than
+ * expanding a dash to find the real leaf rows.
+ *
+ * The decision is per node, not per report. A branch whose rows carry a
+ * Description 3 keeps the level and its grouping; a sibling branch without one
+ * hangs its transactions directly off the level above. Both can appear in the
+ * same report.
+ *
+ * Skipping a level never changes the scope of the levels above it — a node's
+ * scope is built from its own ancestors — so notes anchored higher up keep
+ * their scope_key.
+ */
+function effectiveLevels(levels: PivotField[], txs: readonly ExpandedTx[]): PivotField[] {
+  let out = levels;
+  while (out.length > 0 && out[0] === "check_desc_3" && !anyDesc3(txs)) {
+    out = out.slice(1);
+  }
+  return out;
+}
+
 export function buildDynamicPivot(
   txs: ExpandedTx[],
-  levels: PivotField[],
+  requestedLevels: PivotField[],
   parentScope: NodeScope = {},
 ): PivotNode[] {
+  const levels = effectiveLevels(requestedLevels, txs);
+
   if (levels.length === 0) {
     return [{
       key: "__flat__",
@@ -294,6 +330,11 @@ export function buildDynamicPivot(
   for (const slot of slotMap.values()) {
     const { byMonth, total } = computeTotals(slot.txs);
     const scope: NodeScope = { ...parentScope, [field]: slot.scopeValue };
+    // Resolved per slot, so the node knows whether its own rows still need a
+    // deeper level or should carry the transactions themselves. Without this the
+    // skipped level would come back as a nested "__flat__" child, which the
+    // renderer draws flush left instead of indented under its parent.
+    const childLevels = effectiveLevels(rest, slot.txs);
     nodes.push({
       key:      slot.key,
       label:    slot.label,
@@ -302,8 +343,8 @@ export function buildDynamicPivot(
       scope,
       byMonth,
       total,
-      children: rest.length > 0 ? buildDynamicPivot(slot.txs, rest, scope) : [],
-      txLeaves: rest.length === 0 ? slot.txs.map(toLeaf) : [],
+      children: childLevels.length > 0 ? buildDynamicPivot(slot.txs, childLevels, scope) : [],
+      txLeaves: childLevels.length === 0 ? slot.txs.map(toLeaf) : [],
     });
   }
 
