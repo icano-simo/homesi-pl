@@ -50,10 +50,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ duplicate: true, info: dupeResult.info }, { status: 409 });
       }
     }
-    // ── 3b. Snapshot manual assignments before deleting the old upload ────
-    const manualSnapshot = replaceId
-      ? await snapshotManualAssignments(supabase, replaceId)
-      : [];
+    // ── 3b. Persist the manual assignments BEFORE anything is deleted ─────
+    // The await is the invariant: snapshotManualAssignments writes the backup
+    // rows and reads them back, throwing if the count does not match, so
+    // control only reaches the delete once the backup is confirmed on disk.
+    if (replaceId) await snapshotManualAssignments(supabase, replaceId);
+
     if (replaceId) await deleteUpload(supabase, replaceId);
 
     // ── 4. Create upload record ───────────────────────────────────────────
@@ -144,8 +146,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 7b. Re-apply manual snapshot after rule assignment ────────────────
+    // Reads the pending backup rows from the table rather than an in-memory
+    // array, so a run that died earlier can be resumed by uploading again.
     const manualSummary = replaceId
-      ? await reapplyManualSnapshot(supabase, id, manualSnapshot)
+      ? await reapplyManualSnapshot(supabase, id, replaceId)
       : null;
 
     // ── 8. Mark completed ─────────────────────────────────────────────────

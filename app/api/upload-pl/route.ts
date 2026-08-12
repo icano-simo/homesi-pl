@@ -50,10 +50,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── 3b. Snapshot manual assignments before deleting the old upload ────
-    const manualSnapshot = replaceId
-      ? await snapshotManualAssignments(supabase, replaceId)
-      : [];
+    // ── 3b. Persist the manual assignments BEFORE anything is deleted ─────
+    // The await is the invariant: snapshotManualAssignments writes the backup
+    // rows and reads them back, and throws if the count does not match, so
+    // control only reaches the delete below once the backup is confirmed on
+    // disk. If it throws, nothing has been deleted yet and the upload aborts
+    // with the old data intact.
+    if (replaceId) await snapshotManualAssignments(supabase, replaceId);
 
     // ── 4. Delete replaced upload if requested ────────────────────────────
     if (replaceId) await deleteUpload(supabase, replaceId);
@@ -146,8 +149,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 7b. Re-apply manual snapshot after rule assignment ────────────────
+    // Reads the pending backup rows from the table rather than an in-memory
+    // array, so a run that died earlier can be resumed by uploading again.
     const manualSummary = replaceId
-      ? await reapplyManualSnapshot(supabase, id, manualSnapshot)
+      ? await reapplyManualSnapshot(supabase, id, replaceId)
       : null;
 
     // ── 8. Mark upload as completed ───────────────────────────────────────
