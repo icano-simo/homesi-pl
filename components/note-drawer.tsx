@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { X, MessageSquarePlus, Trash2, CornerDownRight } from "lucide-react";
+import { FIELD_LABELS } from "@/lib/pivot-engine";
 import {
   SCOPE_LABELS,
   canonicalScopeKey,
@@ -42,6 +43,18 @@ interface Props {
 const fmt = (v: number) =>
   v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/**
+ * Display names for the anchor levels, reusing the pivot's own labels so the
+ * badge always matches the hierarchy header the user just drilled through.
+ * "transaction" and "grand_total" are note levels rather than pivot fields, so
+ * they are named here.
+ */
+const LEVEL_LABELS: Record<string, string> = {
+  ...FIELD_LABELS,
+  transaction: "Transaction",
+  grand_total: "Grand Total",
+};
+
 function timeAgo(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -63,6 +76,10 @@ export function NoteDrawer({ cell, notes, onClose, onChanged, labelFor, scopeOrd
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [cell, onClose]);
+
+  // Human-readable name of the anchor level, for the badge in the header.
+  const isTransaction = cell?.level === "transaction";
+  const levelLabel = cell ? LEVEL_LABELS[cell.level] ?? cell.level : "";
 
   const { direct, rolledUp } = useMemo(
     () => (cell ? notesForCell(notes, cell.scope) : { direct: [], rolledUp: [] }),
@@ -125,12 +142,37 @@ export function NoteDrawer({ cell, notes, onClose, onChanged, labelFor, scopeOrd
       <aside
         role="dialog"
         aria-label="Cell notes"
-        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-[420px] flex-col border-l border-slate-200 bg-white shadow-2xl"
+        className="fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-[460px] flex-col border-l border-slate-200 bg-white shadow-2xl"
       >
         {/* Header */}
         <div className="border-b border-slate-200 px-5 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
+              {/* What the note will be anchored to, stated before it is written.
+                  Two rows of this report can look identical — a Description
+                  group with one line under it renders the same text as the
+                  transaction beneath it — so without this the user cannot tell
+                  which of the two they clicked, and every note landed on
+                  'description' by accident. */}
+              <p className="mb-1.5 flex items-center gap-1.5">
+                <span
+                  className={
+                    isTransaction
+                      ? "rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-800"
+                      : "rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-600"
+                  }
+                >
+                  {levelLabel}
+                </span>
+                {isTransaction && cell.transactionId && (
+                  <span
+                    title={cell.transactionId}
+                    className="font-mono text-[10px] text-slate-400"
+                  >
+                    {cell.transactionId.slice(0, 8)}
+                  </span>
+                )}
+              </p>
               <p className="flex flex-wrap items-center gap-1 text-[11px] font-medium text-slate-500">
                 {cell.breadcrumb.map((part, i) => (
                   <span key={`${part}-${i}`} className="inline-flex items-center gap-1">

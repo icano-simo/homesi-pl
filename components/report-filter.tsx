@@ -38,10 +38,12 @@ export function ReportFilter({ label, options, selected, onChange }: ReportFilte
         type="button"
         onClick={() => setOpen(o => !o)}
         className={[
-          "flex items-center gap-1 rounded-lg border px-3 py-1.5 text-sm whitespace-nowrap transition-colors",
+          "flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium whitespace-nowrap transition-colors",
+          // Soft sky when a filter is applied, so an active constraint on the
+          // figures is visible at a glance rather than only on inspection.
           active
-            ? "border-blue-400 bg-blue-50 text-blue-700"
-            : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50",
+            ? "border-sky-200 bg-sky-50 text-sky-900"
+            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50",
         ].join(" ")}
       >
         <span>{active ? `${label} (${selected.length})` : label}</span>

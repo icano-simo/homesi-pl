@@ -58,20 +58,37 @@ const HOMESI_DEPTH_STYLES = [
   { bg: "transparent",           text: "text-slate-500",  font: "",              border: "border-slate-200/50" },
 ] as const;
 
-const numCell = "px-2 py-1 text-right text-[11px] tabular-nums whitespace-nowrap";
+// Compact executive density: ~6px of vertical padding per data cell, so the
+// maximum number of rows fits on one screen.
+const numCell =
+  "px-3 py-1.5 text-right text-xs font-sans tabular-nums font-medium whitespace-nowrap";
+
+/** Light executive table header. Replaces the solid navy band, which spanned
+ *  the full width of a twelve-month report and competed with the figures. */
+const TH_LIGHT =
+  "bg-slate-100/90 px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-800";
+
+/** Vertical grid rule that keeps adjacent month columns distinct. */
+const colRule = "border-r border-slate-200/60";
 
 /**
  * Width of the hierarchy column, in px.
  *
- * Deliberately tight: every pixel here is one the month columns cannot use, and
- * the report is read horizontally — category, then across the months. Labels
- * that overflow are clipped with an ellipsis and carry the full text in a
- * `title`, so nothing is lost, it just costs a hover.
+ * A range rather than a single value: the column grows with the content up to
+ * the maximum, so short hierarchies stop wasting horizontal space and long
+ * descriptions get 140px more before the ellipsis than the old fixed 240 did.
+ * Every pixel here is one the month columns cannot use, which is why it is
+ * capped at all — the report is read horizontally, category then across months.
+ *
+ * Labels that still overflow are clipped and carry the full text in a `title`.
+ * That costs a hover, and it is a known limitation: there is no way to search
+ * the hierarchy, so a row can be hard to locate in a long report.
  */
-const FIRST_COL_W = 240;
+const FIRST_COL_MIN_W = 240;
+const FIRST_COL_MAX_W = 380;
 
 const firstColStyle: React.CSSProperties = {
-  width: FIRST_COL_W, minWidth: FIRST_COL_W, maxWidth: FIRST_COL_W,
+  minWidth: FIRST_COL_MIN_W, maxWidth: FIRST_COL_MAX_W,
   position: "sticky", left: 0,
 };
 
@@ -148,7 +165,11 @@ interface RenderCtx {
  * only known at build time — it is threaded explicitly instead.
  */
 function homesiRowBg(index: number): string {
-  return index % 2 === 0 ? "#ffffff" : "rgba(248,250,252,0.6)";
+  // even:bg-white / odd:bg-slate-50/50, written as an inline colour rather than
+  // a class because the sticky first and Total columns must repaint the exact
+  // same tone — a pinned cell that is even slightly transparent lets the
+  // scrolling month columns show through it.
+  return index % 2 === 0 ? "#ffffff" : "rgba(248,250,252,0.5)";
 }
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -170,14 +191,20 @@ function mvCls(v: number | undefined): string {
  * so badging every row would paint the whole table.
  */
 function homesiValueCls(v: number | undefined): string {
-  if (!v) return "text-slate-300";
-  return v < 0 ? "text-rose-700" : "text-slate-700";
+  // Muted zero state: "—" and 0.00 recede rather than competing with real
+  // figures for attention.
+  if (!v) return "text-slate-300 font-normal";
+  return v < 0 ? "text-rose-700" : "text-slate-800";
 }
 
 function homesiBadgeCls(v: number | undefined, isSubtotal: boolean): string {
-  return isSubtotal && v != null && v < 0
-    ? "bg-rose-50 px-2 py-0.5 rounded font-medium"
-    : "";
+  // Only subtotals and totals carry a badge. A P&L is mostly negative at detail
+  // level, so badging every row would paint the whole table and the badge would
+  // stop meaning anything.
+  if (!isSubtotal || v == null || v === 0) return "";
+  return v < 0
+    ? "text-rose-700 bg-rose-50/70 font-semibold px-2 py-0.5 rounded text-xs"
+    : "text-emerald-800 bg-emerald-50/80 font-bold px-2 py-0.5 rounded text-xs";
 }
 
 function mvClsLight(v: number | undefined): string {
@@ -239,7 +266,7 @@ function renderPivotNodes(
   const pl = depth * 16 + 8;
   // Sticky first column: opaque so month values cannot scroll underneath it.
   const stickyCol = homesi
-    ? "sticky left-0 z-10 border-r border-slate-200 shadow-xs"
+    ? "sticky left-0 z-20 border-r-2 border-slate-200 shadow-xs"
     : "";
   const rowHover = homesi
     ? "hover:bg-[#A6DEFF]/25 transition-colors cursor-pointer"
@@ -279,7 +306,7 @@ function renderPivotNodes(
             <td
               key={m}
               onClick={clickable ? (e) => { e.stopPropagation(); open(m, t.mvmt); } : undefined}
-              className={`${numCell} text-[10px] ${shown ? valueCls : homesi ? "text-slate-300" : "text-gray-200"} ${clickable ? "cursor-pointer" : ""}`}
+              className={`${numCell} ${homesi ? colRule : ""} ${shown ? valueCls : homesi ? "text-slate-300 font-normal" : "text-gray-200"} ${clickable ? "cursor-pointer" : ""}`}
             >
               {shown && (
                 <NoteCellContent
@@ -334,7 +361,7 @@ function renderPivotNodes(
             <td
               title={t.desc ?? t.vendor ?? undefined}
               style={{ ...firstColStyle, paddingLeft: 8, zIndex: 10, backgroundColor: rowBgFor(rows.length) }}
-              className={`pr-2 py-0.5 truncate whitespace-nowrap ${homesi ? `text-[11px] font-normal text-slate-500 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-500 group-hover:bg-slate-50"}`}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-500 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
@@ -400,7 +427,7 @@ function renderPivotNodes(
         <td
           title={node.label}
           style={{ ...firstColStyle, backgroundColor: effectiveBg, paddingLeft: pl, zIndex: 10, ...firstTdExtra }}
-          className={`pr-2 py-1 ${textClass} ${fontClass} whitespace-nowrap truncate ${homesi ? `text-xs ${stickyCol}` : "text-[11px]"}`}
+          className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${textClass} ${fontClass} ${homesi ? `text-xs ${stickyCol}` : "text-[11px]"}`}
         >
           <span className="inline-flex items-center gap-1">
             {canToggle
@@ -418,7 +445,7 @@ function renderPivotNodes(
             <td
               key={m}
               onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(m, v ?? 0); } : undefined}
-              className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+              className={`${numCell} ${homesi ? colRule : ""} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${ctx.notesOn ? "cursor-pointer" : ""}`}
             >
               <NoteCellContent
                 text={fmtM(v)}
@@ -470,7 +497,7 @@ function renderPivotNodes(
             <td
               title={t.desc ?? t.vendor ?? undefined}
               style={{ ...firstColStyle, paddingLeft: leafPl, zIndex: 10, backgroundColor: rowBgFor(rows.length) }}
-              className={`pr-2 py-0.5 truncate whitespace-nowrap ${homesi ? `text-[11px] font-normal text-slate-500 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-400 group-hover:bg-slate-50"}`}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-400 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
@@ -911,34 +938,34 @@ export function PivotTableDynamic({
         style={{ maxHeight: "calc(100vh - 240px)" }}
       >
         <table className="w-full border-collapse">
-          <thead className={`sticky top-0 z-20 ${homesiTheme ? "bg-[#001A40]" : "bg-gray-50"}`}>
-            <tr className={`border-b ${homesiTheme ? "border-[#001A40]" : "border-gray-200"}`}>
+          <thead className={`sticky top-0 z-20 ${homesiTheme ? "bg-slate-100/90" : "bg-gray-50"}`}>
+            <tr className={`${homesiTheme ? "border-b-2 border-slate-200" : "border-b border-gray-200"}`}>
               <th
                 title={levelHeader}
                 style={{ ...firstColStyle, zIndex: 30 }}
-                className={`px-3 text-left ${homesiTheme ? "bg-[#001A40] py-3 text-xs font-semibold tracking-wider text-white" : "bg-gray-50 py-1.5 text-[10px] font-semibold text-gray-500"}`}
+                className={`text-left ${homesiTheme ? `${TH_LIGHT} border-r-2 border-slate-200` : "bg-gray-50 px-3 py-1.5 text-[10px] font-semibold text-gray-500"}`}
               >
                 <span className="inline-flex items-center gap-1.5">
                   {levelHeader}
                   <button
                     onClick={() => setDescSort(d => d === null ? "asc" : d === "asc" ? "desc" : null)}
                     title={descSort === null ? "Sort descriptions A→Z" : descSort === "asc" ? "Sort descriptions Z→A" : "Clear description sort"}
-                    className="rounded p-0.5 text-gray-400 hover:bg-gray-200 hover:text-blue-600"
+                    className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-[#001A40]"
                   >
-                    {descSort === "asc"  ? <ArrowUpAZ   size={11} className="text-blue-500" /> :
-                     descSort === "desc" ? <ArrowDownAZ size={11} className="text-blue-500" /> :
+                    {descSort === "asc"  ? <ArrowUpAZ   size={11} className="text-[#001A40]" /> :
+                     descSort === "desc" ? <ArrowDownAZ size={11} className="text-[#001A40]" /> :
                                            <ChevronsUpDown size={11} />}
                   </button>
                 </span>
               </th>
               {months.map(m => (
-                <th key={m} className={`px-2 text-right whitespace-nowrap ${homesiTheme ? "bg-[#001A40] py-3 text-xs font-semibold tracking-wider text-white" : "bg-gray-50 py-1.5 text-[10px] font-semibold text-gray-500"}`}>
+                <th key={m} className={`text-right whitespace-nowrap ${homesiTheme ? `${TH_LIGHT} ${colRule}` : "bg-gray-50 px-2 py-1.5 text-[10px] font-semibold text-gray-500"}`}>
                   {m.slice(0, 3)}
                 </th>
               ))}
               <th
                 style={{ ...totalColStyle, zIndex: 25 }}
-                className={`border-l px-2 text-right whitespace-nowrap ${homesiTheme ? "border-white/15 bg-[#001A40] py-3 text-xs font-semibold tracking-wider text-white" : "border-gray-200 bg-gray-50 py-1.5 text-[10px] font-semibold text-gray-500"}`}
+                className={`border-l text-right whitespace-nowrap ${homesiTheme ? `border-slate-200 ${TH_LIGHT}` : "border-gray-200 bg-gray-50 px-2 py-1.5 text-[10px] font-semibold text-gray-500"}`}
               >
                 Total
               </th>

@@ -35,9 +35,9 @@ export function LogoutButton({ expanded }: { expanded: boolean }) {
       disabled={busy}
       title="Sign out"
       className={[
-        "flex w-full items-center rounded-md py-2 text-sm font-medium transition-colors duration-150",
+        "flex w-full items-center rounded-xl py-2 text-sm font-medium transition-colors duration-150",
         expanded ? "gap-3 px-3" : "justify-center px-0",
-        "text-slate-300 hover:bg-[#1e2d42] hover:text-white disabled:opacity-40",
+        "text-slate-500 hover:bg-slate-50 hover:text-[#FF4040] disabled:opacity-40",
       ].join(" ")}
     >
       <LogOut size={16} className="shrink-0" />

@@ -17,6 +17,9 @@ import { BranchFilterProvider } from "@/components/branch-filter-provider";
  */
 const BARE_ROUTES = ["/login", "/change-password", "/no-access"];
 
+/** Collapsed sidebar width. Single source for the main content offset. */
+const SIDEBAR_RAIL_W = 68;
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
@@ -27,8 +30,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <BranchFilterProvider>
       <Sidebar />
-      <main style={{ marginLeft: "68px" }} className="h-screen overflow-y-auto p-6">
-        {children}
+      {/* The sidebar is fixed and collapses to a rail, so the offset is its
+          collapsed width. The 1440px cap is applied to the content inside the
+          scroll container rather than to the container itself, or the reports —
+          which scroll horizontally through twelve months — would be clipped
+          instead of centred. */}
+      <main
+        style={{ marginLeft: SIDEBAR_RAIL_W }}
+        className="h-screen overflow-y-auto bg-[#FCFCFA]"
+      >
+        <div className="mx-auto max-w-[1440px] px-6 py-4">{children}</div>
       </main>
     </BranchFilterProvider>
   );

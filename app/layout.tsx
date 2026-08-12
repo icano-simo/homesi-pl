@@ -15,8 +15,9 @@ export default function RootLayout({
   return (
     <html lang="es">
       {/* Login renders its own full-page canvas, so the shell decides both the
-          chrome and the background rather than the body forcing gray. */}
-      <body className="h-screen overflow-hidden bg-gray-100">
+          chrome and the background rather than the body forcing a colour.
+          #FCFCFA is "New Day", the brand canvas. */}
+      <body className="h-screen overflow-hidden bg-[#FCFCFA]">
         <AppShell>{children}</AppShell>
       </body>
     </html>
