@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -215,7 +216,20 @@ export function Sidebar() {
             expanded ? "opacity-0 pointer-events-none" : "opacity-100"
           }`}
         >
-          <span className="text-xl font-bold text-[#001A40]">H</span>
+          {/* The asset is a filled circle, so it needs no plate behind it —
+              rounded-full only guards against a future square version showing
+              corners over the white panel. `unoptimized` serves the SVG as
+              authored: the image optimizer refuses SVG unless the whole app
+              opts in, and there is nothing to optimize in 1KB of vector. */}
+          <Image
+            src="/HOMESI_Icon_Home_Red.svg"
+            alt="Homesí"
+            width={40}
+            height={40}
+            unoptimized
+            priority
+            className="h-10 w-10 rounded-full bg-transparent"
+          />
         </div>
       </div>
 

@@ -207,6 +207,20 @@ function homesiBadgeCls(v: number | undefined, isSubtotal: boolean): string {
     : "text-emerald-800 bg-emerald-50/80 font-bold px-2 py-0.5 rounded text-xs";
 }
 
+/**
+ * Total Income banner values.
+ *
+ * A loss gets the pastel rose badge; everything else stays plain navy, set on
+ * the cell itself. Deliberately not the emerald badge used for other subtotals:
+ * this row is always present, so badging its ordinary state would make the
+ * badge mean "this row exists" rather than "look at this".
+ */
+function grandTotalBadge(v: number | undefined): string {
+  return v != null && v < 0
+    ? "text-rose-700 bg-rose-50/80 px-2 py-0.5 rounded"
+    : "";
+}
+
 function mvClsLight(v: number | undefined): string {
   if (!v) return "text-white/40";
   return v > 0 ? "text-emerald-300" : "text-red-300";
@@ -777,9 +791,16 @@ export function PivotTableDynamic({
     ? activeLevels.map(f => FIELD_LABELS[f]).join(" → ")
     : "All Transactions";
 
+  // Total Income banner.
+  //
+  // A solid colour, not bg-slate-100/90: the three cells of this row are sticky
+  // (first column, months, Total) and a translucent background lets the rows
+  // scrolling underneath show through the pinned edges. #f1f5f9 is slate-100 —
+  // the same tone the class resolves to over white, without the transparency.
   const gtStyle: React.CSSProperties = {
     position: "sticky", top: 30, zIndex: 14,
-    backgroundColor: homesiTheme ? "#001A40" : TOTAL_BG,
+    backgroundColor: homesiTheme ? "#f1f5f9" : TOTAL_BG,
+    borderBottom: homesiTheme ? "2px solid #cbd5e1" : undefined,
   };
 
   const rows: React.ReactNode[] = [];
@@ -789,7 +810,9 @@ export function PivotTableDynamic({
     <tr key="__grand__">
       <td
         style={{ ...gtStyle, ...firstColStyle, top: 30, zIndex: 22, paddingLeft: 12, backgroundColor: gtStyle.backgroundColor }}
-        className="pr-3 py-2 text-[11px] font-extrabold text-white whitespace-nowrap truncate"
+        className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 text-xs font-bold ${
+          homesiTheme ? "border-r-2 border-slate-300 text-[#001A40]" : "text-white"
+        }`}
       >
         Total Income
       </td>
@@ -807,20 +830,25 @@ export function PivotTableDynamic({
               transactions: [],
               level: "grand_total",
             }) : undefined}
-            className={`${numCell} font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])} ${enableNotes ? "cursor-pointer" : ""}`}
+            className={`${numCell} ${homesiTheme ? `${colRule} font-bold text-[#001A40]` : `font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])}`} ${enableNotes ? "cursor-pointer" : ""}`}
           >
             {enableNotes ? (
               <NoteCellContent
                 text={fmtM(grandByMonth[m])}
                 hasNote={noteIndex.any.has(key)}
                 isDirect={noteIndex.direct.has(key)}
+                badgeClass={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}
               />
-            ) : fmtM(grandByMonth[m])}
+            ) : (
+              <span className={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}>
+                {fmtM(grandByMonth[m])}
+              </span>
+            )}
           </td>
         );
       })}
       <td
-        style={{ ...gtStyle, ...totalColStyle, top: 30, zIndex: 21, borderLeft: "1px solid rgba(255,255,255,0.15)" }}
+        style={{ ...gtStyle, ...totalColStyle, top: 30, zIndex: 21, borderLeft: homesiTheme ? "1px solid #cbd5e1" : "1px solid rgba(255,255,255,0.15)" }}
         onClick={enableNotes ? () => setOpenCell({
           scope: baseScope,
           breadcrumb: ["Total Income"],
@@ -829,15 +857,20 @@ export function PivotTableDynamic({
           transactions: [],
           level: "grand_total",
         }) : undefined}
-        className={`${numCell} font-extrabold text-[12px] ${mvClsLight(grandTotal)} ${enableNotes ? "cursor-pointer" : ""}`}
+        className={`${numCell} ${homesiTheme ? "font-bold text-[#001A40]" : `font-extrabold text-[12px] ${mvClsLight(grandTotal)}`} ${enableNotes ? "cursor-pointer" : ""}`}
       >
         {enableNotes ? (
           <NoteCellContent
             text={fmtM(grandTotal)}
             hasNote={noteIndex.any.has(cellKey(baseScope, null))}
             isDirect={noteIndex.direct.has(cellKey(baseScope, null))}
+            badgeClass={homesiTheme ? grandTotalBadge(grandTotal) : ""}
           />
-        ) : fmtM(grandTotal)}
+        ) : (
+          <span className={homesiTheme ? grandTotalBadge(grandTotal) : ""}>
+            {fmtM(grandTotal)}
+          </span>
+        )}
       </td>
     </tr>
   );
