@@ -78,32 +78,79 @@ export async function checkDuplicateUpload(
 
 const DELETE_CHUNK = 500;
 
+const SELECT_PAGE = 1000;
+
 /**
  * Deletes an upload and all associated rows.
  * Cleans up related tables first to avoid orphaned rows:
  * conflict_snapshots → cc_allocation_splits (transaction) → pl_transactions → pl_uploads
+ *
+ * CALLER CONTRACT: everything worth keeping from this upload must already be
+ * backed up and confirmed on disk. See snapshotManualAssignments — these rows
+ * are the only copy of the manual assignments and there is no rollback here.
+ *
+ * Every delete is chunked. authenticator runs with statement_timeout = 8s, and
+ * uploads of 11,092 and 13,848 rows exist, so removing pl_transactions in one
+ * statement is a real failure mode rather than a theoretical one — and a
+ * timeout half-way through leaves the upload partly deleted, since none of this
+ * is in a transaction.
  */
 export async function deleteUpload(supabase: SupabaseClient, uploadId: string): Promise<void> {
-  // Fetch all transaction IDs so we can clean up linked rows
-  const { data: txRows } = await supabase
-    .from("pl_transactions")
-    .select("id")
-    .eq("upload_id", uploadId);
-
-  const txIds = (txRows ?? []).map((r: { id: string }) => r.id);
+  // Paginate the id fetch too: without a range this silently stops at the
+  // PostgREST 1000-row cap, and the children of every row past that would be
+  // left behind.
+  const txIds: string[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("pl_transactions")
+      .select("id")
+      .eq("upload_id", uploadId)
+      .order("id", { ascending: true })
+      .range(from, from + SELECT_PAGE - 1);
+    if (error) throw new Error(`deleteUpload fetch ids: ${error.message}`);
+    if (!data || data.length === 0) break;
+    txIds.push(...data.map((r: { id: string }) => r.id));
+    if (data.length < SELECT_PAGE) break;
+    from += SELECT_PAGE;
+  }
 
   if (txIds.length > 0) {
     for (let i = 0; i < txIds.length; i += DELETE_CHUNK) {
       const chunk = txIds.slice(i, i + DELETE_CHUNK);
-      await supabase.from("conflict_snapshots").delete().in("transaction_id", chunk);
-      await supabase
+
+      // Redundant for correctness — conflict_snapshots.transaction_id is
+      // ON DELETE CASCADE — but kept deliberately. It moves that cascade work
+      // out of the pl_transactions delete below, which is the statement at
+      // risk of the 8s timeout, and the loop has to exist anyway for
+      // cc_allocation_splits, whose assign_value is plain text with no foreign
+      // key and therefore no cascade of its own.
+      const { error: snapErr } = await supabase
+        .from("conflict_snapshots").delete().in("transaction_id", chunk);
+      if (snapErr) throw new Error(`deleteUpload conflict_snapshots: ${snapErr.message}`);
+
+      const { error: splitErr } = await supabase
         .from("cc_allocation_splits")
         .delete()
         .eq("assign_type", "transaction")
         .in("assign_value", chunk);
+      if (splitErr) throw new Error(`deleteUpload cc_allocation_splits: ${splitErr.message}`);
+    }
+
+    // Chunked by explicit id list rather than one statement over upload_id.
+    for (let i = 0; i < txIds.length; i += DELETE_CHUNK) {
+      const chunk = txIds.slice(i, i + DELETE_CHUNK);
+      const { error } = await supabase.from("pl_transactions").delete().in("id", chunk);
+      if (error) throw new Error(`deleteUpload pl_transactions: ${error.message}`);
     }
   }
 
-  await supabase.from("pl_transactions").delete().eq("upload_id", uploadId);
-  await supabase.from("pl_uploads").delete().eq("id", uploadId);
+  // Sweeps anything inserted between the id fetch and now, so the parent row
+  // never fails to delete on a leftover child.
+  const { error: tailErr } = await supabase
+    .from("pl_transactions").delete().eq("upload_id", uploadId);
+  if (tailErr) throw new Error(`deleteUpload pl_transactions tail: ${tailErr.message}`);
+
+  const { error: uploadErr } = await supabase.from("pl_uploads").delete().eq("id", uploadId);
+  if (uploadErr) throw new Error(`deleteUpload pl_uploads: ${uploadErr.message}`);
 }

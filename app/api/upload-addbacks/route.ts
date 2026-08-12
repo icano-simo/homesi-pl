@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseAddbacks } from "@/lib/parse-addbacks";
 import { enrichTransactions } from "@/lib/enrich-transactions";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials, fetchUploadTxsForRules } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
@@ -50,10 +50,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ duplicate: true, info: dupeResult.info }, { status: 409 });
       }
     }
-    // ── 3b. Snapshot manual assignments before deleting the old upload ────
-    const manualSnapshot = replaceId
-      ? await snapshotManualAssignments(supabase, replaceId)
-      : [];
+    // ── 3b. Persist the manual assignments BEFORE anything is deleted ─────
+    // The await is the invariant: snapshotManualAssignments writes the backup
+    // rows and reads them back, throwing if the count does not match, so
+    // control only reaches the delete once the backup is confirmed on disk.
+    if (replaceId) await snapshotManualAssignments(supabase, replaceId);
+
     if (replaceId) await deleteUpload(supabase, replaceId);
 
     // ── 4. Create upload record ───────────────────────────────────────────
@@ -98,16 +100,11 @@ export async function POST(req: NextRequest) {
       loadLoanOfficialFields(supabase),
     ]);
 
-    const { data: newTxs } = await supabase
-      .from("pl_transactions")
-      .select(
-        "id,gl_code,gl_name,branch,vendor,check_description," +
-        "ref_numb,category_5,category_6,doc_type,month,year,debit,credit,movement," +
-        "loan_number,loan_number_incomplete"
-      )
-      .eq("upload_id", id);
+    // Paged: an unbounded select stops at 1000 rows, which would leave every
+    // row past the first thousand of a large file without rule evaluation.
+    const newTxs = await fetchUploadTxsForRules(supabase, id);
 
-    if (newTxs && newTxs.length > 0) {
+    if (newTxs.length > 0) {
       const ruleSplitEntries: RuleSplitEntry[] = [];
       const ccUpdates = newTxs.map((tx) => {
         const txId = (tx as unknown as { id: string }).id;
@@ -144,8 +141,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 7b. Re-apply manual snapshot after rule assignment ────────────────
+    // Reads the pending backup rows from the table rather than an in-memory
+    // array, so a run that died earlier can be resumed by uploading again.
     const manualSummary = replaceId
-      ? await reapplyManualSnapshot(supabase, id, manualSnapshot)
+      ? await reapplyManualSnapshot(supabase, id, replaceId)
       : null;
 
     // ── 8. Mark completed ─────────────────────────────────────────────────
