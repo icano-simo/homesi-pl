@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseAddbacks } from "@/lib/parse-addbacks";
 import { enrichTransactions } from "@/lib/enrich-transactions";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials, fetchUploadTxsForRules } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
@@ -100,16 +100,11 @@ export async function POST(req: NextRequest) {
       loadLoanOfficialFields(supabase),
     ]);
 
-    const { data: newTxs } = await supabase
-      .from("pl_transactions")
-      .select(
-        "id,gl_code,gl_name,branch,vendor,check_description," +
-        "ref_numb,category_5,category_6,doc_type,month,year,debit,credit,movement," +
-        "loan_number,loan_number_incomplete"
-      )
-      .eq("upload_id", id);
+    // Paged: an unbounded select stops at 1000 rows, which would leave every
+    // row past the first thousand of a large file without rule evaluation.
+    const newTxs = await fetchUploadTxsForRules(supabase, id);
 
-    if (newTxs && newTxs.length > 0) {
+    if (newTxs.length > 0) {
       const ruleSplitEntries: RuleSplitEntry[] = [];
       const ccUpdates = newTxs.map((tx) => {
         const txId = (tx as unknown as { id: string }).id;

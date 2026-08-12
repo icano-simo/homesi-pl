@@ -1,6 +1,6 @@
 import { createServerClient } from "@/lib/supabase-server";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials, fetchUploadTxsForRules } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { applyEmployeeFeeCostSplits } from "@/lib/apply-employee-fee-cost-splits";
 import { buildVersionedSplitsMap, type SplitVersionRow } from "@/lib/split-version-utils";
@@ -230,16 +230,12 @@ export async function generateEmployeeFeeLines(
       loadLoanOfficialFields(supabase),
     ]);
 
-    const { data: newTxs } = await supabase
-      .from("pl_transactions")
-      .select(
-        "id,gl_code,gl_name,branch,vendor,check_description," +
-        "ref_numb,category_5,category_6,doc_type,month,year,debit,credit,movement," +
-        "loan_number,loan_number_incomplete",
-      )
-      .eq("upload_id", uploadId);
+    // Paged: an unbounded select stops at 1000 rows. This runs automatically
+    // inside every Offshore Allocations upload, so a large generation run would
+    // silently leave its later lines without cost-center assignment.
+    const newTxs = await fetchUploadTxsForRules(supabase, uploadId);
 
-    if (newTxs && newTxs.length > 0) {
+    if (newTxs.length > 0) {
       type TxRow = { id: string; gl_code: string; vendor: string | null; year: number | null; month: string | null; [key: string]: unknown };
       const txRows  = newTxs as unknown as TxRow[];
       const incomeTxs = txRows.filter((tx) => tx.gl_code === "90001");

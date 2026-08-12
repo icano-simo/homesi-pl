@@ -91,6 +91,42 @@ const TX_FIELDS =
   "loan_number,loan_number_incomplete";
 
 const UPDATE_PARALLEL = 100;
+const FETCH_BATCH = 1000;
+
+/**
+ * Loads every transaction of an upload, in the shape the rule evaluator wants.
+ *
+ * PostgREST caps an unbounded select at 1000 rows on this project — measured,
+ * not assumed: `select("id")` with no range returns exactly 1000 of 26,165. The
+ * three uploaders each read their freshly inserted rows to evaluate cost-center
+ * rules, so without paging, an 11,092-row file would only ever have its first
+ * 1000 rows evaluated and the rest would sit unassigned with no error anywhere.
+ *
+ * Ordered by id, which is a stable unique key. Ordering by anything non-unique
+ * (a date, a gl_code) lets rows shift between pages and be read twice or
+ * skipped entirely at the boundaries.
+ */
+export async function fetchUploadTxsForRules(
+  supabase: SupabaseClient,
+  uploadId: string,
+): Promise<Array<{ id: string } & Record<string, unknown>>> {
+  const rows: Array<{ id: string } & Record<string, unknown>> = [];
+  let offset = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("pl_transactions")
+      .select(TX_FIELDS)
+      .eq("upload_id", uploadId)
+      .order("id", { ascending: true })
+      .range(offset, offset + FETCH_BATCH - 1);
+    if (error) throw new Error(`fetch upload txs: ${error.message}`);
+    if (!data || data.length === 0) break;
+    rows.push(...(data as unknown as Array<{ id: string } & Record<string, unknown>>));
+    if (data.length < FETCH_BATCH) break;
+    offset += FETCH_BATCH;
+  }
+  return rows;
+}
 
 /**
  * Loads all split rules with their conditions and allocations from the database.

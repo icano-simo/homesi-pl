@@ -132,19 +132,34 @@ export async function snapshotManualAssignments(
 
   // Transaction-level splits, so the reapply can recreate them from the table
   // rather than from memory.
+  //
+  // Chunking the ids is NOT enough on its own: one transaction can carry
+  // several splits, so 500 ids can answer with well over the 1000-row cap
+  // (measured on this project: an unbounded select returns exactly 1000 of
+  // 26,165). A truncated answer here loses splits silently, and the loss only
+  // shows up after the original rows have already been deleted. So each chunk
+  // is also paged until it comes up short.
   const splitsMap = new Map<string, Array<{ cost_center_id: string; percentage: number; is_operational: boolean }>>();
   for (let i = 0; i < txIds.length; i += CHUNK) {
     const chunk = txIds.slice(i, i + CHUNK);
-    const { data: splits, error: splitsErr } = await supabase
-      .from("cc_allocation_splits")
-      .select("assign_value, cost_center_id, percentage, is_operational")
-      .eq("assign_type", "transaction")
-      .in("assign_value", chunk);
-    if (splitsErr) throw new Error(`snapshot fetch splits: ${splitsErr.message}`);
-    for (const s of (splits ?? []) as Array<{ assign_value: string; cost_center_id: string; percentage: number; is_operational: boolean }>) {
-      const arr = splitsMap.get(s.assign_value) ?? [];
-      arr.push({ cost_center_id: s.cost_center_id, percentage: s.percentage, is_operational: s.is_operational });
-      splitsMap.set(s.assign_value, arr);
+    let from = 0;
+    while (true) {
+      const { data: splits, error: splitsErr } = await supabase
+        .from("cc_allocation_splits")
+        .select("id, assign_value, cost_center_id, percentage, is_operational")
+        .eq("assign_type", "transaction")
+        .in("assign_value", chunk)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (splitsErr) throw new Error(`snapshot fetch splits: ${splitsErr.message}`);
+      if (!splits || splits.length === 0) break;
+      for (const s of splits as Array<{ assign_value: string; cost_center_id: string; percentage: number; is_operational: boolean }>) {
+        const arr = splitsMap.get(s.assign_value) ?? [];
+        arr.push({ cost_center_id: s.cost_center_id, percentage: s.percentage, is_operational: s.is_operational });
+        splitsMap.set(s.assign_value, arr);
+      }
+      if (splits.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
     }
   }
 
