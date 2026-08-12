@@ -99,3 +99,22 @@ DROP TRIGGER IF EXISTS pl_notes_updated_at ON finance_division.pl_notes;
 CREATE TRIGGER pl_notes_updated_at
   BEFORE UPDATE ON finance_division.pl_notes
   FOR EACH ROW EXECUTE FUNCTION finance_division.update_updated_at();
+
+-- ── Access model ────────────────────────────────────────────────────────────
+-- Same shape as the other sixteen tables in this schema: row level security on,
+-- zero policies, and privileges held only by service_role. Every read and write
+-- goes through an API route carrying the service key, which bypasses RLS. The
+-- anon and publishable keys get an empty result rather than a 403 — that is the
+-- intended behaviour, and it is also why a missing GRANT here would not look
+-- like an error: the notes would simply never load.
+--
+-- The schema already carries
+--   ALTER DEFAULT PRIVILEGES IN SCHEMA finance_division GRANT ALL ON TABLES TO service_role;
+-- so a table created by the role that set those defaults inherits the grant
+-- automatically. Default privileges apply per creating role, though, so this
+-- explicit GRANT is what makes the migration correct no matter who runs it.
+GRANT ALL ON finance_division.pl_notes TO service_role;
+
+-- Without this the table would be the only one of the seventeen without the
+-- lock, reachable with the publishable key from any browser.
+ALTER TABLE finance_division.pl_notes ENABLE ROW LEVEL SECURITY;
