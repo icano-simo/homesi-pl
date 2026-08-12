@@ -11,7 +11,7 @@
 --          per-entity logs keep it NULL forever — they carry no transaction_id
 --          and no tx_fingerprint, so they can never be orphaned.
 
-ALTER TABLE pl_notes
+ALTER TABLE finance_division.pl_notes
   ADD COLUMN IF NOT EXISTS orphaned_at TIMESTAMPTZ;
 
 -- ── Backfill ────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ ALTER TABLE pl_notes
 -- is unrecoverable, so they are stamped NOW() and should be read as "orphaned
 -- at or before this migration; exact time unknown" — the same caveat the
 -- 2026-08-02 updated_at migration carries.
-UPDATE pl_notes
+UPDATE finance_division.pl_notes
    SET orphaned_at = NOW()
  WHERE transaction_id IS NULL
    AND tx_fingerprint IS NOT NULL
@@ -29,7 +29,7 @@ UPDATE pl_notes
 -- The re-link step runs on every upload and asks exactly this question.
 -- Partial, so it indexes only the orphans rather than the whole table.
 CREATE INDEX IF NOT EXISTS idx_pl_notes_orphans
-  ON pl_notes (tx_fingerprint)
+  ON finance_division.pl_notes (tx_fingerprint)
   WHERE transaction_id IS NULL AND tx_fingerprint IS NOT NULL;
 
 -- ── Automatic stamping ──────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_pl_notes_orphans
 -- moment instead, and clear it the instant the note is reattached.
 -- relinkOrphanNotes() keeps its own "stamp if still null" as a backstop for
 -- rows detached before this trigger existed.
-CREATE OR REPLACE FUNCTION trg_pl_notes_orphaned_at()
+CREATE OR REPLACE FUNCTION finance_division.trg_pl_notes_orphaned_at()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
@@ -53,7 +53,7 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS pl_notes_orphaned_at ON pl_notes;
+DROP TRIGGER IF EXISTS pl_notes_orphaned_at ON finance_division.pl_notes;
 CREATE TRIGGER pl_notes_orphaned_at
-  BEFORE UPDATE ON pl_notes
-  FOR EACH ROW EXECUTE FUNCTION trg_pl_notes_orphaned_at();
+  BEFORE UPDATE ON finance_division.pl_notes
+  FOR EACH ROW EXECUTE FUNCTION finance_division.trg_pl_notes_orphaned_at();

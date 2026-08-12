@@ -36,7 +36,7 @@
 --          the cost center name) — so renaming a GL or a cost center does not
 --          detach existing notes.
 
-CREATE TABLE IF NOT EXISTS pl_notes (
+CREATE TABLE IF NOT EXISTS finance_division.pl_notes (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   -- Coarse level of the anchor. Denormalized for filtering/indexing only;
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS pl_notes (
   -- user's comments. The note survives orphaned instead, and the sweep described
   -- below reattaches it. Aggregate-level notes never depend on transaction UUIDs
   -- and survive a re-upload untouched.
-  transaction_id UUID REFERENCES pl_transactions(id) ON DELETE SET NULL,
+  transaction_id UUID REFERENCES finance_division.pl_transactions(id) ON DELETE SET NULL,
 
   -- Content hash of the underlying transaction, stable across re-uploads:
   -- gl_code | ref_numb | journal_post_date | debit | credit | check_description.
@@ -85,17 +85,17 @@ CREATE TABLE IF NOT EXISTS pl_notes (
 );
 
 -- Exact-cell lookup ("notes written directly on this cell").
-CREATE INDEX IF NOT EXISTS idx_pl_notes_scope_key ON pl_notes(scope_key);
+CREATE INDEX IF NOT EXISTS idx_pl_notes_scope_key ON finance_division.pl_notes(scope_key);
 
 -- Containment queries over individual dimensions, e.g. scope @> '{"month":"April"}'.
-CREATE INDEX IF NOT EXISTS idx_pl_notes_scope ON pl_notes USING GIN(scope);
+CREATE INDEX IF NOT EXISTS idx_pl_notes_scope ON finance_division.pl_notes USING GIN(scope);
 
 -- Re-linking orphaned notes after a re-upload, and transaction-level fast path.
-CREATE INDEX IF NOT EXISTS idx_pl_notes_tx          ON pl_notes(transaction_id);
-CREATE INDEX IF NOT EXISTS idx_pl_notes_fingerprint ON pl_notes(tx_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_pl_notes_tx          ON finance_division.pl_notes(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_pl_notes_fingerprint ON finance_division.pl_notes(tx_fingerprint);
 
 -- Reuse the existing updated_at helper from schema.sql.
-DROP TRIGGER IF EXISTS pl_notes_updated_at ON pl_notes;
+DROP TRIGGER IF EXISTS pl_notes_updated_at ON finance_division.pl_notes;
 CREATE TRIGGER pl_notes_updated_at
-  BEFORE UPDATE ON pl_notes
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+  BEFORE UPDATE ON finance_division.pl_notes
+  FOR EACH ROW EXECUTE FUNCTION finance_division.update_updated_at();
