@@ -196,23 +196,29 @@ export async function GET(req: NextRequest) {
 
       const excluded = raw.length - rows.length;
 
+      // ── One branch rule, applied once ───────────────────────────────────────
+      // The cards and the bps denominator MUST select the same loans. They used
+      // to filter separately — the cards on `branches` directly, the base
+      // through resolveBaseBranches — and the corporate branch broke the pair:
+      // filtering to 700 counted zero loans (nothing normalizes to "700") while
+      // the base correctly used every branch. Cards at zero, bps computed off a
+      // full denominator.
+      //
+      // Now there is a single predicate and a single pass, so the two cannot
+      // disagree: null means every branch, an array means those branches.
+      const effectiveBranches = resolveBaseBranches(branches);
+      const inScope = (b: string) => !effectiveBranches || effectiveBranches.includes(b);
+
       const by_month: Record<string, MonthMetrics> = {};
+      const bps_base_by_month: Record<string, { all: number; banked: number; brokered: number }> = {};
+
       for (const o of rows) {
         if (!o.month) continue;
-        if (branches.length && !branches.includes(o.branch!)) continue;
+        if (!inScope(o.branch!)) continue;
+
         (by_month[o.month] ??= emptyMetrics());
         accumulate(by_month[o.month], o);
-      }
 
-      // ── bps denominator ────────────────────────────────────────────────────
-      // Same rows, filtered by branch a second way. resolveBaseBranches applies
-      // the corporate rule: branch 700 has no loans of its own, so a report
-      // filtered to it would divide every figure by zero.
-      const baseBranches = resolveBaseBranches(branches);
-      const bps_base_by_month: Record<string, { all: number; banked: number; brokered: number }> = {};
-      for (const o of rows) {
-        if (!o.month) continue;
-        if (baseBranches && !baseBranches.includes(o.branch!)) continue;
         const b = (bps_base_by_month[o.month] ??= { all: 0, banked: 0, brokered: 0 });
         const amt = money(o.loan_amount);
         b.all += amt;
@@ -221,11 +227,14 @@ export async function GET(req: NextRequest) {
         else if (bucket === "brokered") b.brokered += amt;
       }
 
-      // Branches the user asked for that carry no loan volume at all. Without
-      // this the panel shows a dash, which reads the same as "that month had no
-      // loans" and the same as a bug.
+      // Branches the user asked for that carry no loans at all. Only meaningful
+      // when the filter is actually narrowing: under the corporate rule the
+      // effective scope is every branch, and reporting 700 as "unmatched" would
+      // warn about the very case the rule exists to handle.
       const present = new Set(rows.map((o) => o.branch!));
-      const unmatched_branches = branches.filter((b) => !present.has(b));
+      const unmatched_branches = effectiveBranches
+        ? effectiveBranches.filter((b) => !present.has(b))
+        : [];
 
       // Invariant: the three buckets must reconstruct the total. If a channel
       // ever escapes categorisation, say so rather than printing a breakdown

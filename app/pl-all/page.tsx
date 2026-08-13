@@ -79,11 +79,14 @@ export default function PLAllPage() {
   // Params that were last successfully loaded — for metrics panel and chips
   const [loadedYears,    setLoadedYears]    = useState<string[]>([]);
 
-  // Loan officials keep their own branch naming, so the P&L branch list is not
-  // passed through here — the endpoint normalizes and reconciles it instead.
-  const loanMetrics = useLoanMetrics(loadedYears, [], []);
   const [loadedBranches, setLoadedBranches] = useState<string[]>([]);
   const [loadedSources,  setLoadedSources]  = useState<string[]>([]);
+
+  // The same filters the table is showing. Passing them is safe now that
+  // lib/loan-branch.ts reconciles the two naming schemes — it maps Affinity to
+  // 716 and gives the corporate branch division-wide volume, so a branch filter
+  // no longer empties the panel.
+  const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources);
 
   async function fetchData(yrs: string[], brs: string[], srcs: string[]) {
     setLoading(true); setError("");
@@ -289,10 +292,7 @@ export default function PLAllPage() {
         )}
       </div>
 
-      {/* Per-month loan metrics — shown after first successful load.
-          Loan officials live in their own table with independent branch naming,
-          so we don't pass loadedBranches (pl_transactions branch names). Year is
-          sufficient context and avoids a silent empty-panel when branch formats differ. */}
+      {/* Per-month loan metrics — shown after first successful load. */}
       {loaded && (
         <LoanMetricsByMonthBar
           data={loanMetrics.data}

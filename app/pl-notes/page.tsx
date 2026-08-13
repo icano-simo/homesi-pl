@@ -73,11 +73,11 @@ export default function PLNotesPage() {
 
   const [loadedYears,    setLoadedYears]    = useState<string[]>([]);
 
-  // Same panel as P&L All, same hook, same numbers. Branches are not forwarded:
-  // loan_officials names them independently and the endpoint reconciles them.
-  const loanMetrics = useLoanMetrics(loadedYears, [], []);
   const [loadedBranches, setLoadedBranches] = useState<string[]>([]);
   const [loadedSources,  setLoadedSources]  = useState<string[]>([]);
+
+  // Same panel as P&L All, same hook, same filters the table is showing.
+  const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources);
 
   /** Notes come from their own endpoint, so posting one refreshes just them
    *  rather than re-downloading every transaction behind the report. */
