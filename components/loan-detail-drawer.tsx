@@ -73,15 +73,39 @@ const num = (v: number) =>
   v === 0 ? "text-slate-300 font-normal" : v < 0 ? "text-rose-600" : "text-[#001A40]";
 
 /**
- * Item colour, by what the sign means in its block rather than by the sign
- * alone. Under Revenue a negative is a clawback and reads rose; under Costs a
- * negative is a refund and reads green. The same "-441.95" means opposite
- * things two blocks apart, and colouring both red would say the wrong one.
+ * Item colour, from the effect on the net and nothing else. Same rule in both
+ * blocks.
+ *
+ *   movement > 0  →  adds to the net    (income, or a credit in an expense
+ *                                        account: a refund)
+ *   movement < 0  →  takes from the net (a real expense, or a margin clawback)
+ *
+ * An earlier version made this depend on the block, on the idea that a negative
+ * under Costs was a refund. It is the opposite: loan 707002013216 carries
+ * Compensation Transfers at debit 32,144.00, movement -32,144.00 — a real
+ * $32k expense that reduces the net. In green it would have read as good news.
+ *
+ * The sign alone cannot separate "real expense" from "margin clawback", and it
+ * does not try to. That distinction lives in the tooltip. Colour answers one
+ * question — does this push the net up or down — because that is what gets read
+ * at a glance.
  */
-function itemCls(v: number, tone: "emerald" | "rose"): string {
+function itemCls(v: number): string {
   if (v === 0) return "text-slate-300 font-normal";
-  if (tone === "emerald") return v < 0 ? "text-rose-600 font-medium" : "text-slate-800";
-  return v < 0 ? "text-emerald-700 font-medium" : "text-slate-800";
+  return v < 0 ? "text-rose-600 font-medium" : "text-slate-800";
+}
+
+/** What the sign does here, spelled out for the tooltip. */
+function signHint(v: number, isCostBlock: boolean): string {
+  if (v === 0) return "No amount";
+  if (v > 0) {
+    return isCostBlock
+      ? "Credit in an expense account — adds to the net"
+      : "Income — adds to the net";
+  }
+  return isCostBlock
+    ? "Expense — takes from the net"
+    : "Reduces revenue — takes from the net";
 }
 
 /** Revenue concepts, most valuable first, then the rest alphabetically. */
@@ -360,7 +384,7 @@ function Block({ title, tone, total, amount, items, loan }: {
     <>
       <div className={`my-1.5 flex items-center justify-between rounded-lg border px-3 py-1.5 text-xs font-bold ${badge}`}>
         <span className="uppercase tracking-wide">{title}</span>
-        <span className="font-mono tabular-nums">
+        <span className={`font-mono tabular-nums ${total < 0 ? "text-rose-700" : ""}`}>
           {fmt(total)}
           <span className="ml-1 font-normal opacity-70">{fmtBps(bpsOf(total, amount))} bps</span>
         </span>
@@ -389,7 +413,10 @@ function Block({ title, tone, total, amount, items, loan }: {
                 <span title="This branch does not normally carry this account." className="ml-1 text-amber-600">!</span>
               )}
             </span>
-            <span className={`shrink-0 font-mono tabular-nums text-xs ${itemCls(v, tone)}`}>
+            <span
+              title={signHint(v, tone === "rose")}
+              className={`shrink-0 font-mono tabular-nums text-xs ${itemCls(v)}`}
+            >
               {fmt(v)}
               <span className="ml-1 font-mono text-[11px] font-normal text-slate-500">{fmtBps(bpsOf(v, amount))} bps</span>
             </span>
