@@ -8,6 +8,13 @@ import {
   expectedMarginAccounts,
 } from "@/lib/loan-detail-accounts";
 
+interface LoanLine {
+  gl_code: string;
+  gl_name: string;
+  category_7: string;
+  amount: number;
+}
+
 interface LoanRow {
   loan_number: string;
   borrower_name: string | null;
@@ -20,6 +27,7 @@ interface LoanRow {
   processing: boolean;
   support_on_demand: boolean;
   concepts: Record<string, number>;
+  lines: LoanLine[];
   concept_branches: Record<string, string[]>;
   unexpected_accounts: string[];
   foreign_months: string[];
@@ -34,7 +42,9 @@ interface Summary {
   loan_count: number;
   volume: number;
   without_margin: number;
+  banked_only: boolean;
   concepts: Record<string, number>;
+  lines: LoanLine[];
   revenue: number;
   costs: number;
   net: number;
@@ -99,12 +109,6 @@ function itemCls(v: number): string {
 function signHint(v: number): string {
   if (v === 0) return "No amount";
   return v > 0 ? "Adds to the net" : "Takes from the net";
-}
-
-/** Revenue concepts, largest first. Everything here is revenue: see
- *  NET_GROUPS for why Direct Production Costs are not in this window. */
-function revenueItems(concepts: Record<string, number>): [string, number][] {
-  return Object.entries(concepts).filter(([, v]) => v !== 0).sort((a, b) => b[1] - a[1]);
 }
 
 export function LoanDetailDrawer({ open, month, year, branches, sources, onClose }: Props) {
@@ -185,6 +189,10 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                 Loans · {month} {year ?? ""}
               </h2>
               <p className="mt-1 text-[11px] text-slate-500">
+                {/* Said before any figure. The volume here is not the month's
+                    volume, and a reader who assumes it is will draw the wrong
+                    conclusion from every bps below. */}
+                <span className="font-semibold text-[#001A40]">Banked loans only.</span>{" "}
                 bps divide by <span className="font-semibold text-[#001A40]">each loan&apos;s own amount</span>,
                 not the monthly loan volume used in the P&amp;L grid.
               </p>
@@ -270,7 +278,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               <tfoot className="sticky bottom-0 z-10">
                 <tr className="border-t-2 border-[#001A40]/20 bg-[#001A40]/5 font-bold">
                   <Td className="text-[#001A40]">
-                    {data.summary.loan_count} loan{data.summary.loan_count === 1 ? "" : "s"}
+                    {data.summary.loan_count} banked loan{data.summary.loan_count === 1 ? "" : "s"}
                   </Td>
                   <Td className="text-slate-500">
                     {data.summary.without_margin > 0 && (
@@ -332,7 +340,6 @@ function MiniPL({ l }: { l: LoanRow }) {
   // Everything between Revenue and Direct Production Costs, always. Nothing
   // folded away, so the block totals are by construction the sum of what is on
   // screen — the reader can add the column up and get the badge.
-  const items = revenueItems(l.concepts);
 
   return (
     <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
@@ -355,7 +362,7 @@ function MiniPL({ l }: { l: LoanRow }) {
         </div>
 
         <div className="px-3 pt-2">
-          <Block title="Total revenue" total={l.revenue} amount={l.loan_amount} items={items} loan={l} />
+          <Block title="Total revenue" total={l.revenue} amount={l.loan_amount} lines={l.lines} loan={l} />
         </div>
       </div>
 
@@ -364,9 +371,11 @@ function MiniPL({ l }: { l: LoanRow }) {
   );
 }
 
-function Block({ title, total, amount, items, loan }: {
+function Block({ title, total, amount, lines, loan }: {
   title: string; total: number; amount: number;
-  items: [string, number][];
+  /** Already ordered by the server, so every card lists the same concept at
+   *  the same height and two cards can be read across. */
+  lines: LoanLine[];
   /** Absent on the summary card, which spans every loan and so has no single
    *  branch to compare a booking against. */
   loan?: LoanRow;
@@ -381,20 +390,24 @@ function Block({ title, total, amount, items, loan }: {
           <span className="ml-1 font-normal opacity-70">{fmtBps(bpsOf(total, amount))} bps</span>
         </span>
       </div>
-      {items.length === 0 && (
+      {lines.length === 0 && (
         <p className="px-3 pb-1 text-[10px] italic text-slate-400">None</p>
       )}
-      {items.map(([concept, v]) => {
-        const booked = loan?.concept_branches[concept] ?? [];
+      {lines.map(({ gl_code, gl_name, category_7, amount: v }) => {
+        const booked = loan?.concept_branches[category_7] ?? [];
         // Where the amount is booked, shown only when it is not the loan's own
         // branch — DM Margin lives in 700 for loans every branch originates, and
         // the reader needs to know that without being told it on every line.
         const elsewhere = loan ? booked.filter((b) => b !== loan.branch) : [];
-        const flagged = loan ? loan.unexpected_accounts.includes(concept) : false;
+        const flagged = loan ? loan.unexpected_accounts.includes(category_7) : false;
         return (
-          <div key={concept} className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
-            <span className={`truncate pl-2 ${flagged ? "text-amber-700" : "text-slate-600"}`}>
-              {concept}
+          <div key={gl_code} className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
+            <span className={`truncate ${flagged ? "text-amber-700" : "text-slate-600"}`}>
+              {/* The GL code, so a line can be tied back to the ledger.
+                  category_7 nets several accounts into one figure that
+                  reconciles against nothing. */}
+              <span className="mr-1.5 font-mono text-[9px] text-slate-400">{gl_code}</span>
+              {gl_name}
               {elsewhere.length > 0 && (
                 <span title={`Booked in branch ${elsewhere.join(", ")}`}
                   className="ml-1 rounded bg-slate-200/70 px-1 py-0.5 font-mono text-[9px] text-slate-600">
@@ -428,15 +441,14 @@ function Block({ title, total, amount, items, loan }: {
  * read against each other without translating. Its net is the sum of theirs.
  */
 function SummaryCard({ s, month }: { s: Summary; month: string }) {
-  const items = revenueItems(s.concepts);
 
   return (
     <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border-2 border-[#001A40]/20 bg-white shadow-xs">
       <div>
         <div className="flex flex-col gap-1 border-b border-slate-200 bg-[#001A40]/5 p-3.5 text-xs font-bold text-[#001A40]">
-          <span className="uppercase tracking-wider">{month} · all loans</span>
+          <span className="uppercase tracking-wider">{month} · banked loans</span>
           <span className="font-mono tabular-nums text-sm">
-            {s.loan_count} loan{s.loan_count === 1 ? "" : "s"} · {money(s.volume)}
+            {s.loan_count} banked loan{s.loan_count === 1 ? "" : "s"} · {money(s.volume)}
           </span>
           {/* Stated up front, not footnoted. Loans that earned nothing still sit
               in the denominator — hiding them would lift the month's bps by
@@ -448,7 +460,7 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
           )}
         </div>
         <div className="px-3 pt-2">
-          <Block title="Total revenue" total={s.revenue} amount={s.volume} items={items} />
+          <Block title="Total revenue" total={s.revenue} amount={s.volume} lines={s.lines} />
         </div>
       </div>
       <NetBanner net={s.net} netBps={s.net_bps} />

@@ -22,6 +22,47 @@ const money = (v: number | string | null | undefined): number => {
 const bps = (v: number, amount: number): number | null =>
   amount ? (v / amount) * 10000 : null;
 
+export interface LoanDetailLine {
+  gl_code: string;
+  gl_name: string;
+  category_7: string;
+  amount: number;
+}
+
+/**
+ * Display order for the GL lines.
+ *
+ * The three that carry the story come first, always in this order, so the same
+ * concept sits at the same height on every card and two cards side by side can
+ * be read across. Sorting by amount put them in a different place on each one.
+ *
+ * Whatever is left follows, grouped by its category_7 so the GL accounts that
+ * make up one concept stay together — Processing Income (41830) next to
+ * Processing Fees (55275) — with the larger concepts first and, inside each,
+ * the larger amounts first.
+ */
+const LINE_ORDER: readonly string[] = ["Back-end Margin", "Discount Income", "Front-end Margin"];
+
+function orderLines(lines: LoanDetailLine[]): LoanDetailLine[] {
+  const anchored: LoanDetailLine[] = [];
+  for (const c7 of LINE_ORDER) {
+    anchored.push(
+      ...lines.filter((l) => l.category_7 === c7).sort((a, b) => b.amount - a.amount),
+    );
+  }
+
+  const rest = lines.filter((l) => !LINE_ORDER.includes(l.category_7));
+  const byConcept = new Map<string, LoanDetailLine[]>();
+  for (const l of rest) (byConcept.get(l.category_7) ?? byConcept.set(l.category_7, []).get(l.category_7)!).push(l);
+
+  const tail = [...byConcept.entries()]
+    .map(([c7, ls]) => ({ c7, ls, total: ls.reduce((s, l) => s + l.amount, 0) }))
+    .sort((a, b) => b.total - a.total)
+    .flatMap((g) => g.ls.sort((a, b) => b.amount - a.amount));
+
+  return [...anchored, ...tail];
+}
+
 export interface LoanDetailRow {
   loan_number: string;
   borrower_name: string | null;
@@ -33,8 +74,10 @@ export interface LoanDetailRow {
   b2b: boolean;
   processing: boolean;
   support_on_demand: boolean;
-  /** category_7 → summed movement. Aggregated, never individual rows. */
+  /** category_7 → summed movement. Kept for the column rules. */
   concepts: Record<string, number>;
+  /** One line per GL account, in the fixed display order. */
+  lines: LoanDetailLine[];
   /** category_7 -> branches the amount is booked in, which is often not the
    *  loan's own branch. */
   concept_branches: Record<string, string[]>;
@@ -95,9 +138,15 @@ export async function GET(req: NextRequest) {
         .eq("year", year),
     );
 
+    // Banked only. Brokered loans earn through a different mechanism and
+    // mixing them dilutes every bps in the window against volume this margin
+    // was never going to be earned on. Measured: 336 of the 375 loans in
+    // scope, $120,424,191 of $131,911,354.
+    const isBanked = (c: string | null) => (c ?? "").trim().startsWith("Banked");
+
     const loans = rawLoans
       .map((l) => ({ ...l, branch: normalizeLoanBranch(l.branch) }))
-      .filter((l) => l.branch !== null && inScope(l.branch));
+      .filter((l) => l.branch !== null && inScope(l.branch) && isBanked(l.loan_info_channel));
 
     const loanNumbers = loans.map((l) => l.loan_number as string);
 
@@ -113,7 +162,7 @@ export async function GET(req: NextRequest) {
     // Not restricted to this month: a loan's margin sometimes lands later, and
     // dropping it would show the loan as having earned nothing. The month it
     // actually landed in travels with the row so the window can say so.
-    const txs: Array<{ loan_number: string; branch: string | null; category_6: string | null; category_7: string | null; movement: number | string | null; month: string | null; year: number | null }> = [];
+    const txs: Array<{ loan_number: string; branch: string | null; gl_code: string | null; gl_name: string | null; category_6: string | null; category_7: string | null; movement: number | string | null; month: string | null; year: number | null }> = [];
     for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
       const chunk = loanNumbers.slice(i, i + IN_CHUNK);
       if (chunk.length === 0) break;
@@ -121,7 +170,7 @@ export async function GET(req: NextRequest) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let q: any = supabase
           .from("pl_transactions")
-          .select("loan_number,branch,category_6,category_7,movement,month,year")
+          .select("loan_number,branch,gl_code,gl_name,category_6,category_7,movement,month,year")
           .in("loan_number", chunk)
           // Only what makes up a loan's result. SG&A and Personnel Costs are
           // not shown anywhere — not in the net, not folded behind a toggle.
@@ -143,6 +192,11 @@ export async function GET(req: NextRequest) {
     // mean.
     type Agg = {
       concepts: Record<string, number>;
+      /** gl_code -> one displayable line. category_7 groups several GL
+       *  accounts into one figure that cannot be tied back to the ledger:
+       *  "Fee Income, Net" is Cures (41215) and Other HUD Fees (41205)
+       *  netted together, and only the GL split reconciles. */
+      lines: Record<string, { gl_code: string; gl_name: string; category_7: string; amount: number }>;
       groups: Record<string, number>;
       months: Set<string>;
       /** category_7 -> branches the amount is booked in. Not the loan's branch:
@@ -153,9 +207,12 @@ export async function GET(req: NextRequest) {
     for (const t of txs) {
       if (!t.category_7) continue;
       let a = agg.get(t.loan_number);
-      if (!a) { a = { concepts: {}, groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
+      if (!a) { a = { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
       const v = money(t.movement);
       a.concepts[t.category_7] = (a.concepts[t.category_7] ?? 0) + v;
+      const gl = t.gl_code ?? "—";
+      const line = (a.lines[gl] ??= { gl_code: gl, gl_name: t.gl_name ?? t.category_7, category_7: t.category_7, amount: 0 });
+      line.amount += v;
       if (t.branch) (a.conceptBranches[t.category_7] ??= new Set()).add(t.branch);
       const g = t.category_6 ?? "(none)";
       a.groups[g] = (a.groups[g] ?? 0) + v;
@@ -170,7 +227,7 @@ export async function GET(req: NextRequest) {
     }
 
     const rows: LoanDetailRow[] = loans.map((l) => {
-      const a = agg.get(l.loan_number) ?? { concepts: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
+      const a = agg.get(l.loan_number) ?? { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
       const amount = money(l.loan_amount);
 
       // Revenue is the whole story here: NET_GROUPS holds one group, so the
@@ -204,6 +261,7 @@ export async function GET(req: NextRequest) {
         processing: !!l.processing,
         support_on_demand: !!l.support_on_demand,
         concepts: a.concepts,
+        lines: orderLines(Object.values(a.lines).filter((x) => x.amount !== 0)),
         concept_branches: Object.fromEntries(
           Object.entries(a.conceptBranches).map(([k, v]) => [k, [...v].sort()]),
         ),
@@ -222,9 +280,14 @@ export async function GET(req: NextRequest) {
     // the silent loans would flatter the month by shrinking the base it is
     // measured against.
     const summaryConcepts: Record<string, number> = {};
+    const summaryLines: Record<string, LoanDetailLine> = {};
     for (const r of rows) {
       for (const [c, v] of Object.entries(r.concepts)) {
         summaryConcepts[c] = (summaryConcepts[c] ?? 0) + v;
+      }
+      for (const ln of r.lines) {
+        const acc = (summaryLines[ln.gl_code] ??= { ...ln, amount: 0 });
+        acc.amount += ln.amount;
       }
     }
     const summaryVolume  = rows.reduce((s, r) => s + r.loan_amount, 0);
@@ -234,10 +297,14 @@ export async function GET(req: NextRequest) {
 
     const summary = {
       loan_count: rows.length,
+      /** Banked only. Stated in the payload so the header can say so rather
+       *  than letting the figure be read as the month's whole volume. */
+      banked_only: true,
       volume: summaryVolume,
       /** Originated volume that received no margin at all. */
       without_margin: rows.filter((r) => r.no_margin).length,
       concepts: summaryConcepts,
+      lines: orderLines(Object.values(summaryLines).filter((l) => l.amount !== 0)),
       revenue: summaryRevenue,
       costs: summaryCosts,
       net: summaryNet,
