@@ -100,7 +100,15 @@ export async function GET(req: NextRequest) {
 
     const loanNumbers = loans.map((l) => l.loan_number as string);
 
-    // ── Everything posted against those loans ───────────────────────────────
+    // ── What those loans earned, in the books the filter asks for ───────────
+    // The raw branch filter, NOT resolveBaseBranches. The two answer different
+    // questions: resolveBaseBranches decides which loans belong to the card,
+    // this decides whose accounting we are reading. With branch 710 selected
+    // the card must show 710's books for the loan and nothing else — netting
+    // 710's -15.76 of Fee Income against 700's +333.00 into a single 317.24
+    // describes an entity nobody selected.
+    const bookedIn = branches.length > 0 ? branches : null;
+
     // Not restricted to this month: a loan's margin sometimes lands later, and
     // dropping it would show the loan as having earned nothing. The month it
     // actually landed in travels with the row so the window can say so.
@@ -113,7 +121,13 @@ export async function GET(req: NextRequest) {
         let q: any = supabase
           .from("pl_transactions")
           .select("loan_number,branch,category_6,category_7,movement,month,year")
-          .in("loan_number", chunk);
+          .in("loan_number", chunk)
+          // Only what makes up a loan's result. SG&A and Personnel Costs are
+          // not shown anywhere — not in the net, not folded behind a toggle.
+          // A marketing campaign is not caused by one loan, and showing it
+          // would invite the reader to hold the loan responsible for it.
+          .in("category_6", NET_GROUPS as string[]);
+        if (bookedIn) q = q.in("branch", bookedIn);
         if (sources.length) q = q.in("source", sources);
         return q;
       });
@@ -153,7 +167,7 @@ export async function GET(req: NextRequest) {
 
       const revenue = a.groups["Revenue"] ?? 0;
       const costs   = a.groups["Direct Production Costs"] ?? 0;
-      const net     = NET_GROUPS.reduce((s, g) => s + (a.groups[g] ?? 0), 0);
+      const net     = revenue + costs;
 
       // An account is out of rule when the BRANCH IT IS BOOKED IN does not
       // normally carry it — not when it differs from the loan's branch. DM
@@ -191,6 +205,35 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    // ── The month, as one card ──────────────────────────────────────────────
+    // Same concepts, same structure, same branch scope as the individual cards.
+    // The denominator is the volume of EVERY loan in scope, including the ones
+    // that earned nothing: that volume was originated either way, and dropping
+    // the silent loans would flatter the month by shrinking the base it is
+    // measured against.
+    const summaryConcepts: Record<string, number> = {};
+    for (const r of rows) {
+      for (const [c, v] of Object.entries(r.concepts)) {
+        summaryConcepts[c] = (summaryConcepts[c] ?? 0) + v;
+      }
+    }
+    const summaryVolume  = rows.reduce((s, r) => s + r.loan_amount, 0);
+    const summaryRevenue = rows.reduce((s, r) => s + r.revenue, 0);
+    const summaryCosts   = rows.reduce((s, r) => s + r.costs, 0);
+    const summaryNet     = summaryRevenue + summaryCosts;
+
+    const summary = {
+      loan_count: rows.length,
+      volume: summaryVolume,
+      /** Originated volume that received no margin at all. */
+      without_margin: rows.filter((r) => r.no_margin).length,
+      concepts: summaryConcepts,
+      revenue: summaryRevenue,
+      costs: summaryCosts,
+      net: summaryNet,
+      net_bps: bps(summaryNet, summaryVolume),
+    };
+
     // ── Revenue that cannot be placed on any of these loans ─────────────────
     // Both buckets are scoped to this month so their figures sit alongside the
     // rest rather than describing a different period.
@@ -204,6 +247,7 @@ export async function GET(req: NextRequest) {
         .eq("month", month)
         .eq("year", year)
         .in("category_7", ALL_MARGIN_ACCOUNTS as string[]);
+      if (bookedIn) q = q.in("branch", bookedIn);
       if (sources.length) q = q.in("source", sources);
       return q;
     });
@@ -229,7 +273,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       month, year,
+      branch_filter: branches,
       loans: rows,
+      summary,
       orphans,
       orphans_total: orphans.reduce((s, o) => s + o.total, 0),
       unattributed_total: unattributed,

@@ -30,10 +30,23 @@ interface LoanRow {
   no_margin: boolean;
 }
 
+interface Summary {
+  loan_count: number;
+  volume: number;
+  without_margin: number;
+  concepts: Record<string, number>;
+  revenue: number;
+  costs: number;
+  net: number;
+  net_bps: number | null;
+}
+
 interface DetailData {
   month: string;
   year: number;
   loans: LoanRow[];
+  summary: Summary;
+  branch_filter: string[];
   orphans: { loan_number: string; branch: string | null; concepts: Record<string, number>; total: number }[];
   orphans_total: number;
   unattributed_total: number;
@@ -58,6 +71,18 @@ const fmtBps = (v: number | null) => (v == null ? "—" : v.toFixed(1));
 
 const num = (v: number) =>
   v === 0 ? "text-slate-300 font-normal" : v < 0 ? "text-rose-600" : "text-[#001A40]";
+
+/**
+ * Item colour, by what the sign means in its block rather than by the sign
+ * alone. Under Revenue a negative is a clawback and reads rose; under Costs a
+ * negative is a refund and reads green. The same "-441.95" means opposite
+ * things two blocks apart, and colouring both red would say the wrong one.
+ */
+function itemCls(v: number, tone: "emerald" | "rose"): string {
+  if (v === 0) return "text-slate-300 font-normal";
+  if (tone === "emerald") return v < 0 ? "text-rose-600 font-medium" : "text-slate-800";
+  return v < 0 ? "text-emerald-700 font-medium" : "text-slate-800";
+}
 
 /** Revenue concepts, most valuable first, then the rest alphabetically. */
 function splitConcepts(l: LoanRow) {
@@ -85,7 +110,6 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
   const [data, setData]       = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
-  const [showOther, setShowOther] = useState(false);
   const [sortDesc, setSortDesc]   = useState(true);
   const [view, setView] = useState<"cards" | "table">("cards");
 
@@ -175,14 +199,6 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               <ViewTab active={view === "cards"} onClick={() => setView("cards")} icon={<LayoutGrid size={12} />} label="Mini P&L Cards" />
               <ViewTab active={view === "table"} onClick={() => setView("table")} icon={<Rows3 size={12} />} label="Table List" />
             </div>
-            <button
-              onClick={() => setShowOther((v) => !v)}
-              className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                showOther ? "border-sky-200 bg-sky-50 text-sky-900"
-                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"}`}
-            >
-              {showOther ? "Hide other concepts" : "Show other concepts"}
-            </button>
             <button onClick={() => setSortDesc((v) => !v)}
               className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-300">
               <ArrowUpDown size={11} />
@@ -208,7 +224,10 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
 
           {data && !loading && view === "cards" && (
             <div className="scrollbar-thin-slate flex max-w-full flex-row gap-4 overflow-x-auto p-4 pb-6">
-              {sorted.map((l) => <MiniPL key={l.loan_number} l={l} showOther={showOther} />)}
+              {data.summary.loan_count > 0 && (
+                <SummaryCard s={data.summary} month={data.month} />
+              )}
+              {sorted.map((l) => <MiniPL key={l.loan_number} l={l} />)}
             </div>
           )}
 
@@ -284,10 +303,11 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
 
 // ─── Mini P&L card ────────────────────────────────────────────────────────────
 
-function MiniPL({ l, showOther }: { l: LoanRow; showOther: boolean }) {
+function MiniPL({ l }: { l: LoanRow }) {
+  // Everything between Revenue and Direct Production Costs, always. Nothing
+  // folded away, so the block totals are by construction the sum of what is on
+  // screen — the reader can add the column up and get the badge.
   const { revenue, costs } = splitConcepts(l);
-  const shown = (entries: [string, number][]) =>
-    showOther ? entries : entries.filter(([c]) => ALL_MARGIN_ACCOUNTS.includes(c) || isCost(c));
 
   return (
     <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
@@ -308,34 +328,34 @@ function MiniPL({ l, showOther }: { l: LoanRow; showOther: boolean }) {
           <Block
             title="Total revenue" tone="emerald"
             total={l.revenue} amount={l.loan_amount}
-            items={shown(revenue)} loan={l}
+            items={revenue} loan={l}
           />
           <Block
             title="Total direct costs" tone="rose"
             total={l.costs} amount={l.loan_amount}
-            items={shown(costs)} loan={l}
+            items={costs} loan={l}
           />
         </div>
       </div>
 
-      <div className="mt-2 flex items-center justify-between bg-[#001A40] p-3 text-xs font-bold text-white shadow-xs">
-        <span>NET MARGIN</span>
-        <span className="font-mono tabular-nums">
-          {fmt(l.net)}
-          <span className="ml-1.5 font-normal text-emerald-300">{fmtBps(l.net_bps)} bps</span>
-        </span>
-      </div>
+      <NetBanner net={l.net} netBps={l.net_bps} />
     </div>
   );
 }
 
 function Block({ title, tone, total, amount, items, loan }: {
   title: string; tone: "emerald" | "rose"; total: number; amount: number;
-  items: [string, number][]; loan: LoanRow;
+  items: [string, number][];
+  /** Absent on the summary card, which spans every loan and so has no single
+   *  branch to compare a booking against. */
+  loan?: LoanRow;
 }) {
+  // Costs get a neutral band, not a red one. Spending on a loan is ordinary
+  // operation, and painting it like an error trains the reader to ignore the
+  // colour that should mean something.
   const badge = tone === "emerald"
     ? "bg-emerald-50 text-emerald-900 border-emerald-200/60"
-    : "bg-rose-50 text-rose-900 border-rose-200/60";
+    : "bg-slate-100/90 text-slate-800 border-slate-200/80";
   return (
     <>
       <div className={`my-1.5 flex items-center justify-between rounded-lg border px-3 py-1.5 text-xs font-bold ${badge}`}>
@@ -349,18 +369,19 @@ function Block({ title, tone, total, amount, items, loan }: {
         <p className="px-3 pb-1 text-[10px] italic text-slate-400">None</p>
       )}
       {items.map(([concept, v]) => {
-        const booked = loan.concept_branches[concept] ?? [];
+        const booked = loan?.concept_branches[concept] ?? [];
         // Where the amount is booked, shown only when it is not the loan's own
         // branch — DM Margin lives in 700 for loans every branch originates, and
         // the reader needs to know that without being told it on every line.
-        const elsewhere = booked.filter((b) => b !== loan.branch);
-        const flagged = loan.unexpected_accounts.includes(concept);
+        const elsewhere = loan ? booked.filter((b) => b !== loan.branch) : [];
+        const flagged = loan ? loan.unexpected_accounts.includes(concept) : false;
         return (
           <div key={concept} className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
             <span className={`truncate pl-2 ${flagged ? "text-amber-700" : "text-slate-600"}`}>
               {concept}
               {elsewhere.length > 0 && (
-                <span title={`Booked in branch ${elsewhere.join(", ")}`} className="ml-1 font-mono text-[9px] text-slate-400">
+                <span title={`Booked in branch ${elsewhere.join(", ")}`}
+                  className="ml-1 rounded bg-slate-200/70 px-1 py-0.5 font-mono text-[9px] text-slate-600">
                   @{elsewhere.join(",")}
                 </span>
               )}
@@ -368,9 +389,9 @@ function Block({ title, tone, total, amount, items, loan }: {
                 <span title="This branch does not normally carry this account." className="ml-1 text-amber-600">!</span>
               )}
             </span>
-            <span className={`shrink-0 font-mono tabular-nums text-xs ${num(v)}`}>
+            <span className={`shrink-0 font-mono tabular-nums text-xs ${itemCls(v, tone)}`}>
               {fmt(v)}
-              <span className="ml-1 text-[10px] font-normal text-slate-400">{fmtBps(bpsOf(v, amount))} bps</span>
+              <span className="ml-1 font-mono text-[11px] font-normal text-slate-500">{fmtBps(bpsOf(v, amount))} bps</span>
             </span>
           </div>
         );
@@ -380,6 +401,71 @@ function Block({ title, tone, total, amount, items, loan }: {
 }
 
 // ─── Shared bits ──────────────────────────────────────────────────────────────
+
+/**
+ * The month as one card, first in the carousel.
+ *
+ * Same concepts and same structure as the individual cards, so the two can be
+ * read against each other without translating. Its net is the sum of theirs.
+ */
+function SummaryCard({ s, month }: { s: Summary; month: string }) {
+  const entries = Object.entries(s.concepts).filter(([, v]) => v !== 0);
+  const revenue = entries.filter(([c]) => !isCost(c)).sort((a, b) => b[1] - a[1]);
+  const costs   = entries.filter(([c]) =>  isCost(c)).sort((a, b) => a[1] - b[1]);
+
+  return (
+    <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border-2 border-[#001A40]/20 bg-white shadow-xs">
+      <div>
+        <div className="flex flex-col gap-1 border-b border-slate-200 bg-[#001A40]/5 p-3.5 text-xs font-bold text-[#001A40]">
+          <span className="uppercase tracking-wider">{month} · all loans</span>
+          <span className="font-mono tabular-nums text-sm">
+            {s.loan_count} loan{s.loan_count === 1 ? "" : "s"} · {money(s.volume)}
+          </span>
+          {/* Stated up front, not footnoted. Loans that earned nothing still sit
+              in the denominator — hiding them would lift the month's bps by
+              shrinking the volume it is measured against. */}
+          {s.without_margin > 0 && (
+            <span className="font-semibold text-rose-700">
+              {s.without_margin} with no margin received
+            </span>
+          )}
+        </div>
+        <div className="px-3 pt-2">
+          <Block title="Total revenue" tone="emerald" total={s.revenue} amount={s.volume} items={revenue} />
+          <Block title="Total direct costs" tone="rose" total={s.costs} amount={s.volume} items={costs} />
+        </div>
+      </div>
+      <NetBanner net={s.net} netBps={s.net_bps} />
+    </div>
+  );
+}
+
+/**
+ * Net result, coloured by what it says. Profit keeps the navy banner with the
+ * figure in light emerald; a loss switches the whole banner to rose, because a
+ * negative result is the one thing in this window that should be impossible to
+ * scroll past.
+ */
+function NetBanner({ net, netBps }: { net: number; netBps: number | null }) {
+  const loss = net < 0;
+  return (
+    <div
+      className={`mt-2 flex items-center justify-between rounded-b-2xl p-3 text-xs font-bold shadow-xs ${
+        loss ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"
+      }`}
+    >
+      <span>NET MARGIN</span>
+      <span>
+        <span className={`font-mono font-bold tabular-nums ${loss ? "text-rose-700" : "text-emerald-300"}`}>
+          {fmt(net)}
+        </span>
+        <span className={`ml-1.5 font-mono text-[11px] ${loss ? "text-rose-800" : "text-emerald-400"}`}>
+          {fmtBps(netBps)} bps
+        </span>
+      </span>
+    </div>
+  );
+}
 
 function ViewTab({ active, onClick, icon, label }: {
   active: boolean; onClick: () => void; icon: React.ReactNode; label: string;
@@ -396,9 +482,9 @@ function ViewTab({ active, onClick, icon, label }: {
 function Signals({ l }: { l: LoanRow }) {
   return (
     <span className="inline-flex items-center gap-0.5">
-      {l.b2b && <Signal label="B" title="B2B" />}
-      {l.support_on_demand && <Signal label="O" title="On Demand" />}
-      {l.processing && <Signal label="P" title="Processing" />}
+      {l.b2b && <Signal label="B2B" />}
+      {l.support_on_demand && <Signal label="On Demand" />}
+      {l.processing && <Signal label="Processing" />}
       {l.no_margin && (
         <span className="ml-1 rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">
           no margin
@@ -407,7 +493,7 @@ function Signals({ l }: { l: LoanRow }) {
       {l.foreign_months.length > 0 && (
         <span title={`Margin posted in ${l.foreign_months.join(", ")}`}
               className="ml-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">
-          in {l.foreign_months.join(", ")}
+          margin in {l.foreign_months.join(", ")}
         </span>
       )}
     </span>
@@ -422,10 +508,11 @@ function Td({ children, className = "" }: { children: React.ReactNode; className
   return <td className={`whitespace-nowrap px-2 py-1.5 text-slate-700 ${className}`}>{children}</td>;
 }
 
-function Signal({ label, title }: { label: string; title: string }) {
+function Signal({ label }: { label: string }) {
+  // Spelled out. A single letter needs a legend, and a legend is one more
+  // thing to read before the number underneath makes sense.
   return (
-    <span title={title}
-      className="inline-block h-3.5 w-3.5 rounded-full bg-[#A6DEFF]/50 text-center text-[9px] font-bold leading-[14px] text-[#001A40]">
+    <span className="rounded-full bg-[#A6DEFF]/40 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[#001A40]">
       {label}
     </span>
   );
