@@ -389,7 +389,7 @@ export default function LoanCountPage() {
               <button
                 onClick={handleSaveAll}
                 disabled={isSavingAll}
-                className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 shadow-sm disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-full bg-[#FF4040] px-5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-[#e03535] disabled:opacity-50"
               >
                 <Save size={13} className={isSavingAll ? "animate-pulse" : ""} />
                 {isSavingAll ? "Saving…" : `Save Changes (${Object.keys(pendingChanges).length})`}

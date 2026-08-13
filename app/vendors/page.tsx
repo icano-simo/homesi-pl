@@ -406,7 +406,7 @@ export default function VendorsPage() {
               <button
                 onClick={handleApplyExisting}
                 disabled={applyRunning}
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-full bg-[#FF4040] px-5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-[#e03535] disabled:opacity-50"
               >
                 {applyRunning && (
                   <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />

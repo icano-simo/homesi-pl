@@ -10,8 +10,18 @@ import {
   type ExpandedTx,
   type PivotField,
   type PivotNode,
+  type TxLeaf,
 } from "@/lib/pivot-engine";
 import { fanOutBySplits, type SplitEntry } from "@/lib/apply-splits";
+import { NoteDrawer, defaultScopeLabel, type NoteDrawerCell } from "@/components/note-drawer";
+import {
+  buildNoteIndex,
+  cellKey,
+  resolveNotes,
+  type NoteScope,
+  type PLNote,
+  type ScopeKey,
+} from "@/lib/note-scope";
 import type { PLReportTx } from "@/types";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -31,7 +41,216 @@ const DEPTH_STYLES = [
   { bg: "#ffffff", text: "text-gray-500",   font: "",              border: "border-gray-50"    },
 ] as const;
 
-const numCell = "px-2 py-1 text-right text-[11px] tabular-nums whitespace-nowrap";
+/**
+ * HOMESÍ 2025 depth styling, used by the P&L Notes view.
+ *
+ * Kept as a separate ramp rather than replacing DEPTH_STYLES so the redesign
+ * can land on one report at a time: P&L All keeps its current look until its
+ * own pass. Typography carries the nesting (bold navy → semibold slate →
+ * light small), which is what makes a long table scannable once colour is
+ * reserved for meaning rather than depth.
+ */
+const HOMESI_DEPTH_STYLES = [
+  // Opaque, not rgba: this tone lands on the frozen first column, and a
+  // translucent pinned cell shows the month columns sliding underneath it.
+  { bg: "#f4f7fa",               text: "text-[#001A40]",  font: "font-bold",     border: "border-slate-200"   },
+  { bg: "transparent",           text: "text-slate-800",  font: "font-semibold", border: "border-slate-200/70" },
+  { bg: "transparent",           text: "text-slate-800",  font: "font-semibold", border: "border-slate-200/60" },
+  { bg: "transparent",           text: "text-slate-600",  font: "",              border: "border-slate-200/50" },
+  { bg: "transparent",           text: "text-slate-500",  font: "",              border: "border-slate-200/50" },
+] as const;
+
+// Compact executive density: ~6px of vertical padding per data cell, so the
+// maximum number of rows fits on one screen.
+const numCell =
+  "px-3 py-1.5 text-right text-xs font-sans tabular-nums font-medium whitespace-nowrap";
+
+/** Light executive table header. Replaces the solid navy band, which spanned
+ *  the full width of a twelve-month report and competed with the figures. */
+const TH_LIGHT =
+  "bg-slate-100/90 px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-800";
+
+/** Vertical grid rule that keeps adjacent month columns distinct. */
+const colRule = "border-r border-slate-200/60";
+
+/**
+ * Width of the hierarchy column, in px.
+ *
+ * A range rather than a single value: the column grows with the content up to
+ * the maximum, so short hierarchies stop wasting horizontal space and long
+ * descriptions get 140px more before the ellipsis than the old fixed 240 did.
+ * Every pixel here is one the month columns cannot use, which is why it is
+ * capped at all — the report is read horizontally, category then across months.
+ *
+ * Labels that still overflow are clipped and carry the full text in a `title`.
+ * That costs a hover, and it is a known limitation: there is no way to search
+ * the hierarchy, so a row can be hard to locate in a long report.
+ */
+const FIRST_COL_MIN_W = 240;
+const FIRST_COL_MAX_W = 380;
+
+const firstColStyle: React.CSSProperties = {
+  minWidth: FIRST_COL_MIN_W, maxWidth: FIRST_COL_MAX_W,
+  position: "sticky", left: 0,
+};
+
+/**
+ * The Total column is pinned to the right so it stays visible as months
+ * accumulate. Only the month columns between the two pinned edges scroll.
+ */
+const totalColStyle: React.CSSProperties = { position: "sticky", right: 0 };
+
+/**
+ * Floor for the Total column.
+ *
+ * It carries the largest figure in the report and, with basis points on, a
+ * badge beside it. Without a floor the column collapsed to its header width and
+ * clipped both — the word "Total" itself was being cut off.
+ */
+const totalColSize: React.CSSProperties = { minWidth: 135 };
+
+// ─── Note indicators ──────────────────────────────────────────────────────────
+
+/**
+ * Wraps a numeric cell so it can be clicked to open its notes.
+ *
+ * Two indicator styles, because roll-up means the upper rows of the report
+ * would otherwise be a wall of identical dots: a solid dot marks a note written
+ * on this exact cell, a hollow one marks notes inherited from levels below.
+ */
+function NoteCellContent({
+  text,
+  hasNote,
+  isDirect,
+  badgeClass = "",
+  bps,
+  reserveBpsSlot = false,
+}: {
+  text: string;
+  hasNote: boolean;
+  isDirect: boolean;
+  /** Negative-total badge in the HOMESÍ theme; empty elsewhere. */
+  badgeClass?: string;
+  /** Already-formatted basis points, rendered beside the figure. */
+  bps?: string | null;
+  /**
+   * Hold the badge's width open on a row that has no basis points of its own.
+   * Total Income has no bps, and without the reserved slot its figures would
+   * sit a badge-width to the right of every row beneath them.
+   */
+  reserveBpsSlot?: boolean;
+}) {
+  return (
+    // Inline, never stacked. A second line under the figure doubles the height
+    // of every row in the report the moment bps are switched on, which undoes
+    // the compact density the whole grid is built around.
+    <span className="flex w-full flex-row items-center justify-end gap-1.5 whitespace-nowrap">
+      <span className={`inline-flex items-center justify-end gap-1 ${badgeClass}`}>
+        {hasNote && (
+          <span
+            aria-label={isDirect ? "Has a note" : "Has notes at a more detailed level"}
+            className={
+              isDirect
+                ? "inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF4040]"
+                : "inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-[#001A40]/40"
+            }
+          />
+        )}
+        {text}
+      </span>
+      {bps != null ? (
+        // Plain muted text, no fill and no border. Boxed, it repeated a framed
+        // chip on every figure of every month and the grid read as saturated
+        // before a single number had been taken in.
+        //
+        // Fixed width all the same, and that is not decoration: "—" and
+        // "123.4 bps" have different natural widths, so a content-width element
+        // would leave each figure in a slightly different place and the column
+        // of amounts would zig-zag down the page.
+        <span className="ml-1 inline-block w-[52px] shrink-0 text-left font-mono text-[10px] font-normal text-slate-400">
+          {/* "— bps" would read as a unit on a missing value, so the dash goes
+              on its own when there is nothing to divide by. */}
+          {bps === "—" ? "—" : `${bps} bps`}
+        </span>
+      ) : reserveBpsSlot ? (
+        <span aria-hidden className="ml-1 inline-block w-[52px] shrink-0" />
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Basis points of a figure against the month's loan volume.
+ *
+ * Returns null when there is nothing to divide by. A zero would be a lie: the
+ * answer is not "0 bps", it is "not computable" — the month has no loan volume
+ * in the chosen base, or the branch filter selects branches that carry no loans
+ * at all. The caller renders a dash, and the strip above the table explains
+ * which of the two it is.
+ *
+ * One decimal. With a base near $12M a single bp is about $1,200, so integers
+ * throw away real resolution on small lines; two decimals is noise. A figure
+ * that is non-zero but rounds below 0.1 shows as "<0.1" rather than "0.0", so a
+ * small real number never reads as nothing.
+ *
+ * The sign is kept. A P&L is mostly negative at detail level, so most of these
+ * are negative — and the bps sits directly under the figure it comes from, where
+ * an unsigned value would contradict the number above it.
+ */
+function fmtBps(value: number | undefined, base: number | undefined): string | null {
+  if (!base) return null;
+  const v = value ?? 0;
+  const bps = (v / base) * 10000;
+  if (v !== 0 && Math.abs(bps) < 0.05) return bps < 0 ? "<-0.1" : "<0.1";
+  return bps.toFixed(1);
+}
+
+/** Everything the recursive renderer needs beyond the nodes themselves. */
+interface RenderCtx {
+  months: string[];
+  exp: Set<string>;
+  toggle: (k: string) => void;
+  descSort: "asc" | "desc" | null;
+  /**
+   * Off for every report whose hierarchy the user can reorder. In those the
+   * same note would surface on a different-looking row depending on how the
+   * pivot happens to be arranged that day, so the cells stay read-only and no
+   * indicator is drawn. Only the fixed-hierarchy P&L Notes view turns this on.
+   */
+  notesOn: boolean;
+  noteAny: Set<string>;
+  noteDirect: Set<string>;
+  openCell: (cell: NoteDrawerCell) => void;
+  baseScope: NoteScope;
+  /** HOMESÍ 2025 styling: zebra striping, sky hover, typographic depth ramp. */
+  homesi: boolean;
+  /** Loan volume per month for the chosen bps base. Null turns bps off. */
+  bpsBase: Record<string, number> | null;
+  /** Sum of the displayed months' bases, for the Total column — its denominator
+   *  is not any single month but the whole span the column covers. */
+  bpsBaseTotal: number;
+}
+
+/**
+ * Row background for the HOMESÍ theme.
+ *
+ * Zebra striping cannot be done with even:/odd: utilities here because the rows
+ * are pushed into one flat array across recursion levels, so a row's parity is
+ * only known at build time — it is threaded explicitly instead.
+ */
+function homesiRowBg(index: number): string {
+  // even:bg-white / odd:bg-slate-50/50, written as an inline colour rather than
+  // a class because the sticky first and Total columns must repaint the exact
+  // same tone — a pinned cell that is even slightly transparent lets the
+  // scrolling month columns show through it.
+  //
+  // Which is exactly what this used to do: the odd stripe was
+  // rgba(248,250,252,0.5), so the frozen first column bled the months passing
+  // underneath it on every other row. #fcfdfe is that same colour resolved
+  // against white, opaque, so the stripe looks identical and the pinned cells
+  // actually cover what is behind them.
+  return index % 2 === 0 ? "#ffffff" : "#fcfdfe";
+}
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
@@ -43,6 +262,50 @@ function fmtM(v: number | undefined): string {
 function mvCls(v: number | undefined): string {
   if (!v) return "text-gray-300";
   return v > 0 ? "text-emerald-700" : "text-red-600";
+}
+
+/**
+ * HOMESÍ value colouring. Positives stay neutral so the eye is not pulled to
+ * every ordinary figure; zeros recede; negatives are tinted, and only totals
+ * and subtotals get the rose badge — a P&L is mostly negative at detail level,
+ * so badging every row would paint the whole table.
+ */
+function homesiValueCls(v: number | undefined): string {
+  // Muted zero state: "—" and 0.00 recede rather than competing with real
+  // figures for attention.
+  if (!v) return "text-slate-300 font-normal";
+  // Red by exception. A positive figure is the ordinary case in a report and
+  // gets no colour of its own; only a loss is worth an eye movement.
+  return v < 0 ? "text-rose-600 font-medium" : "text-[#001A40] font-medium";
+}
+
+/**
+ * Badge for the Net Income closing rows — and only those.
+ *
+ * Every hierarchy row used to get this treatment, which meant a report was a
+ * field of emerald pills on every positive figure. A badge that appears on
+ * hundreds of rows tells the reader nothing; reserved for the two bottom lines
+ * it tells them where the answer is.
+ */
+function netIncomeBadge(v: number | undefined): string {
+  if (v == null || v === 0) return "";
+  return v < 0
+    ? "bg-rose-50 text-rose-700 font-bold px-1.5 py-0.5 rounded"
+    : "bg-emerald-50 text-emerald-800 font-bold px-1.5 py-0.5 rounded";
+}
+
+/**
+ * Total Income banner values.
+ *
+ * A loss gets the pastel rose badge; everything else stays plain navy, set on
+ * the cell itself. No emerald here even though netIncomeBadge has one: this is
+ * the top line, not the bottom line, and it is always on screen — badging its
+ * ordinary state would make the badge mean "this row exists".
+ */
+function grandTotalBadge(v: number | undefined): string {
+  return v != null && v < 0
+    ? "text-rose-700 bg-rose-50/80 px-2 py-0.5 rounded"
+    : "";
 }
 
 function mvClsLight(v: number | undefined): string {
@@ -61,6 +324,41 @@ export interface PivotTableDynamicProps {
   storageKey?: string;
   loading?: boolean;
   emptyMessage?: string;
+  /**
+   * Turns on click-to-note and the cell indicators. Off by default, and only
+   * safe to enable when `lockHierarchy` is set: in a reorderable pivot the same
+   * note lands on a differently-shaped row depending on how the user arranged
+   * the levels that day, so the icon appears to move while the underlying
+   * figure has not changed.
+   */
+  enableNotes?: boolean;
+  /** Hides the "Pivot by:" bar so the hierarchy cannot be reordered. */
+  lockHierarchy?: boolean;
+  /** HOMESÍ 2025 styling. Opt-in so the redesign can roll out one report at a
+   *  time instead of changing every pivot at once. */
+  homesiTheme?: boolean;
+  /** Notes for the loaded report. Fetched by the page, not by this component,
+   *  so adding a note never re-downloads the transactions. */
+  notes?: readonly PLNote[];
+  /** Called after a note is created or deleted, so the page can refetch them. */
+  onNotesChanged?: () => void;
+  /** Reports transaction-level notes whose transaction no longer exists, so the
+   *  page can show them instead of letting them disappear. */
+  onOrphansChange?: (orphans: PLNote[]) => void;
+  /** The single year the report covers, when unambiguous. Omitted for
+   *  multi-year loads, where a month column merges several years and the cell
+   *  genuinely has no single period. */
+  scopeYear?: number;
+  /**
+   * Loan volume by month for the selected bps base, already resolved by the
+   * page. Passing resolved numbers rather than raw metrics keeps the corporate
+   * branch rule (700) in one place — the endpoint decides, this component only
+   * draws. Null or absent turns the annotation off.
+   */
+  bpsBaseByMonth?: Record<string, number> | null;
+  /** Name of the chosen base, printed in the table header so a screenshot of
+   *  the grid alone still says what the bps were computed against. */
+  bpsBaseLabel?: string | null;
 }
 
 // ─── Recursive renderer (mutates `rows` for performance) ─────────────────────
@@ -68,15 +366,85 @@ export interface PivotTableDynamicProps {
 function renderPivotNodes(
   nodes: PivotNode[],
   depth: number,
-  months: string[],
-  exp: Set<string>,
-  toggle: (k: string) => void,
   rows: React.ReactNode[],
   pathPrefix: string,
-  descSort: "asc" | "desc" | null,
+  labelPath: string[],
+  ctx: RenderCtx,
 ) {
-  const ds = DEPTH_STYLES[Math.min(depth, DEPTH_STYLES.length - 1)];
+  const { months, exp, toggle, descSort, homesi } = ctx;
+  const ramp = homesi ? HOMESI_DEPTH_STYLES : DEPTH_STYLES;
+  const ds = ramp[Math.min(depth, ramp.length - 1)];
   const pl = depth * 16 + 8;
+  // Sticky first column: opaque so month values cannot scroll underneath it.
+  const stickyCol = homesi
+    ? "sticky left-0 z-20 border-r-2 border-slate-200 shadow-xs"
+    : "";
+  const rowHover = homesi
+    ? "hover:bg-[#A6DEFF]/25 transition-colors cursor-pointer"
+    : "";
+  // Pinned cells must be opaque or the scrolling months show through them.
+  // Detail rows are white outside the HOMESÍ theme and zebra-striped within it.
+  const rowBgFor = (idx: number) => (homesi ? homesiRowBg(idx) : "#ffffff");
+
+  /** Numeric cell for a leaf transaction row. */
+  const leafCells = (t: TxLeaf, nodeScope: NoteScope, trail: string[]) => {
+    // Key scope, month excluded — cellKey adds the period as its suffix.
+    const leafScope: NoteScope = { ...nodeScope, transaction_id: t.txId };
+    const scopeOf = (month: string | null): NoteScope => ({
+      ...leafScope,
+      ...(month ? { month } : {}),
+    });
+    const open = (month: string | null, amount: number) =>
+      ctx.openCell({
+        scope: scopeOf(month),
+        breadcrumb: [...trail, t.desc ?? t.vendor ?? "—", ...(month ? [month] : [])],
+        amount,
+        month,
+        transactions: [t],
+        transactionId: t.txId,
+        level: "transaction",
+      });
+
+    return (
+      <>
+        {months.map((m) => {
+          const key = cellKey(leafScope, m);
+          const shown = m === t.month;
+          const clickable = ctx.notesOn && shown;
+          // Detail rows never carry the negative badge — plain tinted text only.
+          const valueCls = homesi ? homesiValueCls(t.mvmt) : mvCls(t.mvmt);
+          return (
+            <td
+              key={m}
+              onClick={clickable ? (e) => { e.stopPropagation(); open(m, t.mvmt); } : undefined}
+              className={`${numCell} ${homesi ? colRule : ""} ${shown ? valueCls : homesi ? "text-slate-300 font-normal" : "text-gray-200"} ${clickable ? "cursor-pointer" : ""}`}
+            >
+              {shown && (
+                <NoteCellContent
+                  text={fmtM(t.mvmt)}
+                  hasNote={ctx.notesOn && ctx.noteAny.has(key)}
+                  isDirect={ctx.noteDirect.has(key)}
+                  bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBase[m]) ?? "—" : null}
+                />
+              )}
+            </td>
+          );
+        })}
+        <td
+          onClick={ctx.notesOn ? (e) => { e.stopPropagation(); open(null, t.mvmt); } : undefined}
+          style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: rowBgFor(rows.length) }}
+          className={`${numCell} text-[10px] ${homesi ? homesiValueCls(t.mvmt) : mvCls(t.mvmt)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+        >
+          <NoteCellContent
+            text={fmtM(t.mvmt)}
+            hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(leafScope, null))}
+            isDirect={ctx.noteDirect.has(cellKey(leafScope, null))}
+            bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBaseTotal) ?? "—" : null}
+          />
+        </td>
+      </>
+    );
+  };
 
   for (const node of nodes) {
     const nodeKey    = `${pathPrefix}|${node.field}:${node.key}`;
@@ -95,21 +463,22 @@ function renderPivotNodes(
             return dir * (a.desc ?? "").localeCompare(b.desc ?? "", undefined, { sensitivity: "base" });
           })
         : node.txLeaves;
+      const flatScope: NoteScope = { ...ctx.baseScope, ...node.scope };
       for (const t of flatLeaves) {
         rows.push(
-          <tr key={`flat|leaf:${t.id}`} className="border-b border-gray-50 hover:bg-blue-50/20">
+          <tr
+            key={`flat|leaf:${t.id}`}
+            className={`group border-b ${homesi ? `border-slate-200/50 ${rowHover}` : "border-gray-50 hover:bg-slate-50"}`}
+            style={homesi ? { backgroundColor: homesiRowBg(rows.length) } : undefined}
+          >
             <td
-              style={{ paddingLeft: 8, position: "sticky", left: 0, zIndex: 10, backgroundColor: "#fff" }}
-              className="pr-2 py-0.5 text-[10px] text-gray-500 max-w-[280px] truncate whitespace-nowrap"
+              title={t.desc ?? t.vendor ?? undefined}
+              style={{ ...firstColStyle, paddingLeft: 8, zIndex: 20, backgroundColor: rowBgFor(rows.length) }}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-500 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
-            {months.map(m => (
-              <td key={m} className={`${numCell} text-[10px] ${m === t.month ? mvCls(t.mvmt) : "text-gray-200"}`}>
-                {m === t.month ? fmtM(t.mvmt) : ""}
-              </td>
-            ))}
-            <td className={`${numCell} text-[10px] ${mvCls(t.mvmt)} border-l border-gray-100`}>{fmtM(t.mvmt)}</td>
+            {leafCells(t, flatScope, labelPath)}
           </tr>
         );
       }
@@ -142,16 +511,36 @@ function renderPivotNodes(
       borderClass = ds.border;
     }
 
+    const nodeScope: NoteScope = { ...ctx.baseScope, ...node.scope };
+    const nodeTrail = [...labelPath, node.label];
+    const openNodeCell = (month: string | null, amount: number) =>
+      ctx.openCell({
+        scope: month ? { ...nodeScope, month } : nodeScope,
+        breadcrumb: month ? [...nodeTrail, month] : nodeTrail,
+        amount,
+        month,
+        // Only a leaf group has its transactions materialized; an aggregate row
+        // keeps them in its children, so the drawer asks the user to expand.
+        transactions: node.txLeaves,
+        level: node.field,
+      });
+
+    // Depth-2+ HOMESÍ rows sit on the zebra stripe; depth 0/1 keep the tinted
+    // band from the ramp so the top of the hierarchy still reads as a header.
+    const homesiBg = ds.bg === "transparent" ? homesiRowBg(rows.length) : ds.bg;
+    const effectiveBg = homesi ? homesiBg : rowBg;
+
     rows.push(
       <tr
         key={nodeKey}
-        className={`border-b ${borderClass} ${canToggle ? "cursor-pointer" : ""}`}
-        style={{ backgroundColor: rowBg }}
+        className={`group border-b ${borderClass} ${canToggle ? "cursor-pointer" : ""} ${homesi ? rowHover : ""}`}
+        style={{ backgroundColor: effectiveBg }}
         onClick={() => { if (canToggle) toggle(nodeKey); }}
       >
         <td
-          style={{ backgroundColor: rowBg, paddingLeft: pl, position: "sticky", left: 0, zIndex: 10, ...firstTdExtra }}
-          className={`pr-2 py-1 text-[11px] ${textClass} ${fontClass} whitespace-nowrap max-w-[320px] truncate`}
+          title={node.label}
+          style={{ ...firstColStyle, backgroundColor: effectiveBg, paddingLeft: pl, zIndex: 20, ...firstTdExtra }}
+          className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${textClass} ${fontClass} ${homesi ? `text-xs ${stickyCol}` : "text-[11px]"}`}
         >
           <span className="inline-flex items-center gap-1">
             {canToggle
@@ -162,13 +551,37 @@ function renderPivotNodes(
             {node.label}
           </span>
         </td>
-        {months.map(m => (
-          <td key={m} className={`${numCell} ${fontClass} ${mvCls(node.byMonth[m])}`}>
-            {fmtM(node.byMonth[m])}
-          </td>
-        ))}
-        <td className={`${numCell} ${fontClass} ${mvCls(node.total)} border-l border-gray-100`}>
-          {fmtM(node.total)}
+        {months.map(m => {
+          const key = cellKey(nodeScope, m);
+          const v = node.byMonth[m];
+          return (
+            <td
+              key={m}
+              onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(m, v ?? 0); } : undefined}
+              className={`${numCell} ${homesi ? colRule : ""} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+            >
+              {/* No badge on hierarchy rows. Colour carries the sign; the pill
+                  is reserved for the Net Income closing lines. */}
+              <NoteCellContent
+                text={fmtM(v)}
+                hasNote={ctx.notesOn && ctx.noteAny.has(key)}
+                isDirect={ctx.noteDirect.has(key)}
+                bps={ctx.bpsBase ? fmtBps(v, ctx.bpsBase[m]) ?? "—" : null}
+              />
+            </td>
+          );
+        })}
+        <td
+          onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(null, node.total); } : undefined}
+          style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: effectiveBg }}
+          className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+        >
+          <NoteCellContent
+            text={fmtM(node.total)}
+            hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(nodeScope, null))}
+            isDirect={ctx.noteDirect.has(cellKey(nodeScope, null))}
+            bps={ctx.bpsBase ? fmtBps(node.total, ctx.bpsBaseTotal) ?? "—" : null}
+          />
         </td>
       </tr>
     );
@@ -177,7 +590,7 @@ function renderPivotNodes(
 
     // Recurse into children
     if (node.children.length > 0) {
-      renderPivotNodes(node.children, depth + 1, months, exp, toggle, rows, nodeKey, descSort);
+      renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx);
     }
 
     // Leaf transaction rows
@@ -191,19 +604,19 @@ function renderPivotNodes(
         : node.txLeaves;
       for (const t of sortedLeaves) {
         rows.push(
-          <tr key={`${nodeKey}|leaf:${t.id}`} className="border-b border-gray-50 hover:bg-blue-50/20">
+          <tr
+            key={`${nodeKey}|leaf:${t.id}`}
+            className={`group border-b ${homesi ? `border-slate-200/50 ${rowHover}` : "border-gray-50 hover:bg-slate-50"}`}
+            style={homesi ? { backgroundColor: homesiRowBg(rows.length) } : undefined}
+          >
             <td
-              style={{ paddingLeft: leafPl, position: "sticky", left: 0, zIndex: 10, backgroundColor: "#fff" }}
-              className="pr-2 py-0.5 text-[10px] text-gray-400 max-w-[280px] truncate whitespace-nowrap"
+              title={t.desc ?? t.vendor ?? undefined}
+              style={{ ...firstColStyle, paddingLeft: leafPl, zIndex: 20, backgroundColor: rowBgFor(rows.length) }}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-400 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
-            {months.map(m => (
-              <td key={m} className={`${numCell} text-[10px] ${m === t.month ? mvCls(t.mvmt) : "text-gray-200"}`}>
-                {m === t.month ? fmtM(t.mvmt) : ""}
-              </td>
-            ))}
-            <td className={`${numCell} text-[10px] ${mvCls(t.mvmt)} border-l border-gray-100`}>{fmtM(t.mvmt)}</td>
+            {leafCells(t, nodeScope, nodeTrail)}
           </tr>
         );
       }
@@ -230,24 +643,46 @@ function renderPivotNodes(
 
     // Op/NonOp Net Income footer (when has content)
     if (isOpNonOp && hasContent) {
-      const footerBg    = isOp ? "#dcfce7" : "#f1f5f9";
+      // Neutral fill in the HOMESÍ theme. The Operational footer used to be a
+      // full-width emerald band, which is the loudest green in the report and
+      // would swallow the pill that now carries the actual result. The 3px left
+      // rule still marks which of the two closings this is.
+      const footerBg    = homesi ? "#f1f5f9" : isOp ? "#dcfce7" : "#f1f5f9";
       const footerAcc   = isOp ? "#16a34a" : "#64748b";
-      const footerText  = isOp ? "text-emerald-900" : "text-slate-800";
+      const footerText  = homesi ? "text-[#001A40]" : isOp ? "text-emerald-900" : "text-slate-800";
       const footerLabel = isOp ? "Net Income (Operational)" : "Net Income (Non-Operational)";
       rows.push(
         <tr key={`${nodeKey}|net`} style={{ backgroundColor: footerBg }} className="border-b border-gray-200">
           <td
-            style={{ backgroundColor: footerBg, borderLeft: `3px solid ${footerAcc}`, paddingLeft: pl + 16, position: "sticky", left: 0, zIndex: 10 }}
-            className={`pr-3 py-1.5 text-[11px] font-extrabold ${footerText} whitespace-nowrap`}
+            title={footerLabel}
+            style={{ ...firstColStyle, backgroundColor: footerBg, borderLeft: `3px solid ${footerAcc}`, paddingLeft: pl + 16, zIndex: 20 }}
+            className={`pr-3 py-1.5 text-[11px] font-extrabold ${footerText} whitespace-nowrap truncate`}
           >
             {footerLabel}
           </td>
           {months.map(m => (
-            <td key={m} className={`${numCell} font-extrabold ${mvCls(node.byMonth[m])}`}>
-              {fmtM(node.byMonth[m])}
+            <td key={m} className={`${numCell} font-extrabold ${homesi ? homesiValueCls(node.byMonth[m]) : mvCls(node.byMonth[m])}`}>
+              <NoteCellContent
+                text={fmtM(node.byMonth[m])}
+                hasNote={false}
+                isDirect={false}
+                badgeClass={homesi ? netIncomeBadge(node.byMonth[m]) : ""}
+                bps={ctx.bpsBase ? fmtBps(node.byMonth[m], ctx.bpsBase[m]) ?? "—" : null}
+              />
             </td>
           ))}
-          <td className={`${numCell} font-extrabold ${mvCls(node.total)} border-l border-gray-100`}>{fmtM(node.total)}</td>
+          <td
+            style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: footerBg }}
+            className={`${numCell} font-extrabold ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l border-gray-100`}
+          >
+            <NoteCellContent
+              text={fmtM(node.total)}
+              hasNote={false}
+              isDirect={false}
+              badgeClass={homesi ? netIncomeBadge(node.total) : ""}
+              bps={ctx.bpsBase ? fmtBps(node.total, ctx.bpsBaseTotal) ?? "—" : null}
+            />
+          </td>
         </tr>
       );
     }
@@ -283,6 +718,15 @@ export function PivotTableDynamic({
   storageKey,
   loading,
   emptyMessage = "No data",
+  enableNotes = false,
+  lockHierarchy = false,
+  homesiTheme = false,
+  notes,
+  onNotesChanged,
+  onOrphansChange,
+  scopeYear,
+  bpsBaseByMonth,
+  bpsBaseLabel,
 }: PivotTableDynamicProps) {
   const [activeLevels, setActiveLevels] = useState<PivotField[]>(() =>
     storageKey ? readStorage(storageKey, defaultLevels) : defaultLevels
@@ -290,6 +734,7 @@ export function PivotTableDynamic({
   const [addOpen, setAddOpen] = useState(false);
   const [exp, setExp] = useState<Set<string>>(new Set());
   const [descSort, setDescSort] = useState<"asc" | "desc" | null>(null);
+  const [openCell, setOpenCell] = useState<NoteDrawerCell | null>(null);
   const addRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -374,10 +819,69 @@ export function PivotTableDynamic({
     return activeLevels.includes("op_nonop") ? expandForOpNonOp(base) : base as ExpandedTx[];
   }, [txs, activeLevels, splitsMap]);
 
-  const tree = useMemo(
-    () => buildDynamicPivot(workingTxs, activeLevels),
-    [workingTxs, activeLevels],
+  // Scope shared by every cell of the report. The grand total row sits at this
+  // level, so wrapping the tree in a synthetic root makes the note walk below
+  // cover it with the same code path as any other row.
+  const baseScope = useMemo<NoteScope>(
+    () => (scopeYear != null ? { year: scopeYear } : {}),
+    [scopeYear],
   );
+
+  // Seed the tree with baseScope so every node carries the period. Building it
+  // from an empty scope and prepending baseScope only at render time made the
+  // note index key a node one way and the renderer another, so no indicator
+  // ever matched below the grand total.
+  const tree = useMemo(
+    () => buildDynamicPivot(workingTxs, activeLevels, baseScope as Record<string, string>),
+    [workingTxs, activeLevels, baseScope],
+  );
+
+  /**
+   * Transaction-level notes are re-anchored against the live transactions
+   * rather than trusting the scope stored in the database: under the superset
+   * rule a note carrying only {transaction_id} would never roll up into an
+   * aggregate cell, and deriving it here also keeps notes correct after the GL
+   * mapping is edited and their transaction is re-categorized.
+   */
+  const resolved = useMemo(
+    () => (enableNotes && notes?.length
+      ? resolveNotes(notes, workingTxs, activeLevels, scopeYear)
+      : { placed: [], orphaned: [] }),
+    [enableNotes, notes, workingTxs, activeLevels, scopeYear],
+  );
+  const resolvedNotes = resolved.placed;
+
+  // Surfaced to the page so it can render the orphan panel — the component
+  // owns the resolution, but the panel lives outside the table.
+  useEffect(() => { onOrphansChange?.(resolved.orphaned); }, [resolved.orphaned, onOrphansChange]);
+
+  const noteIndex = useMemo(
+    () => (enableNotes
+      ? buildNoteIndex(resolvedNotes, [{ scope: baseScope, children: tree }])
+      : { any: new Set<string>(), direct: new Set<string>() }),
+    [enableNotes, resolvedNotes, tree, baseScope],
+  );
+
+  const scopeOrder = useMemo<ScopeKey[]>(
+    () => [...activeLevels, "month", "year"] as ScopeKey[],
+    [activeLevels],
+  );
+
+  /** Stable ids stored in a scope are not display text — resolve them back. */
+  const labelFor = useMemo(() => {
+    const glNames = new Map<string, string>();
+    const ccNames = new Map<string, string>();
+    for (const tx of workingTxs) {
+      if (tx.gl_code) glNames.set(tx.gl_code, tx.gl_name ? `${tx.gl_code} — ${tx.gl_name}` : tx.gl_code);
+      if (tx.cost_center_id && tx.cost_centers?.name) ccNames.set(tx.cost_center_id, tx.cost_centers.name);
+    }
+    return (key: ScopeKey, value: string): string => {
+      if (key === "gl")          return glNames.get(value) ?? value;
+      if (key === "cost_center") return ccNames.get(value) ?? defaultScopeLabel(key, value);
+      if (key === "transaction_id") return "";
+      return defaultScopeLabel(key, value);
+    };
+  }, [workingTxs]);
 
   if (loading) {
     return (
@@ -396,68 +900,151 @@ export function PivotTableDynamic({
     ? activeLevels.map(f => FIELD_LABELS[f]).join(" → ")
     : "All Transactions";
 
+  // Total Income banner.
+  //
+  // A solid colour, not bg-slate-100/90: the three cells of this row are sticky
+  // (first column, months, Total) and a translucent background lets the rows
+  // scrolling underneath show through the pinned edges. #f1f5f9 is slate-100 —
+  // the same tone the class resolves to over white, without the transparency.
   const gtStyle: React.CSSProperties = {
-    position: "sticky", top: 30, zIndex: 14, backgroundColor: TOTAL_BG,
+    position: "sticky", top: 30, zIndex: 14,
+    backgroundColor: homesiTheme ? "#f1f5f9" : TOTAL_BG,
+    borderBottom: homesiTheme ? "2px solid #cbd5e1" : undefined,
   };
 
   const rows: React.ReactNode[] = [];
+
+  // The Total column spans every displayed month, so its denominator is the sum
+  // of those months' bases — not any single month's.
+  const bpsBaseTotal = bpsBaseByMonth
+    ? months.reduce((s, m) => s + (bpsBaseByMonth[m] ?? 0), 0)
+    : 0;
 
   // Total Income sticky row (always visible, based on raw txs)
   rows.push(
     <tr key="__grand__">
       <td
-        style={{ ...gtStyle, left: 0, zIndex: 20, paddingLeft: 12 }}
-        className="pr-3 py-2 text-[11px] font-extrabold text-white whitespace-nowrap"
+        style={{ ...gtStyle, ...firstColStyle, top: 30, zIndex: 22, paddingLeft: 12, backgroundColor: gtStyle.backgroundColor }}
+        className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 text-xs font-bold ${
+          homesiTheme ? "border-r-2 border-slate-300 text-[#001A40]" : "text-white"
+        }`}
       >
         Total Income
       </td>
-      {months.map(m => (
-        <td key={m} style={gtStyle} className={`${numCell} font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])}`}>
-          {fmtM(grandByMonth[m])}
-        </td>
-      ))}
+      {months.map(m => {
+        const key = cellKey(baseScope, m);
+        return (
+          <td
+            key={m}
+            style={gtStyle}
+            onClick={enableNotes ? () => setOpenCell({
+              scope: { ...baseScope, month: m },
+              breadcrumb: ["Total Income", m],
+              amount: grandByMonth[m] ?? 0,
+              month: m,
+              transactions: [],
+              level: "grand_total",
+            }) : undefined}
+            className={`${numCell} ${homesiTheme ? `${colRule} font-bold text-[#001A40]` : `font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])}`} ${enableNotes ? "cursor-pointer" : ""}`}
+          >
+            {enableNotes ? (
+              <NoteCellContent
+                text={fmtM(grandByMonth[m])}
+                hasNote={noteIndex.any.has(key)}
+                isDirect={noteIndex.direct.has(key)}
+                badgeClass={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}
+                bps={bpsBaseByMonth ? fmtBps(grandByMonth[m], bpsBaseByMonth[m]) ?? "—" : null}
+              />
+            ) : (
+              <span className={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}>
+                {fmtM(grandByMonth[m])}
+              </span>
+            )}
+          </td>
+        );
+      })}
       <td
-        style={{ ...gtStyle, borderLeft: "1px solid rgba(255,255,255,0.15)" }}
-        className={`${numCell} font-extrabold text-[12px] ${mvClsLight(grandTotal)}`}
+        style={{ ...gtStyle, ...totalColStyle, ...totalColSize, top: 30, zIndex: 21, borderLeft: homesiTheme ? "1px solid #cbd5e1" : "1px solid rgba(255,255,255,0.15)" }}
+        onClick={enableNotes ? () => setOpenCell({
+          scope: baseScope,
+          breadcrumb: ["Total Income"],
+          amount: grandTotal,
+          month: null,
+          transactions: [],
+          level: "grand_total",
+        }) : undefined}
+        className={`${numCell} ${homesiTheme ? "font-bold text-[#001A40]" : `font-extrabold text-[12px] ${mvClsLight(grandTotal)}`} ${enableNotes ? "cursor-pointer" : ""}`}
       >
-        {fmtM(grandTotal)}
+        {enableNotes ? (
+          <NoteCellContent
+            text={fmtM(grandTotal)}
+            hasNote={noteIndex.any.has(cellKey(baseScope, null))}
+            isDirect={noteIndex.direct.has(cellKey(baseScope, null))}
+            badgeClass={homesiTheme ? grandTotalBadge(grandTotal) : ""}
+            bps={bpsBaseByMonth ? fmtBps(grandTotal, bpsBaseTotal) ?? "—" : null}
+          />
+        ) : (
+          <span className={homesiTheme ? grandTotalBadge(grandTotal) : ""}>
+            {fmtM(grandTotal)}
+          </span>
+        )}
       </td>
     </tr>
   );
 
-  renderPivotNodes(tree, 0, months, exp, toggle, rows, "root", descSort);
+
+  renderPivotNodes(tree, 0, rows, "root", [], {
+    months,
+    exp,
+    toggle,
+    descSort,
+    notesOn: enableNotes,
+    noteAny: noteIndex.any,
+    noteDirect: noteIndex.direct,
+    openCell: setOpenCell,
+    baseScope,
+    homesi: homesiTheme,
+    bpsBase: bpsBaseByMonth ?? null,
+    bpsBaseTotal,
+  });
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Hierarchy selector */}
-      <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2">
-        <span className="mr-0.5 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-          Pivot by:
+      {/* Hierarchy selector — omitted entirely when the hierarchy is fixed, so
+          there is no affordance suggesting the levels can be rearranged. */}
+      {!lockHierarchy && (
+      <div className={`flex flex-wrap items-center gap-2 ${homesiTheme ? "rounded-2xl border border-slate-200 bg-slate-50 p-3" : "gap-1.5 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2"}`}>
+        <span className={`mr-0.5 shrink-0 uppercase ${homesiTheme ? "text-xs font-bold tracking-wider text-[#001A40]" : "text-[10px] font-semibold tracking-wide text-gray-400"}`}>
+          {homesiTheme ? "Pivot hierarchy:" : "Pivot by:"}
         </span>
 
         {activeLevels.map((field, idx) => (
           <Fragment key={field}>
-            {idx > 0 && <span className="select-none text-xs text-gray-300">→</span>}
-            <div className="inline-flex items-center rounded border border-gray-200 bg-white text-[11px] shadow-sm">
+            {idx > 0 && <span className="select-none text-xs text-slate-300">→</span>}
+            <div className={
+              homesiTheme
+                ? "inline-flex items-center gap-1.5 rounded-full border border-slate-200/90 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-xs hover:border-[#001A40]"
+                : "inline-flex items-center rounded border border-gray-200 bg-white text-[11px] shadow-sm"
+            }>
               <button
                 onClick={() => moveLevel(idx, -1)}
                 disabled={idx === 0}
                 title="Move left"
-                className="px-1.5 py-0.5 text-gray-400 hover:text-gray-600 disabled:cursor-default disabled:opacity-20"
+                className={`px-1.5 py-0.5 disabled:cursor-default disabled:opacity-20 ${homesiTheme ? "text-slate-400 hover:text-[#001A40]" : "text-gray-400 hover:text-gray-600"}`}
               >↑</button>
               <button
                 onClick={() => moveLevel(idx, 1)}
                 disabled={idx === activeLevels.length - 1}
                 title="Move right"
-                className="px-1.5 py-0.5 text-gray-400 hover:text-gray-600 disabled:cursor-default disabled:opacity-20"
+                className={`px-1.5 py-0.5 disabled:cursor-default disabled:opacity-20 ${homesiTheme ? "text-slate-400 hover:text-[#001A40]" : "text-gray-400 hover:text-gray-600"}`}
               >↓</button>
-              <span className="border-x border-gray-100 px-2 py-0.5 font-medium text-gray-700">
+              <span className={homesiTheme ? "px-0.5" : "border-x border-gray-100 px-2 py-0.5 font-medium text-gray-700"}>
                 {FIELD_LABELS[field]}
               </span>
               <button
                 onClick={() => removeLevel(idx)}
                 title="Remove level"
-                className="px-1.5 py-0.5 text-gray-300 hover:text-red-400"
+                className={`px-1.5 py-0.5 ${homesiTheme ? "text-slate-300 hover:text-[#FF4040]" : "text-gray-300 hover:text-red-400"}`}
               >×</button>
             </div>
           </Fragment>
@@ -496,35 +1083,77 @@ export function PivotTableDynamic({
           </button>
         )}
       </div>
+      )}
+
+      {/* Active bps base, stated once directly above the grid instead of
+          repeated inside every month header, where it collided with the short
+          month names and pushed the header out of shape. Sits inside the same
+          block as the table so it still travels with a screenshot of the
+          report — which is the point: 100 bps over banked volume and 100 bps
+          over total volume are different numbers that look identical. */}
+      {bpsBaseLabel && (
+        <div className="inline-flex items-center gap-1.5 self-start rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+          bps base
+          <span className="text-[#001A40]">{bpsBaseLabel}</span>
+        </div>
+      )}
+
+      {/* Hierarchy, as a breadcrumb above the grid. It used to fill the
+          top-left header cell, where five levels of label stretched the column
+          to several hundred pixels and pushed the months off the screen. Here
+          it can scroll on its own without dragging the table with it. */}
+      {activeLevels.length > 0 && (
+        <div className="mb-3 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap rounded-lg border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-500">
+          {activeLevels.map((f, i) => (
+            <Fragment key={f}>
+              {i > 0 && <span className="text-slate-300">→</span>}
+              <span className={i === activeLevels.length - 1 ? "text-[#001A40]" : ""}>
+                {FIELD_LABELS[f]}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      )}
 
       {/* Pivot table */}
       <div
-        className="overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm"
+        className={`max-w-[1380px] overflow-auto border shadow-xs ${homesiTheme ? "rounded-2xl border-slate-200 bg-white" : "rounded-xl border-gray-200 bg-white shadow-sm"}`}
         style={{ maxHeight: "calc(100vh - 240px)" }}
       >
         <table className="w-full border-collapse">
-          <thead className="sticky top-0 z-20 bg-gray-50">
-            <tr className="border-b border-gray-200">
-              <th className="sticky left-0 z-30 bg-gray-50 px-3 py-1.5 text-left text-[10px] font-semibold text-gray-500 whitespace-nowrap">
+          <thead className={`sticky top-0 z-20 ${homesiTheme ? "bg-slate-100/90" : "bg-gray-50"}`}>
+            <tr className={`${homesiTheme ? "border-b-2 border-slate-200" : "border-b border-gray-200"}`}>
+              <th
+                title={levelHeader}
+                style={{ ...firstColStyle, zIndex: 30 }}
+                className={`text-left ${homesiTheme ? `${TH_LIGHT} border-r-2 border-slate-200` : "bg-gray-50 px-3 py-1.5 text-[10px] font-semibold text-gray-500"}`}
+              >
                 <span className="inline-flex items-center gap-1.5">
-                  {levelHeader}
+                  {/* Short, fixed title. The hierarchy runs to five levels and
+                      several hundred characters; putting it here stretched the
+                      cell and pushed the month columns off screen. It now sits
+                      in a breadcrumb above the table. */}
+                  Category / Account
                   <button
                     onClick={() => setDescSort(d => d === null ? "asc" : d === "asc" ? "desc" : null)}
                     title={descSort === null ? "Sort descriptions A→Z" : descSort === "asc" ? "Sort descriptions Z→A" : "Clear description sort"}
-                    className="rounded p-0.5 text-gray-400 hover:bg-gray-200 hover:text-blue-600"
+                    className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-[#001A40]"
                   >
-                    {descSort === "asc"  ? <ArrowUpAZ   size={11} className="text-blue-500" /> :
-                     descSort === "desc" ? <ArrowDownAZ size={11} className="text-blue-500" /> :
+                    {descSort === "asc"  ? <ArrowUpAZ   size={11} className="text-[#001A40]" /> :
+                     descSort === "desc" ? <ArrowDownAZ size={11} className="text-[#001A40]" /> :
                                            <ChevronsUpDown size={11} />}
                   </button>
                 </span>
               </th>
               {months.map(m => (
-                <th key={m} className="bg-gray-50 px-2 py-1.5 text-right text-[10px] font-semibold text-gray-500 whitespace-nowrap">
+                <th key={m} className={`text-right whitespace-nowrap ${homesiTheme ? `${TH_LIGHT} ${colRule}` : "bg-gray-50 px-2 py-1.5 text-[10px] font-semibold text-gray-500"}`}>
                   {m.slice(0, 3)}
                 </th>
               ))}
-              <th className="border-l border-gray-200 bg-gray-50 px-2 py-1.5 text-right text-[10px] font-semibold text-gray-500 whitespace-nowrap">
+              <th
+                style={{ ...totalColStyle, ...totalColSize, zIndex: 25 }}
+                className={`border-l text-right whitespace-nowrap ${homesiTheme ? `border-slate-200 ${TH_LIGHT}` : "border-gray-200 bg-gray-50 px-2 py-1.5 text-[10px] font-semibold text-gray-500"}`}
+              >
                 Total
               </th>
             </tr>
@@ -532,6 +1161,17 @@ export function PivotTableDynamic({
           <tbody>{rows}</tbody>
         </table>
       </div>
+
+      {enableNotes && (
+        <NoteDrawer
+          cell={openCell}
+          notes={resolvedNotes}
+          scopeOrder={scopeOrder}
+          labelFor={labelFor}
+          onClose={() => setOpenCell(null)}
+          onChanged={() => onNotesChanged?.()}
+        />
+      )}
     </div>
   );
 }

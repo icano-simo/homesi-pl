@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, RefreshCw, AlertTriangle, Percent, Search, X, RotateCcw, ShieldCheck, Wand2, Trash2, Plus, DollarSign } from "lucide-react";
+import { Download, RefreshCw, AlertTriangle, Percent, Search, X, RotateCcw, ShieldCheck, Wand2, Trash2, Plus, DollarSign, MessageSquare } from "lucide-react";
 import { downloadCSV } from "@/lib/csv";
 import { ReportFilter } from "@/components/report-filter";
 import { SplitEditor } from "@/components/split-editor";
 import { buildSplitsMap } from "@/lib/apply-splits";
 import { useActiveBranches } from "@/components/branch-filter-provider";
 import { SplitDisplay } from "@/components/split-display";
+import { NotesLog } from "@/components/notes-log";
 import type { SplitEntry } from "@/lib/apply-splits";
 import type { CostCenter, EmployeeFeeConfig } from "@/types";
 import type { OABlock, OAGroupRow } from "@/app/api/offshore-allocations/route";
@@ -286,7 +287,7 @@ function BulkSplitDialog({
                 <button
                   onClick={() => setStep("confirm")}
                   disabled={!canProceed}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="rounded-full bg-[#FF4040] px-5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-[#e03535] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Review &amp; Apply →
                 </button>
@@ -364,7 +365,7 @@ function BulkSplitDialog({
                 <button
                   onClick={handleConfirm}
                   disabled={saving}
-                  className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-full bg-[#FF4040] px-5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-[#e03535] disabled:opacity-50"
                 >
                   {saving && (
                     <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -589,6 +590,7 @@ interface BlockTableProps {
   unassigning: string | null;
   unassignBusy: boolean;
   onEditAllocation: (row: OAGroupRow) => void;
+  onOpenNotes: (row: OAGroupRow) => void;
   onUnassign: (row: OAGroupRow) => void;
   onUnassignConfirm: (row: OAGroupRow) => void;
   onUnassignCancel: () => void;
@@ -603,7 +605,7 @@ function BlockTable({
   block, costCenters, filterYears, filterMonths, filterBranches,
   filterCategories, filterPositions, filterVendors, filterCCs, search,
   splitsMap, selected, onToggle,
-  unassigning, unassignBusy, onEditAllocation, onUnassign, onUnassignConfirm, onUnassignCancel,
+  unassigning, unassignBusy, onEditAllocation, onOpenNotes, onUnassign, onUnassignConfirm, onUnassignCancel,
   showFeeColumns, feeConfigs, feeSaving, onFeeChange,
 }: BlockTableProps) {
   const visibleRows = useMemo(
@@ -754,6 +756,15 @@ function BlockTable({
                           Edit allocation
                           <span className="text-gray-400 font-normal">({row.tx_count} tx)</span>
                         </button>
+                        {/* Change history for this employee or vendor — the
+                            "why" behind an allocation that was edited. */}
+                        <button
+                          onClick={() => onOpenNotes(row)}
+                          title="Notes for this employee/vendor"
+                          className="flex items-center rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-500 hover:border-blue-300 hover:text-blue-700"
+                        >
+                          <MessageSquare size={11} />
+                        </button>
                         {/* Unassign — only when a split is already defined */}
                         {splitsMap.get(`${row.assign_type}:${normGroupKey(row.assign_type, row.group_key)}`) && (
                           unassigning === row.group_key ? (
@@ -830,6 +841,7 @@ export default function OffshoreAllocationsPage() {
   const [search, setSearch]                     = useState("");
 
   const [editingRow, setEditingRow]       = useState<OAGroupRow | null>(null);
+  const [notesRow,   setNotesRow]         = useState<OAGroupRow | null>(null);
   const [unassigning, setUnassigning]     = useState<string | null>(null); // group_key being confirmed
   const [unassignBusy, setUnassignBusy]   = useState(false);
   const [selected, setSelected]           = useState<Set<string>>(new Set());
@@ -1511,6 +1523,7 @@ export default function OffshoreAllocationsPage() {
               unassigning={unassigning}
               unassignBusy={unassignBusy}
               onEditAllocation={setEditingRow}
+              onOpenNotes={setNotesRow}
               onUnassign={(row) => setUnassigning(row.group_key)}
               onUnassignConfirm={async (row) => {
                 if (!row.assign_type) return;
@@ -1609,7 +1622,7 @@ export default function OffshoreAllocationsPage() {
               <button
                 onClick={handleApplyExisting}
                 disabled={applyRunning}
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-full bg-[#FF4040] px-5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-[#e03535] disabled:opacity-50"
               >
                 {applyRunning && (
                   <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -1637,6 +1650,50 @@ export default function OffshoreAllocationsPage() {
             fetchData();
           }}
         />
+      )}
+
+      {/* Per-employee / per-vendor note log. Anchored by the same
+          (assign_type, assign_value) pair cc_allocation_splits uses, so a note
+          stays attached to the entity whose allocation it explains. */}
+      {notesRow && notesRow.assign_type && (
+        <>
+          <div className="fixed inset-0 z-40 bg-slate-900/20" onClick={() => setNotesRow(null)} aria-hidden />
+          <aside
+            role="dialog"
+            aria-label="Entity notes"
+            className="fixed right-0 top-0 z-50 flex h-full w-full max-w-[420px] flex-col border-l border-slate-200 bg-white shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  {notesRow.assign_type === "vendor" ? "Vendor notes" : "Employee notes"}
+                </p>
+                <p className="mt-0.5 truncate text-sm font-bold text-[#001A40]">
+                  {notesRow.check_description_3 ?? notesRow.group_key}
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-400">{notesRow.tx_count} transactions</p>
+              </div>
+              <button
+                onClick={() => setNotesRow(null)}
+                aria-label="Close"
+                className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <NotesLog
+                level={notesRow.assign_type === "vendor" ? "vendor" : "description3"}
+                scope={{
+                  assign_type:  notesRow.assign_type,
+                  assign_value: normGroupKey(notesRow.assign_type, notesRow.group_key),
+                }}
+                entityLabel={notesRow.check_description_3 ?? notesRow.group_key}
+                emptyMessage="No notes yet — record why an allocation changed."
+              />
+            </div>
+          </aside>
+        </>
       )}
 
       {/* Bulk split dialog */}

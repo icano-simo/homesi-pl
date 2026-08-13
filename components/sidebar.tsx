@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -16,6 +17,7 @@ import {
   BookOpen,
   Percent,
   PenLine,
+  MessageSquare,
   type LucideIcon,
 } from "lucide-react";
 import { useActiveBranches } from "@/components/branch-filter-provider";
@@ -30,8 +32,8 @@ type NavItem = NavLeaf | NavGroup;
 
 const NAV_ITEMS: NavItem[] = [
   { label: "Transaction Review", href: "/transactions", icon: Table2 },
-  { label: "Cost Center Report", href: "/cost-center-report", icon: BarChart3 },
   { label: "P&L All", href: "/pl-all", icon: TrendingUp },
+  { label: "P&L Notes", href: "/pl-notes", icon: MessageSquare },
   { label: "Vendors", href: "/vendors", icon: Store },
   { label: "Offshore Allocations", href: "/offshore-allocations", icon: Globe },
   { label: "Manual Entry", href: "/manual-entry", icon: PenLine },
@@ -81,12 +83,14 @@ function LeafItem({
     <Link
       href={item.href}
       className={[
-        "flex items-center rounded-md py-2 text-sm font-medium transition-colors duration-150",
+        "flex items-center rounded-xl py-2 text-sm transition-colors duration-150",
         expanded ? "gap-3 px-3" : "justify-center px-0",
         depth > 0 && expanded ? "pl-8" : "",
+        // The 4px left rule is the active marker in both states, so it also
+        // reads on the collapsed rail where the label is hidden.
         active
-          ? "bg-blue-600 text-white"
-          : "text-slate-300 hover:bg-[#1e2d42] hover:text-white",
+          ? "bg-[#A6DEFF]/20 text-[#001A40] font-bold border-l-4 border-[#001A40]"
+          : "text-slate-500 font-medium hover:bg-slate-50 hover:text-[#001A40] border-l-4 border-transparent",
       ].join(" ")}
     >
       {Icon ? (
@@ -95,7 +99,7 @@ function LeafItem({
         // Child items without icons: dot indicator (only visible when collapsed — children are
         // hidden via max-h-0 when sidebar is collapsed anyway, but kept for correctness)
         <span
-          className={`shrink-0 h-1.5 w-1.5 rounded-full ${active ? "bg-white" : "bg-slate-500"}`}
+          className={`shrink-0 h-1.5 w-1.5 rounded-full ${active ? "bg-[#001A40]" : "bg-slate-300"}`}
         />
       )}
       <span
@@ -130,12 +134,12 @@ function GroupItem({
       <button
         onClick={() => setOpen((o) => !o)}
         className={[
-          "flex w-full items-center rounded-md py-2 text-sm font-medium transition-colors duration-150",
+          "flex w-full items-center rounded-xl py-2 text-sm font-medium transition-colors duration-150",
           sidebarExpanded ? "gap-3 px-3" : "justify-center px-0",
-          // When collapsed and a child is active, tint the group icon blue as an indicator
+          // When collapsed and a child is active, tint the group icon navy as an indicator
           anyChildActive && !sidebarExpanded
-            ? "text-blue-400"
-            : "text-slate-300 hover:bg-[#1e2d42] hover:text-white",
+            ? "text-[#001A40]"
+            : "text-slate-500 hover:bg-slate-50 hover:text-[#001A40]",
         ].join(" ")}
       >
         {Icon && <Icon size={16} className="shrink-0" />}
@@ -187,24 +191,36 @@ export function Sidebar() {
         width: expanded ? "240px" : "68px",
         transition: "width 200ms ease-in-out",
       }}
-      className="fixed left-0 top-0 h-screen z-40 flex flex-col bg-[#0f1b2d] shadow-xl overflow-hidden"
+      className="fixed left-0 top-0 h-screen z-40 flex flex-col bg-white border-r border-slate-200/80 text-slate-700 overflow-hidden"
       onMouseEnter={() => setExpanded(true)}
       onMouseLeave={() => setExpanded(false)}
     >
       {/* Header: fixed height so the nav doesn't jump during transition */}
-      <div className="relative h-[70px] shrink-0 border-b border-white/10 overflow-hidden">
+      <div className="relative h-[70px] shrink-0 border-b border-slate-200/80 overflow-hidden">
         {/* Expanded — full branding */}
         <div
-          className={`absolute inset-0 flex flex-col justify-center px-5 transition-opacity duration-200 ${
+          className={`absolute inset-0 flex items-center gap-3 px-5 transition-opacity duration-200 ${
             expanded ? "opacity-100" : "opacity-0 pointer-events-none"
           }`}
         >
-          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400 whitespace-nowrap">
-            Supreme Lending
-          </p>
-          <h1 className="mt-0.5 text-lg font-bold text-white whitespace-nowrap">
-            Homesí P&amp;L
-          </h1>
+          {/* Same asset and same unoptimized rendering as the collapsed rail,
+              so the mark does not change shape as the panel opens. */}
+          <Image
+            src="/HOMESI_Icon_Home_Red.svg"
+            alt=""
+            width={32}
+            height={32}
+            unoptimized
+            className="h-8 w-8 shrink-0 rounded-full"
+          />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-widest text-[#FF4040] whitespace-nowrap">
+              Supreme Lending
+            </p>
+            <h1 className="mt-0.5 text-lg font-bold text-[#001A40] whitespace-nowrap">
+              Homesí Finance
+            </h1>
+          </div>
         </div>
         {/* Collapsed — "H" monogram */}
         <div
@@ -212,12 +228,25 @@ export function Sidebar() {
             expanded ? "opacity-0 pointer-events-none" : "opacity-100"
           }`}
         >
-          <span className="text-xl font-bold text-blue-400">H</span>
+          {/* The asset is a filled circle, so it needs no plate behind it —
+              rounded-full only guards against a future square version showing
+              corners over the white panel. `unoptimized` serves the SVG as
+              authored: the image optimizer refuses SVG unless the whole app
+              opts in, and there is nothing to optimize in 1KB of vector. */}
+          <Image
+            src="/HOMESI_Icon_Home_Red.svg"
+            alt="Homesí"
+            width={40}
+            height={40}
+            unoptimized
+            priority
+            className="h-10 w-10 rounded-full bg-transparent"
+          />
         </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-4 space-y-0.5 px-2">
+      <nav className="flex-1 overflow-y-auto py-4 space-y-0.5 px-3">
         {NAV_ITEMS.map((item) =>
           isGroup(item) ? (
             <GroupItem key={item.label} item={item} expanded={expanded} />
@@ -228,7 +257,7 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-white/10 px-3 py-3 space-y-2">
+      <div className="border-t border-slate-200/80 px-3 py-3 space-y-2">
         <LogoutButton expanded={expanded} />
         {/* Active branch filter indicator */}
         {hasFilter && (
@@ -236,13 +265,13 @@ export function Sidebar() {
             {/* Expanded: clickable text badge */}
             <Link
               href="/settings"
-              className={`absolute inset-0 flex items-center gap-1.5 rounded-md bg-amber-500/20 px-2 hover:bg-amber-500/30 transition-opacity duration-200 ${
+              className={`absolute inset-0 flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 hover:bg-amber-100 transition-opacity duration-200 ${
                 expanded ? "opacity-100" : "opacity-0 pointer-events-none"
               }`}
               title={`Branch filter: ${activeBranches.join(", ")}`}
             >
-              <Filter size={10} className="text-amber-400 shrink-0" />
-              <span className="text-[11px] text-amber-300 whitespace-nowrap overflow-hidden">
+              <Filter size={10} className="text-amber-600 shrink-0" />
+              <span className="text-[11px] font-medium text-amber-800 whitespace-nowrap overflow-hidden">
                 {filterLabel}
               </span>
             </Link>
@@ -253,7 +282,7 @@ export function Sidebar() {
               }`}
             >
               <span
-                className="h-2 w-2 rounded-full bg-amber-400"
+                className="h-2 w-2 rounded-full bg-amber-500"
                 title={`Branch filter active: ${activeBranches.join(", ")}`}
               />
             </div>

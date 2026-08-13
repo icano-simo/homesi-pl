@@ -2,38 +2,27 @@
 type SupabaseClient = any;
 
 import type { ManualAssignmentSummary } from "@/types";
+import {
+  assignmentFingerprint,
+  ASSIGNMENT_FINGERPRINT_SELECT,
+  type FingerprintableTx,
+} from "@/lib/tx-fingerprint";
 
 const BACKUP_TABLE = "manual_assignment_backups";
 const CHUNK = 500;
 const PAGE_SIZE = 1000;
 
 /**
- * Fields that decide whether a backed-up assignment and a freshly inserted
- * expense are the same thing.
+ * Which fields decide that a backed-up assignment and a freshly inserted
+ * expense are the same thing is defined once, in lib/tx-fingerprint.ts. A
+ * second copy of that calculation living here would drift, and the drift would
+ * look like "the data changed" rather than like a bug.
  *
- * Measured against production on 2026-08-12, over 756 manual and 48
- * conflict_resolved assignments: with only gl_code, branch, check_description
- * and journal_post_date, 228 matched more than one expense and the worst group
- * held 732 rows. Adding year, month, debit and credit makes all 196
- * employee_fee cases unique and 31 of the 36 offshore ones. About 5 stay
- * genuinely indistinguishable — several identical expenses on the same day for
- * the same amount — and those are meant to end up ambiguous rather than guessed.
- *
- * 233 of the manual assignments sit on expenses with a NULL journal_post_date
- * (and an empty ref_numb), all from employee_fee, offshore_allocations and
- * addback. That is why year and month carry real weight here: for those rows
- * they are the only period information there is.
- *
- * month is TEXT ("March"), not a number.
+ * See ASSIGNMENT_FIELDS there for the measurements behind the eight fields.
  */
-const MATCH_FIELDS = [
-  "gl_code", "branch", "check_description", "journal_post_date",
-  "year", "month", "debit", "credit",
-] as const;
+const MATCH_SELECT = `id, ${ASSIGNMENT_FINGERPRINT_SELECT}`;
 
-const MATCH_SELECT = `id, ${MATCH_FIELDS.join(", ")}`;
-
-type MatchKeyed = {
+type MatchKeyed = FingerprintableTx & {
   gl_code: string | null;
   branch: string | null;
   check_description: string | null;
@@ -43,43 +32,6 @@ type MatchKeyed = {
   debit: number | string | null;
   credit: number | string | null;
 };
-
-/**
- * Canonical form of the match key.
- *
- * debit and credit are numeric(14,2) and come back as a number or a string
- * depending on the driver, so 1234.5 and "1234.50" must not be treated as
- * different expenses. Everything else is compared as-is; a NULL stays distinct
- * from an empty string, which matters because the 233 dateless rows carry a
- * real NULL.
- */
-/**
- * Field separator for the match key. A control character, so it cannot occur in
- * a GL description and two fields can never run together into a colliding key.
- * Built from a char code rather than written literally: a raw control byte in
- * source is invisible in every editor and diff, and this repo has already lost
- * an afternoon to one.
- */
-const SEP = String.fromCharCode(1);
-
-export function money(v: number | string | null | undefined): string {
-  if (v === null || v === undefined || v === "") return "~";
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n.toFixed(2) : "~";
-}
-
-export function matchKey(t: MatchKeyed): string {
-  return [
-    t.gl_code ?? "~",
-    t.branch ?? "~",
-    t.check_description ?? "~",
-    t.journal_post_date ?? "~",
-    t.year === null || t.year === undefined ? "~" : String(t.year),
-    t.month ?? "~",
-    money(t.debit),
-    money(t.credit),
-  ].join(SEP);
-}
 
 interface BackupRow extends MatchKeyed {
   id: string;
@@ -302,7 +254,7 @@ export async function reapplyManualSnapshot(
   // count is what decides whether anything may be written at all.
   const byKey = new Map<string, string[]>();
   for (const tx of newTxs) {
-    const k = matchKey(tx);
+    const k = assignmentFingerprint(tx);
     const arr = byKey.get(k);
     if (arr) arr.push(tx.id);
     else byKey.set(k, [tx.id]);
@@ -328,7 +280,7 @@ export async function reapplyManualSnapshot(
 
   for (const entry of pending) {
     const origin = entry.assignment_origin;
-    const candidates = byKey.get(matchKey(entry)) ?? [];
+    const candidates = byKey.get(assignmentFingerprint(entry)) ?? [];
 
     // ── 0 matches ──────────────────────────────────────────────────────────
     if (candidates.length === 0) {

@@ -10,5 +10,29 @@
 
 body {
   font-family: "Inter", system-ui, sans-serif;
-  background-color: #f3f4f6;
+  /* "New Day", the brand canvas. The class on <body> in layout.tsx wins on
+     specificity anyway; this keeps the two from disagreeing. */
+  background-color: #fcfcfa;
+}
+
+/*
+ * Thin, low-contrast horizontal scrollbar for the card strips.
+ *
+ * Hand-written rather than pulled from tailwind-scrollbar: the plugin is not a
+ * dependency of this project, so `scrollbar-thin` and friends would compile to
+ * nothing and the strip would keep the browser's default chunky bar.
+ */
+.scrollbar-thin-slate {
+  scrollbar-width: thin;
+  scrollbar-color: #e2e8f0 transparent;
+}
+.scrollbar-thin-slate::-webkit-scrollbar {
+  height: 6px;
+}
+.scrollbar-thin-slate::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin-slate::-webkit-scrollbar-thumb {
+  background-color: #e2e8f0;
+  border-radius: 9999px;
 }

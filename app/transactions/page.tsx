@@ -317,7 +317,7 @@ function ManualEntryEditModal({
             Cancel
           </button>
           <button onClick={handleSave} disabled={saving}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40">
+            className="rounded-full bg-[#FF4040] px-5 py-2 text-xs font-bold text-white shadow-xs transition-all hover:bg-[#e03535] disabled:opacity-40">
             {saving ? "Saving…" : "Save"}
           </button>
         </div>

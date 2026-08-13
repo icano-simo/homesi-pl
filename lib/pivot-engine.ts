@@ -35,7 +35,11 @@ export const ALL_FIELDS: PivotField[] = [
 // ─── Tree types ───────────────────────────────────────────────────────────────
 
 export interface TxLeaf {
+  /** Render key. Composite — a transaction fanned across cost centers or split
+   *  Operational/Non-Operational produces several leaves sharing one txId. */
   id: string;
+  /** The real pl_transactions UUID. Use this, never `id`, to anchor a note. */
+  txId: string;
   month: string;
   mvmt: number;
   desc: string | null;
@@ -44,11 +48,25 @@ export interface TxLeaf {
   credit: number;
 }
 
+/**
+ * Accumulated dimension constraints identifying a node, e.g.
+ * { category_2: "Income", category_6: "Revenue" }.
+ *
+ * Values are *stable identifiers* (gl_code, cost_center_id), not display
+ * labels, so renaming a GL or cost center does not change a node's identity.
+ * Together with a month this is the anchor a note is attached to — see
+ * lib/note-scope.ts. Declared structurally rather than importing NoteScope to
+ * avoid a module cycle (note-scope.ts already imports PivotField from here).
+ */
+export type NodeScope = Record<string, string>;
+
 export interface PivotNode {
   key: string;
   label: string;
   sortKey: number | string;
   field: string; // PivotField | "__flat__"
+  /** Constraints from the root down to and including this node. */
+  scope: NodeScope;
   byMonth: Record<string, number>;
   total: number;
   children: PivotNode[];
@@ -100,7 +118,31 @@ interface GroupSlot {
   key: string;
   label: string;
   sortKey: number | string;
+  scopeValue: string;
   txs: ExpandedTx[];
+}
+
+/**
+ * Stable identifier of a transaction along one dimension — the value a note is
+ * anchored to. Differs from the grouping key only where the key is a display
+ * label: `gl` groups by "41309 — Origination Income" but anchors to the bare
+ * gl_code, and `cost_center` anchors to cost_center_id rather than its name, so
+ * renaming either does not detach existing notes.
+ */
+export function stableScopeValue(tx: ExpandedTx, field: PivotField): string {
+  switch (field) {
+    case "gl":
+      return tx.gl_code?.trim() || "(No GL)";
+    case "cost_center": {
+      const status = tx.cost_center_status;
+      if (!status || status === "unassigned" || !tx.cost_center_id) return "__unassigned__";
+      if (status === "conflict") return "__conflict__";
+      return tx.cost_center_id;
+    }
+    default:
+      // Every other dimension groups by a value that is already stable.
+      return getGroup(tx, field).key;
+  }
 }
 
 function getGroup(tx: ExpandedTx, field: PivotField): { key: string; label: string; sortKey: number | string } {
@@ -145,7 +187,13 @@ function getGroup(tx: ExpandedTx, field: PivotField): { key: string; label: stri
       return { key: v, label: v, sortKey: v };
     }
     case "check_desc_3": {
-      const v = tx.check_description_3?.trim() || "(No Description 3)";
+      // Only Offshore Allocations rows carry this. Everything else groups into
+      // a single dash-labelled bucket sorted last, rather than a wordy
+      // "(No Description 3)" heading that reads like a real category. The key
+      // is a sentinel rather than the label so notes stay anchored if the
+      // label is ever reworded — same pattern as loan_number below.
+      const v = tx.check_description_3?.trim();
+      if (!v) return { key: "__no_desc3__", label: "—", sortKey: "￿" };
       return { key: v, label: v, sortKey: v };
     }
     case "loan_number": {
@@ -174,6 +222,7 @@ function toLeaf(tx: ExpandedTx): TxLeaf {
   const base = tx.cost_center_id ? `${tx.id}:${tx.cost_center_id}` : tx.id;
   return {
     id: tx._opGroup ? `${base}::${tx._opGroup[0]}` : base,
+    txId: tx.id,
     month: tx.month ?? "Unknown",
     mvmt: tx.movement ?? 0,
     desc: tx.check_description,
@@ -194,13 +243,54 @@ function sortNodes(nodes: PivotNode[]): PivotNode[] {
 
 // ─── Public engine ────────────────────────────────────────────────────────────
 
-export function buildDynamicPivot(txs: ExpandedTx[], levels: PivotField[]): PivotNode[] {
+/** Does any of these transactions carry a Description 3? */
+function anyDesc3(txs: readonly ExpandedTx[]): boolean {
+  return txs.some((t) => (t.check_description_3 ?? "").trim() !== "");
+}
+
+/**
+ * Drops levels that would insert a node without telling the reader anything.
+ *
+ * Only check_desc_3 qualifies, and only for the transactions actually under the
+ * node being built. Description 3 exists solely on Offshore Allocations rows —
+ * 792 of 27,365 measured on 2026-08-12 — so everywhere else the level collapses
+ * into a single group labelled "—" (see getGroup) that has to be expanded to
+ * reach the transactions beneath it. That extra click is why transaction-level
+ * notes were effectively unreachable: a user drilling down stops at
+ * `description`, which already looks like an individual line, rather than
+ * expanding a dash to find the real leaf rows.
+ *
+ * The decision is per node, not per report. A branch whose rows carry a
+ * Description 3 keeps the level and its grouping; a sibling branch without one
+ * hangs its transactions directly off the level above. Both can appear in the
+ * same report.
+ *
+ * Skipping a level never changes the scope of the levels above it — a node's
+ * scope is built from its own ancestors — so notes anchored higher up keep
+ * their scope_key.
+ */
+function effectiveLevels(levels: PivotField[], txs: readonly ExpandedTx[]): PivotField[] {
+  let out = levels;
+  while (out.length > 0 && out[0] === "check_desc_3" && !anyDesc3(txs)) {
+    out = out.slice(1);
+  }
+  return out;
+}
+
+export function buildDynamicPivot(
+  txs: ExpandedTx[],
+  requestedLevels: PivotField[],
+  parentScope: NodeScope = {},
+): PivotNode[] {
+  const levels = effectiveLevels(requestedLevels, txs);
+
   if (levels.length === 0) {
     return [{
       key: "__flat__",
       label: "",
       sortKey: 0,
       field: "__flat__",
+      scope: parentScope,
       ...computeTotals(txs),
       children: [],
       txLeaves: txs.map(toLeaf),
@@ -212,14 +302,20 @@ export function buildDynamicPivot(txs: ExpandedTx[], levels: PivotField[]): Pivo
 
   // Always pre-seed both Op/NonOp groups so they render even when empty
   if (field === "op_nonop") {
-    slotMap.set("Operational",     { key: "Operational",     label: "Operational",     sortKey: 0, txs: [] });
-    slotMap.set("Non-Operational", { key: "Non-Operational", label: "Non-Operational", sortKey: 1, txs: [] });
+    slotMap.set("Operational",     { key: "Operational",     label: "Operational",     sortKey: 0, scopeValue: "Operational",     txs: [] });
+    slotMap.set("Non-Operational", { key: "Non-Operational", label: "Non-Operational", sortKey: 1, scopeValue: "Non-Operational", txs: [] });
   }
 
   for (const tx of txs) {
     const g = getGroup(tx, field);
     if (!slotMap.has(g.key)) {
-      slotMap.set(g.key, { key: g.key, label: g.label, sortKey: g.sortKey, txs: [] });
+      slotMap.set(g.key, {
+        key: g.key,
+        label: g.label,
+        sortKey: g.sortKey,
+        scopeValue: stableScopeValue(tx, field),
+        txs: [],
+      });
     } else if (field !== "op_nonop") {
       // Track minimum order value so groups sort stably when multiple txs appear
       const slot = slotMap.get(g.key)!;
@@ -233,15 +329,22 @@ export function buildDynamicPivot(txs: ExpandedTx[], levels: PivotField[]): Pivo
   const nodes: PivotNode[] = [];
   for (const slot of slotMap.values()) {
     const { byMonth, total } = computeTotals(slot.txs);
+    const scope: NodeScope = { ...parentScope, [field]: slot.scopeValue };
+    // Resolved per slot, so the node knows whether its own rows still need a
+    // deeper level or should carry the transactions themselves. Without this the
+    // skipped level would come back as a nested "__flat__" child, which the
+    // renderer draws flush left instead of indented under its parent.
+    const childLevels = effectiveLevels(rest, slot.txs);
     nodes.push({
       key:      slot.key,
       label:    slot.label,
       sortKey:  slot.sortKey,
       field,
+      scope,
       byMonth,
       total,
-      children: rest.length > 0 ? buildDynamicPivot(slot.txs, rest) : [],
-      txLeaves: rest.length === 0 ? slot.txs.map(toLeaf) : [],
+      children: childLevels.length > 0 ? buildDynamicPivot(slot.txs, childLevels, scope) : [],
+      txLeaves: childLevels.length === 0 ? slot.txs.map(toLeaf) : [],
     });
   }
 

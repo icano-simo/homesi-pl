@@ -5,7 +5,7 @@ import type { PLReportTx } from "@/types";
 export const dynamic = "force-dynamic";
 
 const SELECT =
-  "id,month,branch,check_description,check_description_2,check_description_3," +
+  "id,month,year,branch,check_description,check_description_2,check_description_3," +
   "vendor,ref_numb,debit,credit,movement,operational_pct,loan_number," +
   "gl_code,gl_name,category_2,category_6,category_7,order_1,order_2,order_3," +
   "cost_center_id,cost_center_status,cost_centers(name)";
