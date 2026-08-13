@@ -218,7 +218,7 @@ export function Sidebar() {
               Supreme Lending
             </p>
             <h1 className="mt-0.5 text-lg font-bold text-[#001A40] whitespace-nowrap">
-              Homesí P&amp;L
+              Homesí Finance
             </h1>
           </div>
         </div>

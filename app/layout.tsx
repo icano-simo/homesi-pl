@@ -3,8 +3,11 @@ import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 
 export const metadata: Metadata = {
-  title: "Homesí P&L",
+  title: "Homesí Finance",
   description: "Cost center review and P&L category assignment for Supreme Lending",
+  // Points at the copy already in public/ rather than a second one under app/,
+  // so the sidebar mark and the tab icon can never drift apart.
+  icons: { icon: "/HOMESI_Icon_Home_Red.svg" },
 };
 
 export default function RootLayout({
