@@ -47,24 +47,44 @@ export function expectedMarginAccounts(branch: string): readonly string[] {
 }
 
 /**
- * category_6 groups that make up the net result of a loan.
+ * category_6 groups that make up the result of a loan. Revenue, and nothing
+ * else.
  *
- * Revenue and Direct Production Costs only. Selling, General & Administrative
- * and Personnel Costs carry a loan_number often enough to be tempting — 197
- * rows of Marketing Expense alone — but a marketing campaign is not caused by
- * any one loan. Including them would charge a loan for spend it did not cause
- * and make its result look worse for reasons outside its control.
+ * DIRECT PRODUCTION COSTS ARE DELIBERATELY OUT. Those amounts are what the
+ * BORROWER is charged, per loan, and they are later deducted from the branch on
+ * a separate line that carries no loan number. That is why they arrive as
+ * credits, and why they were ADDING to the net instead of subtracting from it:
+ * loan 710002042266 showed Condo Fees +441.95 and Credit Report +324.75, and
+ * its block summed +766.70. Read per loan they manufacture a profit that does
+ * not exist. Not a calculation error — the attribution simply does not mean
+ * what it looks like it means.
  *
- * They are never hidden: both groups appear under "Show other concepts", and
- * the net states which groups it covers.
- *
- * Measured effect of the choice over 374 loans: median 314.2 bps with these two
- * groups, 313.0 with all four.
+ * Selling, General & Administrative and Personnel Costs are out too, and for a
+ * different reason: a marketing campaign is not caused by any one loan, so
+ * charging it to one would make the loan look worse for something outside its
+ * control.
  */
-export const NET_GROUPS: readonly string[] = ["Revenue", "Direct Production Costs"];
+export const NET_GROUPS: readonly string[] = ["Revenue"];
 
-/** Groups shown only under "Show other concepts", outside the net. */
+/** Groups deliberately absent from this view entirely. */
 export const NON_NET_GROUPS: readonly string[] = [
+  "Direct Production Costs",
   "Selling, General & Administrative (S, G & A)",
   "Personnel Costs",
+];
+
+/**
+ * What counts as "margin" when deciding whether a loan's margin landed in
+ * another month.
+ *
+ * These three and no others. Front-end Margin, Discount Income, Fee Income and
+ * Processing Income are revenue but not margin, and letting them decide the
+ * label produced nonsense: loan 710002047078 was tagged "margin in June" on the
+ * strength of $89.00 of Fee Income, while its entire actual margin — Back-end
+ * Margin $8,816.00 — had landed in May.
+ */
+export const MARGIN_FOR_PERIOD: readonly string[] = [
+  "Back-end Margin",
+  "RM Margin",
+  "DM Margin",
 ];

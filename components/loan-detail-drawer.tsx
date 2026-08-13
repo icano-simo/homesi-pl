@@ -96,39 +96,16 @@ function itemCls(v: number): string {
 }
 
 /** What the sign does here, spelled out for the tooltip. */
-function signHint(v: number, isCostBlock: boolean): string {
+function signHint(v: number): string {
   if (v === 0) return "No amount";
-  if (v > 0) {
-    return isCostBlock
-      ? "Credit in an expense account — adds to the net"
-      : "Income — adds to the net";
-  }
-  return isCostBlock
-    ? "Expense — takes from the net"
-    : "Reduces revenue — takes from the net";
+  return v > 0 ? "Adds to the net" : "Takes from the net";
 }
 
-/** Revenue concepts, most valuable first, then the rest alphabetically. */
-function splitConcepts(l: LoanRow) {
-  const entries = Object.entries(l.concepts).filter(([, v]) => v !== 0);
-  const revenue = entries.filter(([c]) => !isCost(c)).sort((a, b) => b[1] - a[1]);
-  const costs   = entries.filter(([c]) =>  isCost(c)).sort((a, b) => a[1] - b[1]);
-  return { revenue, costs };
+/** Revenue concepts, largest first. Everything here is revenue: see
+ *  NET_GROUPS for why Direct Production Costs are not in this window. */
+function revenueItems(concepts: Record<string, number>): [string, number][] {
+  return Object.entries(concepts).filter(([, v]) => v !== 0).sort((a, b) => b[1] - a[1]);
 }
-
-/**
- * Cost concepts are the ones that are not revenue. Derived from the sign of the
- * loan's own groups rather than a hardcoded list: a fixed list of item names
- * would silently drop any concept nobody thought to add, and the point of this
- * window is that nothing disappears.
- */
-const COST_CONCEPTS = new Set([
-  "Credit Report Expense", "U/W - TALX", "Appraisal Fee Expense",
-  "Compensation Transfers", "U/W -Fraud Guard", "Condo Fees",
-  "Bank Charges", "U/W - Other", "Operations Payroll",
-  "Marketing Expense", "Office Expense",
-]);
-const isCost = (c: string) => COST_CONCEPTS.has(c);
 
 export function LoanDetailDrawer({ open, month, year, branches, sources, onClose }: Props) {
   const [data, setData]       = useState<DetailData | null>(null);
@@ -264,7 +241,6 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   {marginCols.map((c) => (
                     <Th key={c} className={`text-right ${extra.includes(c) ? "bg-amber-50 text-amber-800" : ""}`}>{c}</Th>
                   ))}
-                  <Th className="text-right">Costs</Th>
                   <Th className="text-right">Net</Th>
                   <Th className="text-right">Net bps</Th>
                 </tr>
@@ -283,12 +259,37 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                       <Amount key={c} v={l.concepts[c] ?? 0} amount={l.loan_amount}
                               flagged={l.unexpected_accounts.includes(c)} />
                     ))}
-                    <Amount v={l.costs} amount={l.loan_amount} />
                     <Amount v={l.net} amount={l.loan_amount} bold />
                     <Td className={`text-right font-mono tabular-nums font-bold ${num(l.net)}`}>{fmtBps(l.net_bps)}</Td>
                   </tr>
                 ))}
               </tbody>
+              {/* Totals pinned to the bottom edge. With sixty loans in the list a
+                  total that scrolls away is a total nobody reads. Same figures as
+                  the summary card: one server-side aggregate feeds both. */}
+              <tfoot className="sticky bottom-0 z-10">
+                <tr className="border-t-2 border-[#001A40]/20 bg-[#001A40]/5 font-bold">
+                  <Td className="text-[#001A40]">
+                    {data.summary.loan_count} loan{data.summary.loan_count === 1 ? "" : "s"}
+                  </Td>
+                  <Td className="text-slate-500">
+                    {data.summary.without_margin > 0 && (
+                      <span className="text-rose-700">{data.summary.without_margin} with no margin</span>
+                    )}
+                  </Td>
+                  <Td />
+                  <Td className="text-right font-mono tabular-nums text-[#001A40]">
+                    {money(data.summary.volume)}
+                  </Td>
+                  {marginCols.map((c) => (
+                    <Amount key={c} v={data.summary.concepts[c] ?? 0} amount={data.summary.volume} bold />
+                  ))}
+                  <Amount v={data.summary.net} amount={data.summary.volume} bold />
+                  <Td className={`text-right font-mono font-bold tabular-nums ${num(data.summary.net)}`}>
+                    {fmtBps(data.summary.net_bps)}
+                  </Td>
+                </tr>
+              </tfoot>
             </table>
           )}
 
@@ -331,7 +332,7 @@ function MiniPL({ l }: { l: LoanRow }) {
   // Everything between Revenue and Direct Production Costs, always. Nothing
   // folded away, so the block totals are by construction the sum of what is on
   // screen — the reader can add the column up and get the badge.
-  const { revenue, costs } = splitConcepts(l);
+  const items = revenueItems(l.concepts);
 
   return (
     <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
@@ -342,6 +343,11 @@ function MiniPL({ l }: { l: LoanRow }) {
             <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{l.branch}</span>
           </div>
           <span className="truncate font-semibold text-slate-600">{l.borrower_name ?? "—"}</span>
+          {/* Program and officer read as identity, not as data: they answer
+              "whose loan is this and of what kind" before any figure. */}
+          <span className="truncate text-[10px] font-normal text-slate-500">
+            {l.loan_program ?? "—"} · {l.loan_officer ?? "—"}
+          </span>
           <div className="flex items-center justify-between">
             <span className="font-mono tabular-nums text-slate-500">{money(l.loan_amount)}</span>
             <Signals l={l} />
@@ -349,16 +355,7 @@ function MiniPL({ l }: { l: LoanRow }) {
         </div>
 
         <div className="px-3 pt-2">
-          <Block
-            title="Total revenue" tone="emerald"
-            total={l.revenue} amount={l.loan_amount}
-            items={revenue} loan={l}
-          />
-          <Block
-            title="Total direct costs" tone="rose"
-            total={l.costs} amount={l.loan_amount}
-            items={costs} loan={l}
-          />
+          <Block title="Total revenue" total={l.revenue} amount={l.loan_amount} items={items} loan={l} />
         </div>
       </div>
 
@@ -367,19 +364,14 @@ function MiniPL({ l }: { l: LoanRow }) {
   );
 }
 
-function Block({ title, tone, total, amount, items, loan }: {
-  title: string; tone: "emerald" | "rose"; total: number; amount: number;
+function Block({ title, total, amount, items, loan }: {
+  title: string; total: number; amount: number;
   items: [string, number][];
   /** Absent on the summary card, which spans every loan and so has no single
    *  branch to compare a booking against. */
   loan?: LoanRow;
 }) {
-  // Costs get a neutral band, not a red one. Spending on a loan is ordinary
-  // operation, and painting it like an error trains the reader to ignore the
-  // colour that should mean something.
-  const badge = tone === "emerald"
-    ? "bg-emerald-50 text-emerald-900 border-emerald-200/60"
-    : "bg-slate-100/90 text-slate-800 border-slate-200/80";
+  const badge = "bg-emerald-50 text-emerald-900 border-emerald-200/60";
   return (
     <>
       <div className={`my-1.5 flex items-center justify-between rounded-lg border px-3 py-1.5 text-xs font-bold ${badge}`}>
@@ -414,7 +406,7 @@ function Block({ title, tone, total, amount, items, loan }: {
               )}
             </span>
             <span
-              title={signHint(v, tone === "rose")}
+              title={signHint(v)}
               className={`shrink-0 font-mono tabular-nums text-xs ${itemCls(v)}`}
             >
               {fmt(v)}
@@ -436,9 +428,7 @@ function Block({ title, tone, total, amount, items, loan }: {
  * read against each other without translating. Its net is the sum of theirs.
  */
 function SummaryCard({ s, month }: { s: Summary; month: string }) {
-  const entries = Object.entries(s.concepts).filter(([, v]) => v !== 0);
-  const revenue = entries.filter(([c]) => !isCost(c)).sort((a, b) => b[1] - a[1]);
-  const costs   = entries.filter(([c]) =>  isCost(c)).sort((a, b) => a[1] - b[1]);
+  const items = revenueItems(s.concepts);
 
   return (
     <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border-2 border-[#001A40]/20 bg-white shadow-xs">
@@ -458,8 +448,7 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
           )}
         </div>
         <div className="px-3 pt-2">
-          <Block title="Total revenue" tone="emerald" total={s.revenue} amount={s.volume} items={revenue} />
-          <Block title="Total direct costs" tone="rose" total={s.costs} amount={s.volume} items={costs} />
+          <Block title="Total revenue" total={s.revenue} amount={s.volume} items={items} />
         </div>
       </div>
       <NetBanner net={s.net} netBps={s.net_bps} />
@@ -531,7 +520,7 @@ function Th({ children, className = "" }: { children: React.ReactNode; className
   return <th className={`whitespace-nowrap px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700 ${className}`}>{children}</th>;
 }
 
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function Td({ children = null, className = "" }: { children?: React.ReactNode; className?: string }) {
   return <td className={`whitespace-nowrap px-2 py-1.5 text-slate-700 ${className}`}>{children}</td>;
 }
 

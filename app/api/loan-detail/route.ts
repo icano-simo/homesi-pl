@@ -3,6 +3,7 @@ import { createServerClient } from "@/lib/supabase-server";
 import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
 import {
   ALL_MARGIN_ACCOUNTS,
+  MARGIN_FOR_PERIOD,
   NET_GROUPS,
   expectedMarginAccounts,
 } from "@/lib/loan-detail-accounts";
@@ -158,16 +159,25 @@ export async function GET(req: NextRequest) {
       if (t.branch) (a.conceptBranches[t.category_7] ??= new Set()).add(t.branch);
       const g = t.category_6 ?? "(none)";
       a.groups[g] = (a.groups[g] ?? 0) + v;
-      if (t.month && (t.month !== month || t.year !== year)) a.months.add(`${t.month} ${t.year}`);
+      // Only the three margin accounts decide the "margin landed elsewhere"
+      // label. Revenue that is not margin — Fee Income, Processing Income —
+      // used to tag a loan on $89.00 while its real margin sat in the card's
+      // own month.
+      if (t.month && MARGIN_FOR_PERIOD.includes(t.category_7) &&
+          (t.month !== month || t.year !== year)) {
+        a.months.add(`${t.month} ${t.year}`);
+      }
     }
 
     const rows: LoanDetailRow[] = loans.map((l) => {
       const a = agg.get(l.loan_number) ?? { concepts: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
       const amount = money(l.loan_amount);
 
+      // Revenue is the whole story here: NET_GROUPS holds one group, so the
+      // net is its total. costs stays at zero for the shape of the payload.
       const revenue = a.groups["Revenue"] ?? 0;
-      const costs   = a.groups["Direct Production Costs"] ?? 0;
-      const net     = revenue + costs;
+      const costs   = 0;
+      const net     = revenue;
 
       // An account is out of rule when the BRANCH IT IS BOOKED IN does not
       // normally carry it — not when it differs from the loan's branch. DM
@@ -219,8 +229,8 @@ export async function GET(req: NextRequest) {
     }
     const summaryVolume  = rows.reduce((s, r) => s + r.loan_amount, 0);
     const summaryRevenue = rows.reduce((s, r) => s + r.revenue, 0);
-    const summaryCosts   = rows.reduce((s, r) => s + r.costs, 0);
-    const summaryNet     = summaryRevenue + summaryCosts;
+    const summaryCosts   = 0;
+    const summaryNet     = summaryRevenue;
 
     const summary = {
       loan_count: rows.length,
