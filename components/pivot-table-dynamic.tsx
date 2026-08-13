@@ -98,6 +98,15 @@ const firstColStyle: React.CSSProperties = {
  */
 const totalColStyle: React.CSSProperties = { position: "sticky", right: 0 };
 
+/**
+ * Floor for the Total column.
+ *
+ * It carries the largest figure in the report and, with basis points on, a
+ * badge beside it. Without a floor the column collapsed to its header width and
+ * clipped both — the word "Total" itself was being cut off.
+ */
+const totalColSize: React.CSSProperties = { minWidth: 135 };
+
 // ─── Note indicators ──────────────────────────────────────────────────────────
 
 /**
@@ -113,20 +122,27 @@ function NoteCellContent({
   isDirect,
   badgeClass = "",
   bps,
+  reserveBpsSlot = false,
 }: {
   text: string;
   hasNote: boolean;
   isDirect: boolean;
   /** Negative-total badge in the HOMESÍ theme; empty elsewhere. */
   badgeClass?: string;
-  /** Already-formatted basis points, rendered under the figure. */
+  /** Already-formatted basis points, rendered beside the figure. */
   bps?: string | null;
+  /**
+   * Hold the badge's width open on a row that has no basis points of its own.
+   * Total Income has no bps, and without the reserved slot its figures would
+   * sit a badge-width to the right of every row beneath them.
+   */
+  reserveBpsSlot?: boolean;
 }) {
   return (
     // Inline, never stacked. A second line under the figure doubles the height
     // of every row in the report the moment bps are switched on, which undoes
     // the compact density the whole grid is built around.
-    <span className="inline-flex flex-row items-center justify-end gap-1.5 whitespace-nowrap">
+    <span className="flex w-full flex-row items-center justify-end gap-1.5 whitespace-nowrap">
       <span className={`inline-flex items-center justify-end gap-1 ${badgeClass}`}>
         {hasNote && (
           <span
@@ -140,13 +156,18 @@ function NoteCellContent({
         )}
         {text}
       </span>
-      {bps != null && (
-        <span className="shrink-0 rounded border border-slate-200 bg-slate-100/90 px-1 py-0.5 font-mono text-[10px] text-slate-500">
+      {bps != null ? (
+        // Fixed width, not content width: "—" and "123.4 bps" would otherwise
+        // push their figures to different places and the column would zig-zag
+        // down the report.
+        <span className="inline-block w-[55px] shrink-0 rounded border border-slate-200 bg-slate-100/90 px-1 py-0.5 text-center font-mono text-[10px] text-slate-500">
           {/* "— bps" would read as a unit on a missing value, so the dash goes
               on its own when there is nothing to divide by. */}
           {bps === "—" ? "—" : `${bps} bps`}
         </span>
-      )}
+      ) : reserveBpsSlot ? (
+        <span aria-hidden className="inline-block w-[55px] shrink-0" />
+      ) : null}
     </span>
   );
 }
@@ -398,7 +419,7 @@ function renderPivotNodes(
         })}
         <td
           onClick={ctx.notesOn ? (e) => { e.stopPropagation(); open(null, t.mvmt); } : undefined}
-          style={{ ...totalColStyle, zIndex: 9, backgroundColor: rowBgFor(rows.length) }}
+          style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: rowBgFor(rows.length) }}
           className={`${numCell} text-[10px] ${homesi ? homesiValueCls(t.mvmt) : mvCls(t.mvmt)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${ctx.notesOn ? "cursor-pointer" : ""}`}
         >
           <NoteCellContent
@@ -539,7 +560,7 @@ function renderPivotNodes(
         })}
         <td
           onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(null, node.total); } : undefined}
-          style={{ ...totalColStyle, zIndex: 9, backgroundColor: effectiveBg }}
+          style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: effectiveBg }}
           className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${ctx.notesOn ? "cursor-pointer" : ""}`}
         >
           <NoteCellContent
@@ -638,7 +659,7 @@ function renderPivotNodes(
             </td>
           ))}
           <td
-            style={{ ...totalColStyle, zIndex: 9, backgroundColor: footerBg }}
+            style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: footerBg }}
             className={`${numCell} font-extrabold ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l border-gray-100`}
           >
             <NoteCellContent
@@ -913,6 +934,7 @@ export function PivotTableDynamic({
                 hasNote={noteIndex.any.has(key)}
                 isDirect={noteIndex.direct.has(key)}
                 badgeClass={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}
+                reserveBpsSlot={bpsBaseByMonth != null}
               />
             ) : (
               <span className={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}>
@@ -923,7 +945,7 @@ export function PivotTableDynamic({
         );
       })}
       <td
-        style={{ ...gtStyle, ...totalColStyle, top: 30, zIndex: 21, borderLeft: homesiTheme ? "1px solid #cbd5e1" : "1px solid rgba(255,255,255,0.15)" }}
+        style={{ ...gtStyle, ...totalColStyle, ...totalColSize, top: 30, zIndex: 21, borderLeft: homesiTheme ? "1px solid #cbd5e1" : "1px solid rgba(255,255,255,0.15)" }}
         onClick={enableNotes ? () => setOpenCell({
           scope: baseScope,
           breadcrumb: ["Total Income"],
@@ -940,6 +962,7 @@ export function PivotTableDynamic({
             hasNote={noteIndex.any.has(cellKey(baseScope, null))}
             isDirect={noteIndex.direct.has(cellKey(baseScope, null))}
             badgeClass={homesiTheme ? grandTotalBadge(grandTotal) : ""}
+            reserveBpsSlot={bpsBaseByMonth != null}
           />
         ) : (
           <span className={homesiTheme ? grandTotalBadge(grandTotal) : ""}>
@@ -1061,6 +1084,23 @@ export function PivotTableDynamic({
         </div>
       )}
 
+      {/* Hierarchy, as a breadcrumb above the grid. It used to fill the
+          top-left header cell, where five levels of label stretched the column
+          to several hundred pixels and pushed the months off the screen. Here
+          it can scroll on its own without dragging the table with it. */}
+      {activeLevels.length > 0 && (
+        <div className="mb-3 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap rounded-lg border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-500">
+          {activeLevels.map((f, i) => (
+            <Fragment key={f}>
+              {i > 0 && <span className="text-slate-300">→</span>}
+              <span className={i === activeLevels.length - 1 ? "text-[#001A40]" : ""}>
+                {FIELD_LABELS[f]}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      )}
+
       {/* Pivot table */}
       <div
         className={`max-w-[1380px] overflow-auto border shadow-xs ${homesiTheme ? "rounded-2xl border-slate-200 bg-white" : "rounded-xl border-gray-200 bg-white shadow-sm"}`}
@@ -1075,7 +1115,11 @@ export function PivotTableDynamic({
                 className={`text-left ${homesiTheme ? `${TH_LIGHT} border-r-2 border-slate-200` : "bg-gray-50 px-3 py-1.5 text-[10px] font-semibold text-gray-500"}`}
               >
                 <span className="inline-flex items-center gap-1.5">
-                  {levelHeader}
+                  {/* Short, fixed title. The hierarchy runs to five levels and
+                      several hundred characters; putting it here stretched the
+                      cell and pushed the month columns off screen. It now sits
+                      in a breadcrumb above the table. */}
+                  Category / Account
                   <button
                     onClick={() => setDescSort(d => d === null ? "asc" : d === "asc" ? "desc" : null)}
                     title={descSort === null ? "Sort descriptions A→Z" : descSort === "asc" ? "Sort descriptions Z→A" : "Clear description sort"}
@@ -1093,7 +1137,7 @@ export function PivotTableDynamic({
                 </th>
               ))}
               <th
-                style={{ ...totalColStyle, zIndex: 25 }}
+                style={{ ...totalColStyle, ...totalColSize, zIndex: 25 }}
                 className={`border-l text-right whitespace-nowrap ${homesiTheme ? `border-slate-200 ${TH_LIGHT}` : "border-gray-200 bg-gray-50 px-2 py-1.5 text-[10px] font-semibold text-gray-500"}`}
               >
                 Total
