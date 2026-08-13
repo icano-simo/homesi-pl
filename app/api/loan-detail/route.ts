@@ -34,7 +34,10 @@ export interface LoanDetailRow {
   support_on_demand: boolean;
   /** category_7 → summed movement. Aggregated, never individual rows. */
   concepts: Record<string, number>;
-  /** Accounts carrying an amount that this branch is not expected to have. */
+  /** category_7 -> branches the amount is booked in, which is often not the
+   *  loan's own branch. */
+  concept_branches: Record<string, string[]>;
+  /** Accounts booked in a branch that does not normally carry them. */
   unexpected_accounts: string[];
   /** Months the loan's revenue landed in, when not the loan's own month. */
   foreign_months: string[];
@@ -101,7 +104,7 @@ export async function GET(req: NextRequest) {
     // Not restricted to this month: a loan's margin sometimes lands later, and
     // dropping it would show the loan as having earned nothing. The month it
     // actually landed in travels with the row so the window can say so.
-    const txs: Array<{ loan_number: string; category_6: string | null; category_7: string | null; movement: number | string | null; month: string | null; year: number | null }> = [];
+    const txs: Array<{ loan_number: string; branch: string | null; category_6: string | null; category_7: string | null; movement: number | string | null; month: string | null; year: number | null }> = [];
     for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
       const chunk = loanNumbers.slice(i, i + IN_CHUNK);
       if (chunk.length === 0) break;
@@ -109,7 +112,7 @@ export async function GET(req: NextRequest) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let q: any = supabase
           .from("pl_transactions")
-          .select("loan_number,category_6,category_7,movement,month,year")
+          .select("loan_number,branch,category_6,category_7,movement,month,year")
           .in("loan_number", chunk);
         if (sources.length) q = q.in("source", sources);
         return q;
@@ -123,31 +126,46 @@ export async function GET(req: NextRequest) {
     // Income +333 and -333 — which are reclassifications. Listed as rows they
     // read as duplicates; summed by category_7 they cancel, which is what they
     // mean.
-    type Agg = { concepts: Record<string, number>; groups: Record<string, number>; months: Set<string> };
+    type Agg = {
+      concepts: Record<string, number>;
+      groups: Record<string, number>;
+      months: Set<string>;
+      /** category_7 -> branches the amount is booked in. Not the loan's branch:
+       *  DM Margin is booked in 700 on loans the other branches originated. */
+      conceptBranches: Record<string, Set<string>>;
+    };
     const agg = new Map<string, Agg>();
     for (const t of txs) {
       if (!t.category_7) continue;
       let a = agg.get(t.loan_number);
-      if (!a) { a = { concepts: {}, groups: {}, months: new Set<string>() }; agg.set(t.loan_number, a); }
+      if (!a) { a = { concepts: {}, groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
       const v = money(t.movement);
       a.concepts[t.category_7] = (a.concepts[t.category_7] ?? 0) + v;
+      if (t.branch) (a.conceptBranches[t.category_7] ??= new Set()).add(t.branch);
       const g = t.category_6 ?? "(none)";
       a.groups[g] = (a.groups[g] ?? 0) + v;
       if (t.month && (t.month !== month || t.year !== year)) a.months.add(`${t.month} ${t.year}`);
     }
 
     const rows: LoanDetailRow[] = loans.map((l) => {
-      const a = agg.get(l.loan_number) ?? { concepts: {}, groups: {}, months: new Set<string>() };
+      const a = agg.get(l.loan_number) ?? { concepts: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
       const amount = money(l.loan_amount);
-      const expected = expectedMarginAccounts(l.branch!);
 
       const revenue = a.groups["Revenue"] ?? 0;
       const costs   = a.groups["Direct Production Costs"] ?? 0;
       const net     = NET_GROUPS.reduce((s, g) => s + (a.groups[g] ?? 0), 0);
 
-      const unexpected = ALL_MARGIN_ACCOUNTS.filter(
-        (acc) => !expected.includes(acc) && (a.concepts[acc] ?? 0) !== 0,
-      );
+      // An account is out of rule when the BRANCH IT IS BOOKED IN does not
+      // normally carry it — not when it differs from the loan's branch. DM
+      // Margin is always booked in 700, on loans every branch originates, so
+      // comparing against the loan's branch flagged 308 of 374 loans as
+      // anomalous when almost none of them were.
+      const unexpected = ALL_MARGIN_ACCOUNTS.filter((acc) => {
+        if ((a.concepts[acc] ?? 0) === 0) return false;
+        const booked = a.conceptBranches[acc];
+        if (!booked || booked.size === 0) return false;
+        return [...booked].some((b) => !expectedMarginAccounts(b).includes(acc));
+      });
       const noMargin = ALL_MARGIN_ACCOUNTS.every((acc) => (a.concepts[acc] ?? 0) === 0);
 
       return {
@@ -162,6 +180,9 @@ export async function GET(req: NextRequest) {
         processing: !!l.processing,
         support_on_demand: !!l.support_on_demand,
         concepts: a.concepts,
+        concept_branches: Object.fromEntries(
+          Object.entries(a.conceptBranches).map(([k, v]) => [k, [...v].sort()]),
+        ),
         unexpected_accounts: unexpected,
         foreign_months: [...a.months].sort(),
         revenue, costs, net,
