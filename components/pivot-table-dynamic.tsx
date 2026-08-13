@@ -123,7 +123,10 @@ function NoteCellContent({
   bps?: string | null;
 }) {
   return (
-    <span className="inline-flex flex-col items-end">
+    // Inline, never stacked. A second line under the figure doubles the height
+    // of every row in the report the moment bps are switched on, which undoes
+    // the compact density the whole grid is built around.
+    <span className="inline-flex flex-row items-center justify-end gap-1.5 whitespace-nowrap">
       <span className={`inline-flex items-center justify-end gap-1 ${badgeClass}`}>
         {hasNote && (
           <span
@@ -138,8 +141,10 @@ function NoteCellContent({
         {text}
       </span>
       {bps != null && (
-        <span className="text-[10px] font-normal leading-tight text-slate-400 tabular-nums">
-          {bps}
+        <span className="shrink-0 rounded border border-slate-200 bg-slate-100/90 px-1 py-0.5 font-mono text-[10px] text-slate-500">
+          {/* "— bps" would read as a unit on a missing value, so the dash goes
+              on its own when there is nothing to divide by. */}
+          {bps === "—" ? "—" : `${bps} bps`}
         </span>
       )}
     </span>
@@ -1043,9 +1048,22 @@ export function PivotTableDynamic({
       </div>
       )}
 
+      {/* Active bps base, stated once directly above the grid instead of
+          repeated inside every month header, where it collided with the short
+          month names and pushed the header out of shape. Sits inside the same
+          block as the table so it still travels with a screenshot of the
+          report — which is the point: 100 bps over banked volume and 100 bps
+          over total volume are different numbers that look identical. */}
+      {bpsBaseLabel && (
+        <div className="inline-flex items-center gap-1.5 self-start rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+          bps base
+          <span className="text-[#001A40]">{bpsBaseLabel}</span>
+        </div>
+      )}
+
       {/* Pivot table */}
       <div
-        className={`overflow-auto border shadow-xs ${homesiTheme ? "rounded-2xl border-slate-200 bg-white" : "rounded-xl border-gray-200 bg-white shadow-sm"}`}
+        className={`max-w-[1380px] overflow-auto border shadow-xs ${homesiTheme ? "rounded-2xl border-slate-200 bg-white" : "rounded-xl border-gray-200 bg-white shadow-sm"}`}
         style={{ maxHeight: "calc(100vh - 240px)" }}
       >
         <table className="w-full border-collapse">
@@ -1072,16 +1090,6 @@ export function PivotTableDynamic({
               {months.map(m => (
                 <th key={m} className={`text-right whitespace-nowrap ${homesiTheme ? `${TH_LIGHT} ${colRule}` : "bg-gray-50 px-2 py-1.5 text-[10px] font-semibold text-gray-500"}`}>
                   {m.slice(0, 3)}
-                  {/* The bps base, repeated in the table header. The control
-                      bar states it too, but a screenshot of the grid alone
-                      often crops the controls out — and 100 bps over banked
-                      volume and 100 bps over total volume look identical on the
-                      page. This is the copy that survives the crop. */}
-                  {bpsBaseLabel && (
-                    <span className="block text-[9px] font-medium normal-case tracking-normal text-slate-500">
-                      bps · {bpsBaseLabel}
-                    </span>
-                  )}
                 </th>
               ))}
               <th
