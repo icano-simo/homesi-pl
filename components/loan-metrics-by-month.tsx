@@ -46,6 +46,8 @@ interface Props {
   onShowBpsChange: (v: boolean) => void;
   bpsBase: BpsBase;
   onBpsBaseChange: (b: BpsBase) => void;
+  /** Opens the per-loan detail for a month. Omit to leave the totals inert. */
+  onOpenMonth?: (month: string) => void;
 }
 
 const fmtCount = (n: number) => n.toLocaleString("en-US");
@@ -54,6 +56,7 @@ const fmtMoney = (n: number) =>
 
 export function LoanMetricsByMonthBar({
   data, loading, error, mode, onModeChange, showBps, onShowBpsChange, bpsBase, onBpsBaseChange,
+  onOpenMonth,
 }: Props) {
   if (loading) {
     return <div className="mb-6 h-[186px] animate-pulse rounded-2xl border border-slate-200/80 bg-slate-50" />;
@@ -150,7 +153,7 @@ export function LoanMetricsByMonthBar({
       {months.length > 0 && (
         <div className="scrollbar-thin-slate flex snap-x items-stretch gap-3 overflow-x-auto pb-2">
           {months.map((month) => (
-            <MonthCard key={month} month={month} m={byMonth[month]} mode={mode} />
+            <MonthCard key={month} month={month} m={byMonth[month]} mode={mode} onOpen={onOpenMonth} />
           ))}
         </div>
       )}
@@ -182,7 +185,9 @@ function Segmented({ options, value, onChange }: {
   );
 }
 
-function MonthCard({ month, m, mode }: { month: string; m: MonthMetrics; mode: "count" | "amount" }) {
+function MonthCard({ month, m, mode, onOpen }: {
+  month: string; m: MonthMetrics; mode: "count" | "amount"; onOpen?: (month: string) => void;
+}) {
   const hasTags = m.b2b + m.processing + m.support_on_demand + m.affinity + m.recruitment > 0;
   const isAmount = mode === "amount";
 
@@ -202,9 +207,18 @@ function MonthCard({ month, m, mode }: { month: string; m: MonthMetrics; mode: "
       </div>
 
       <div className="flex items-baseline">
-        <span className={`font-bold tabular-nums text-[#001A40] ${isAmount ? "text-lg" : "text-2xl"}`}>
+        {/* The total is the way into the loans behind it, in either mode. */}
+        <button
+          type="button"
+          disabled={!onOpen}
+          onClick={() => onOpen?.(month)}
+          title={onOpen ? `Show the ${m.total} loans behind ${month}` : undefined}
+          className={`font-bold tabular-nums text-[#001A40] ${isAmount ? "text-lg" : "text-2xl"} ${
+            onOpen ? "cursor-pointer rounded underline decoration-[#A6DEFF] decoration-2 underline-offset-4 hover:decoration-[#001A40]" : ""
+          }`}
+        >
           {hero}
-        </span>
+        </button>
         <span className="ml-1.5 text-xs font-medium text-slate-500">total</span>
       </div>
 

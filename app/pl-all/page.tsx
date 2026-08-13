@@ -7,6 +7,7 @@ import { PivotTableDynamic } from "@/components/pivot-table-dynamic";
 import { ReportFilter } from "@/components/report-filter";
 import { LoanMetricsByMonthBar } from "@/components/loan-metrics-by-month";
 import { useLoanMetrics } from "@/lib/use-loan-metrics";
+import { LoanDetailDrawer } from "@/components/loan-detail-drawer";
 import { buildSplitsMap, fanOutBySplits } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
@@ -45,9 +46,21 @@ const SOURCE_LABELS: Record<string, string> = {
 function srcLabel(s: string) { return SOURCE_LABELS[s] ?? s; }
 
 function FilterChip({ label, value }: { label: string; value: string }) {
+  // Branch gets more weight than the rest. It is the context that slips out of
+  // mind first when reading a grid of figures, and reading the right numbers
+  // under the wrong branch is the expensive mistake.
+  const isBranch = label === "Branch";
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-900">
-      <span className="font-normal text-sky-500">{label}:</span>
+    <span
+      className={
+        isBranch
+          ? "inline-flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-100 px-3.5 py-1.5 text-sm font-bold text-sky-900"
+          : "inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-900"
+      }
+    >
+      <span className={isBranch ? "text-xs font-semibold uppercase tracking-wide text-sky-600" : "font-normal text-sky-500"}>
+        {label}:
+      </span>
       {value}
     </span>
   );
@@ -87,6 +100,9 @@ export default function PLAllPage() {
   // 716 and gives the corporate branch division-wide volume, so a branch filter
   // no longer empties the panel.
   const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources);
+
+  // Month whose loans are open in the detail drawer.
+  const [detailMonth, setDetailMonth] = useState<string | null>(null);
 
   async function fetchData(yrs: string[], brs: string[], srcs: string[]) {
     setLoading(true); setError("");
@@ -304,6 +320,7 @@ export default function PLAllPage() {
           onShowBpsChange={loanMetrics.setShowBps}
           bpsBase={loanMetrics.bpsBase}
           onBpsBaseChange={loanMetrics.setBpsBase}
+          onOpenMonth={setDetailMonth}
         />
       )}
 
@@ -365,7 +382,16 @@ export default function PLAllPage() {
           emptyMessage="No transactions found for the selected filters."
         />
       )}
+        <LoanDetailDrawer
+          open={detailMonth !== null}
+          month={detailMonth}
+          year={loadedYears.length === 1 ? Number(loadedYears[0]) : null}
+          branches={loadedBranches}
+          sources={loadedSources}
+          onClose={() => setDetailMonth(null)}
+        />
     </div>
     </div>
+
   );
 }

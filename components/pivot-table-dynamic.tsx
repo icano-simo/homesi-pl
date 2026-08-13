@@ -914,6 +914,12 @@ export function PivotTableDynamic({
 
   const rows: React.ReactNode[] = [];
 
+  // The Total column spans every displayed month, so its denominator is the sum
+  // of those months' bases — not any single month's.
+  const bpsBaseTotal = bpsBaseByMonth
+    ? months.reduce((s, m) => s + (bpsBaseByMonth[m] ?? 0), 0)
+    : 0;
+
   // Total Income sticky row (always visible, based on raw txs)
   rows.push(
     <tr key="__grand__">
@@ -947,7 +953,7 @@ export function PivotTableDynamic({
                 hasNote={noteIndex.any.has(key)}
                 isDirect={noteIndex.direct.has(key)}
                 badgeClass={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}
-                reserveBpsSlot={bpsBaseByMonth != null}
+                bps={bpsBaseByMonth ? fmtBps(grandByMonth[m], bpsBaseByMonth[m]) ?? "—" : null}
               />
             ) : (
               <span className={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}>
@@ -975,7 +981,7 @@ export function PivotTableDynamic({
             hasNote={noteIndex.any.has(cellKey(baseScope, null))}
             isDirect={noteIndex.direct.has(cellKey(baseScope, null))}
             badgeClass={homesiTheme ? grandTotalBadge(grandTotal) : ""}
-            reserveBpsSlot={bpsBaseByMonth != null}
+            bps={bpsBaseByMonth ? fmtBps(grandTotal, bpsBaseTotal) ?? "—" : null}
           />
         ) : (
           <span className={homesiTheme ? grandTotalBadge(grandTotal) : ""}>
@@ -986,11 +992,6 @@ export function PivotTableDynamic({
     </tr>
   );
 
-  // The Total column spans every displayed month, so its denominator is the sum
-  // of those months' bases — not any single month's.
-  const bpsBaseTotal = bpsBaseByMonth
-    ? months.reduce((s, m) => s + (bpsBaseByMonth[m] ?? 0), 0)
-    : 0;
 
   renderPivotNodes(tree, 0, rows, "root", [], {
     months,
