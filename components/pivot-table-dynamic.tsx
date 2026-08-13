@@ -194,26 +194,33 @@ function homesiValueCls(v: number | undefined): string {
   // Muted zero state: "—" and 0.00 recede rather than competing with real
   // figures for attention.
   if (!v) return "text-slate-300 font-normal";
-  return v < 0 ? "text-rose-700" : "text-slate-800";
+  // Red by exception. A positive figure is the ordinary case in a report and
+  // gets no colour of its own; only a loss is worth an eye movement.
+  return v < 0 ? "text-rose-600 font-medium" : "text-[#001A40] font-medium";
 }
 
-function homesiBadgeCls(v: number | undefined, isSubtotal: boolean): string {
-  // Only subtotals and totals carry a badge. A P&L is mostly negative at detail
-  // level, so badging every row would paint the whole table and the badge would
-  // stop meaning anything.
-  if (!isSubtotal || v == null || v === 0) return "";
+/**
+ * Badge for the Net Income closing rows — and only those.
+ *
+ * Every hierarchy row used to get this treatment, which meant a report was a
+ * field of emerald pills on every positive figure. A badge that appears on
+ * hundreds of rows tells the reader nothing; reserved for the two bottom lines
+ * it tells them where the answer is.
+ */
+function netIncomeBadge(v: number | undefined): string {
+  if (v == null || v === 0) return "";
   return v < 0
-    ? "text-rose-700 bg-rose-50/70 font-semibold px-2 py-0.5 rounded text-xs"
-    : "text-emerald-800 bg-emerald-50/80 font-bold px-2 py-0.5 rounded text-xs";
+    ? "bg-rose-50 text-rose-700 font-bold px-1.5 py-0.5 rounded"
+    : "bg-emerald-50 text-emerald-800 font-bold px-1.5 py-0.5 rounded";
 }
 
 /**
  * Total Income banner values.
  *
  * A loss gets the pastel rose badge; everything else stays plain navy, set on
- * the cell itself. Deliberately not the emerald badge used for other subtotals:
- * this row is always present, so badging its ordinary state would make the
- * badge mean "this row exists" rather than "look at this".
+ * the cell itself. No emerald here even though netIncomeBadge has one: this is
+ * the top line, not the bottom line, and it is always on screen — badging its
+ * ordinary state would make the badge mean "this row exists".
  */
 function grandTotalBadge(v: number | undefined): string {
   return v != null && v < 0
@@ -461,11 +468,12 @@ function renderPivotNodes(
               onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(m, v ?? 0); } : undefined}
               className={`${numCell} ${homesi ? colRule : ""} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${ctx.notesOn ? "cursor-pointer" : ""}`}
             >
+              {/* No badge on hierarchy rows. Colour carries the sign; the pill
+                  is reserved for the Net Income closing lines. */}
               <NoteCellContent
                 text={fmtM(v)}
                 hasNote={ctx.notesOn && ctx.noteAny.has(key)}
                 isDirect={ctx.noteDirect.has(key)}
-                badgeClass={homesi ? homesiBadgeCls(v, true) : ""}
               />
             </td>
           );
@@ -479,7 +487,6 @@ function renderPivotNodes(
             text={fmtM(node.total)}
             hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(nodeScope, null))}
             isDirect={ctx.noteDirect.has(cellKey(nodeScope, null))}
-            badgeClass={homesi ? homesiBadgeCls(node.total, true) : ""}
           />
         </td>
       </tr>
@@ -542,9 +549,13 @@ function renderPivotNodes(
 
     // Op/NonOp Net Income footer (when has content)
     if (isOpNonOp && hasContent) {
-      const footerBg    = isOp ? "#dcfce7" : "#f1f5f9";
+      // Neutral fill in the HOMESÍ theme. The Operational footer used to be a
+      // full-width emerald band, which is the loudest green in the report and
+      // would swallow the pill that now carries the actual result. The 3px left
+      // rule still marks which of the two closings this is.
+      const footerBg    = homesi ? "#f1f5f9" : isOp ? "#dcfce7" : "#f1f5f9";
       const footerAcc   = isOp ? "#16a34a" : "#64748b";
-      const footerText  = isOp ? "text-emerald-900" : "text-slate-800";
+      const footerText  = homesi ? "text-[#001A40]" : isOp ? "text-emerald-900" : "text-slate-800";
       const footerLabel = isOp ? "Net Income (Operational)" : "Net Income (Non-Operational)";
       rows.push(
         <tr key={`${nodeKey}|net`} style={{ backgroundColor: footerBg }} className="border-b border-gray-200">
@@ -561,7 +572,7 @@ function renderPivotNodes(
                 text={fmtM(node.byMonth[m])}
                 hasNote={false}
                 isDirect={false}
-                badgeClass={homesi ? homesiBadgeCls(node.byMonth[m], true) : ""}
+                badgeClass={homesi ? netIncomeBadge(node.byMonth[m]) : ""}
               />
             </td>
           ))}
@@ -573,7 +584,7 @@ function renderPivotNodes(
               text={fmtM(node.total)}
               hasNote={false}
               isDirect={false}
-              badgeClass={homesi ? homesiBadgeCls(node.total, true) : ""}
+              badgeClass={homesi ? netIncomeBadge(node.total) : ""}
             />
           </td>
         </tr>
