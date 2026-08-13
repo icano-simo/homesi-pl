@@ -76,15 +76,12 @@ export function LoanMetricsByMonthBar({ years, branches, sources, costCenterIds 
       <div className="mb-3 text-xs font-bold uppercase tracking-wider text-[#001A40]">
         Loan Count by Month
       </div>
-      {/* Six columns, so a full half-year fills the width and a full year wraps
-          into two even rows. Written as a template rather than a grid-cols-6
-          class because the month list is whatever the data holds: with four
-          months, a fixed six-column grid would leave two empty tracks and make
-          the cards narrower than the strip it replaced. */}
-      <div
-        className="grid gap-3"
-        style={{ gridTemplateColumns: `repeat(${Math.min(months.length, 6)}, minmax(0, 1fr))` }}
-      >
+      {/* One row that scrolls, rather than a grid that wraps.
+          Filtering two years produces up to twenty-four months, and stacking
+          those into rows both buries the later ones and squeezes every card
+          narrow enough to break the pills onto separate lines. A strip keeps
+          each card at its natural size and moves the cost to a scroll. */}
+      <div className="scrollbar-thin-slate flex snap-x items-stretch gap-3 overflow-x-auto pb-2">
         {months.map((month) => (
           <MonthCard key={month} month={month} m={byMonth![month]} />
         ))}
@@ -97,7 +94,11 @@ function MonthCard({ month, m }: { month: string; m: MonthMetrics }) {
   const hasTags = m.b2b + m.processing + m.support_on_demand + m.affinity + m.recruitment > 0;
 
   return (
-    <div className="flex flex-col justify-between rounded-xl border border-slate-200/60 bg-slate-50/60 p-3 transition-all hover:border-[#A6DEFF] hover:bg-white hover:shadow-xs">
+    // shrink-0 is what makes the strip work: without it flex would compress
+    // every card to fit the container, which is the squashing this replaced.
+    // The floor is set so two channel pills sit side by side and the
+    // banked/brokered line stays on one line.
+    <div className="flex w-[168px] shrink-0 snap-start flex-col justify-between rounded-xl border border-slate-200/60 bg-slate-50/60 p-3 transition-all hover:border-[#A6DEFF] hover:bg-white hover:shadow-xs">
       <div className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">
         {MONTH_SHORT[month] ?? month}
       </div>
