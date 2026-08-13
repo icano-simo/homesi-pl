@@ -6,6 +6,7 @@ import { NotesLog } from "@/components/notes-log";
 import { PivotTableDynamic } from "@/components/pivot-table-dynamic";
 import { ReportFilter } from "@/components/report-filter";
 import { LoanMetricsByMonthBar } from "@/components/loan-metrics-by-month";
+import { useLoanMetrics } from "@/lib/use-loan-metrics";
 import { buildSplitsMap, fanOutBySplits } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
@@ -77,6 +78,10 @@ export default function PLAllPage() {
 
   // Params that were last successfully loaded — for metrics panel and chips
   const [loadedYears,    setLoadedYears]    = useState<string[]>([]);
+
+  // Loan officials keep their own branch naming, so the P&L branch list is not
+  // passed through here — the endpoint normalizes and reconciles it instead.
+  const loanMetrics = useLoanMetrics(loadedYears, [], []);
   const [loadedBranches, setLoadedBranches] = useState<string[]>([]);
   const [loadedSources,  setLoadedSources]  = useState<string[]>([]);
 
@@ -290,9 +295,15 @@ export default function PLAllPage() {
           sufficient context and avoids a silent empty-panel when branch formats differ. */}
       {loaded && (
         <LoanMetricsByMonthBar
-          years={loadedYears}
-          branches={[]}
-          sources={[]}
+          data={loanMetrics.data}
+          loading={loanMetrics.loading}
+          error={loanMetrics.error}
+          mode={loanMetrics.mode}
+          onModeChange={loanMetrics.setMode}
+          showBps={loanMetrics.showBps}
+          onShowBpsChange={loanMetrics.setShowBps}
+          bpsBase={loanMetrics.bpsBase}
+          onBpsBaseChange={loanMetrics.setBpsBase}
         />
       )}
 
@@ -348,6 +359,8 @@ export default function PLAllPage() {
           defaultLevels={["op_nonop", "category_2", "category_6", "category_7", "gl"]}
           storageKey="pl_all_gl_hierarchy"
           homesiTheme
+          bpsBaseByMonth={loanMetrics.bpsBaseByMonth}
+          bpsBaseLabel={loanMetrics.bpsBaseLabel}
           loading={loading}
           emptyMessage="No transactions found for the selected filters."
         />

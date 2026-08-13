@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquare } from "lucide-react";
 import { PivotTableDynamic } from "@/components/pivot-table-dynamic";
 import { ReportFilter } from "@/components/report-filter";
+import { LoanMetricsByMonthBar } from "@/components/loan-metrics-by-month";
+import { useLoanMetrics } from "@/lib/use-loan-metrics";
 import { buildSplitsMap } from "@/lib/apply-splits";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { SplitEntry } from "@/lib/apply-splits";
@@ -70,6 +72,10 @@ export default function PLNotesPage() {
   const autoLoaded = useRef(false);
 
   const [loadedYears,    setLoadedYears]    = useState<string[]>([]);
+
+  // Same panel as P&L All, same hook, same numbers. Branches are not forwarded:
+  // loan_officials names them independently and the endpoint reconciles them.
+  const loanMetrics = useLoanMetrics(loadedYears, [], []);
   const [loadedBranches, setLoadedBranches] = useState<string[]>([]);
   const [loadedSources,  setLoadedSources]  = useState<string[]>([]);
 
@@ -229,6 +235,23 @@ export default function PLNotesPage() {
         </span>
       </div>
 
+      {/* Per-month loan metrics — the same panel P&L All shows, from the same
+          hook and the same request, so the two reports can never disagree about
+          how many loans a month had. */}
+      {loaded && (
+        <LoanMetricsByMonthBar
+          data={loanMetrics.data}
+          loading={loanMetrics.loading}
+          error={loanMetrics.error}
+          mode={loanMetrics.mode}
+          onModeChange={loanMetrics.setMode}
+          showBps={loanMetrics.showBps}
+          onShowBpsChange={loanMetrics.setShowBps}
+          bpsBase={loanMetrics.bpsBase}
+          onBpsBaseChange={loanMetrics.setBpsBase}
+        />
+      )}
+
       {/* Notes whose transaction was removed by a re-upload. Sits right after
           the legend so it is impossible to miss — the whole point is that a
           comment never disappears without the user being told. */}
@@ -260,6 +283,8 @@ export default function PLNotesPage() {
           lockHierarchy
           enableNotes
           homesiTheme
+          bpsBaseByMonth={loanMetrics.bpsBaseByMonth}
+          bpsBaseLabel={loanMetrics.bpsBaseLabel}
           notes={notes}
           onNotesChanged={() => refreshNotes(loadedYears)}
           onOrphansChange={setOrphans}

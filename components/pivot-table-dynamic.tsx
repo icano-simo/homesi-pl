@@ -112,28 +112,64 @@ function NoteCellContent({
   hasNote,
   isDirect,
   badgeClass = "",
+  bps,
 }: {
   text: string;
   hasNote: boolean;
   isDirect: boolean;
   /** Negative-total badge in the HOMESÍ theme; empty elsewhere. */
   badgeClass?: string;
+  /** Already-formatted basis points, rendered under the figure. */
+  bps?: string | null;
 }) {
   return (
-    <span className={`inline-flex items-center justify-end gap-1 ${badgeClass}`}>
-      {hasNote && (
-        <span
-          aria-label={isDirect ? "Has a note" : "Has notes at a more detailed level"}
-          className={
-            isDirect
-              ? "inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF4040]"
-              : "inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-[#001A40]/40"
-          }
-        />
+    <span className="inline-flex flex-col items-end">
+      <span className={`inline-flex items-center justify-end gap-1 ${badgeClass}`}>
+        {hasNote && (
+          <span
+            aria-label={isDirect ? "Has a note" : "Has notes at a more detailed level"}
+            className={
+              isDirect
+                ? "inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF4040]"
+                : "inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-[#001A40]/40"
+            }
+          />
+        )}
+        {text}
+      </span>
+      {bps != null && (
+        <span className="text-[10px] font-normal leading-tight text-slate-400 tabular-nums">
+          {bps}
+        </span>
       )}
-      {text}
     </span>
   );
+}
+
+/**
+ * Basis points of a figure against the month's loan volume.
+ *
+ * Returns null when there is nothing to divide by. A zero would be a lie: the
+ * answer is not "0 bps", it is "not computable" — the month has no loan volume
+ * in the chosen base, or the branch filter selects branches that carry no loans
+ * at all. The caller renders a dash, and the strip above the table explains
+ * which of the two it is.
+ *
+ * One decimal. With a base near $12M a single bp is about $1,200, so integers
+ * throw away real resolution on small lines; two decimals is noise. A figure
+ * that is non-zero but rounds below 0.1 shows as "<0.1" rather than "0.0", so a
+ * small real number never reads as nothing.
+ *
+ * The sign is kept. A P&L is mostly negative at detail level, so most of these
+ * are negative — and the bps sits directly under the figure it comes from, where
+ * an unsigned value would contradict the number above it.
+ */
+function fmtBps(value: number | undefined, base: number | undefined): string | null {
+  if (!base) return null;
+  const v = value ?? 0;
+  const bps = (v / base) * 10000;
+  if (v !== 0 && Math.abs(bps) < 0.05) return bps < 0 ? "<-0.1" : "<0.1";
+  return bps.toFixed(1);
 }
 
 /** Everything the recursive renderer needs beyond the nodes themselves. */
@@ -155,6 +191,11 @@ interface RenderCtx {
   baseScope: NoteScope;
   /** HOMESÍ 2025 styling: zebra striping, sky hover, typographic depth ramp. */
   homesi: boolean;
+  /** Loan volume per month for the chosen bps base. Null turns bps off. */
+  bpsBase: Record<string, number> | null;
+  /** Sum of the displayed months' bases, for the Total column — its denominator
+   *  is not any single month but the whole span the column covers. */
+  bpsBaseTotal: number;
 }
 
 /**
@@ -269,6 +310,16 @@ export interface PivotTableDynamicProps {
    *  multi-year loads, where a month column merges several years and the cell
    *  genuinely has no single period. */
   scopeYear?: number;
+  /**
+   * Loan volume by month for the selected bps base, already resolved by the
+   * page. Passing resolved numbers rather than raw metrics keeps the corporate
+   * branch rule (700) in one place — the endpoint decides, this component only
+   * draws. Null or absent turns the annotation off.
+   */
+  bpsBaseByMonth?: Record<string, number> | null;
+  /** Name of the chosen base, printed in the table header so a screenshot of
+   *  the grid alone still says what the bps were computed against. */
+  bpsBaseLabel?: string | null;
 }
 
 // ─── Recursive renderer (mutates `rows` for performance) ─────────────────────
@@ -334,6 +385,7 @@ function renderPivotNodes(
                   text={fmtM(t.mvmt)}
                   hasNote={ctx.notesOn && ctx.noteAny.has(key)}
                   isDirect={ctx.noteDirect.has(key)}
+                  bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBase[m]) ?? "—" : null}
                 />
               )}
             </td>
@@ -348,6 +400,7 @@ function renderPivotNodes(
             text={fmtM(t.mvmt)}
             hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(leafScope, null))}
             isDirect={ctx.noteDirect.has(cellKey(leafScope, null))}
+            bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBaseTotal) ?? "—" : null}
           />
         </td>
       </>
@@ -474,6 +527,7 @@ function renderPivotNodes(
                 text={fmtM(v)}
                 hasNote={ctx.notesOn && ctx.noteAny.has(key)}
                 isDirect={ctx.noteDirect.has(key)}
+                bps={ctx.bpsBase ? fmtBps(v, ctx.bpsBase[m]) ?? "—" : null}
               />
             </td>
           );
@@ -487,6 +541,7 @@ function renderPivotNodes(
             text={fmtM(node.total)}
             hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(nodeScope, null))}
             isDirect={ctx.noteDirect.has(cellKey(nodeScope, null))}
+            bps={ctx.bpsBase ? fmtBps(node.total, ctx.bpsBaseTotal) ?? "—" : null}
           />
         </td>
       </tr>
@@ -573,6 +628,7 @@ function renderPivotNodes(
                 hasNote={false}
                 isDirect={false}
                 badgeClass={homesi ? netIncomeBadge(node.byMonth[m]) : ""}
+                bps={ctx.bpsBase ? fmtBps(node.byMonth[m], ctx.bpsBase[m]) ?? "—" : null}
               />
             </td>
           ))}
@@ -585,6 +641,7 @@ function renderPivotNodes(
               hasNote={false}
               isDirect={false}
               badgeClass={homesi ? netIncomeBadge(node.total) : ""}
+              bps={ctx.bpsBase ? fmtBps(node.total, ctx.bpsBaseTotal) ?? "—" : null}
             />
           </td>
         </tr>
@@ -629,6 +686,8 @@ export function PivotTableDynamic({
   onNotesChanged,
   onOrphansChange,
   scopeYear,
+  bpsBaseByMonth,
+  bpsBaseLabel,
 }: PivotTableDynamicProps) {
   const [activeLevels, setActiveLevels] = useState<PivotField[]>(() =>
     storageKey ? readStorage(storageKey, defaultLevels) : defaultLevels
@@ -886,6 +945,12 @@ export function PivotTableDynamic({
     </tr>
   );
 
+  // The Total column spans every displayed month, so its denominator is the sum
+  // of those months' bases — not any single month's.
+  const bpsBaseTotal = bpsBaseByMonth
+    ? months.reduce((s, m) => s + (bpsBaseByMonth[m] ?? 0), 0)
+    : 0;
+
   renderPivotNodes(tree, 0, rows, "root", [], {
     months,
     exp,
@@ -897,6 +962,8 @@ export function PivotTableDynamic({
     openCell: setOpenCell,
     baseScope,
     homesi: homesiTheme,
+    bpsBase: bpsBaseByMonth ?? null,
+    bpsBaseTotal,
   });
 
   return (
@@ -1005,6 +1072,16 @@ export function PivotTableDynamic({
               {months.map(m => (
                 <th key={m} className={`text-right whitespace-nowrap ${homesiTheme ? `${TH_LIGHT} ${colRule}` : "bg-gray-50 px-2 py-1.5 text-[10px] font-semibold text-gray-500"}`}>
                   {m.slice(0, 3)}
+                  {/* The bps base, repeated in the table header. The control
+                      bar states it too, but a screenshot of the grid alone
+                      often crops the controls out — and 100 bps over banked
+                      volume and 100 bps over total volume look identical on the
+                      page. This is the copy that survives the crop. */}
+                  {bpsBaseLabel && (
+                    <span className="block text-[9px] font-medium normal-case tracking-normal text-slate-500">
+                      bps · {bpsBaseLabel}
+                    </span>
+                  )}
                 </th>
               ))}
               <th
