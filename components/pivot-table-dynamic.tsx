@@ -51,7 +51,9 @@ const DEPTH_STYLES = [
  * reserved for meaning rather than depth.
  */
 const HOMESI_DEPTH_STYLES = [
-  { bg: "rgba(241,245,249,0.8)", text: "text-[#001A40]",  font: "font-bold",     border: "border-slate-200"   },
+  // Opaque, not rgba: this tone lands on the frozen first column, and a
+  // translucent pinned cell shows the month columns sliding underneath it.
+  { bg: "#f4f7fa",               text: "text-[#001A40]",  font: "font-bold",     border: "border-slate-200"   },
   { bg: "transparent",           text: "text-slate-800",  font: "font-semibold", border: "border-slate-200/70" },
   { bg: "transparent",           text: "text-slate-800",  font: "font-semibold", border: "border-slate-200/60" },
   { bg: "transparent",           text: "text-slate-600",  font: "",              border: "border-slate-200/50" },
@@ -157,16 +159,21 @@ function NoteCellContent({
         {text}
       </span>
       {bps != null ? (
-        // Fixed width, not content width: "—" and "123.4 bps" would otherwise
-        // push their figures to different places and the column would zig-zag
-        // down the report.
-        <span className="inline-block w-[55px] shrink-0 rounded border border-slate-200 bg-slate-100/90 px-1 py-0.5 text-center font-mono text-[10px] text-slate-500">
+        // Plain muted text, no fill and no border. Boxed, it repeated a framed
+        // chip on every figure of every month and the grid read as saturated
+        // before a single number had been taken in.
+        //
+        // Fixed width all the same, and that is not decoration: "—" and
+        // "123.4 bps" have different natural widths, so a content-width element
+        // would leave each figure in a slightly different place and the column
+        // of amounts would zig-zag down the page.
+        <span className="ml-1 inline-block w-[52px] shrink-0 text-left font-mono text-[10px] font-normal text-slate-400">
           {/* "— bps" would read as a unit on a missing value, so the dash goes
               on its own when there is nothing to divide by. */}
           {bps === "—" ? "—" : `${bps} bps`}
         </span>
       ) : reserveBpsSlot ? (
-        <span aria-hidden className="inline-block w-[55px] shrink-0" />
+        <span aria-hidden className="ml-1 inline-block w-[52px] shrink-0" />
       ) : null}
     </span>
   );
@@ -236,7 +243,13 @@ function homesiRowBg(index: number): string {
   // a class because the sticky first and Total columns must repaint the exact
   // same tone — a pinned cell that is even slightly transparent lets the
   // scrolling month columns show through it.
-  return index % 2 === 0 ? "#ffffff" : "rgba(248,250,252,0.5)";
+  //
+  // Which is exactly what this used to do: the odd stripe was
+  // rgba(248,250,252,0.5), so the frozen first column bled the months passing
+  // underneath it on every other row. #fcfdfe is that same colour resolved
+  // against white, opaque, so the stripe looks identical and the pinned cells
+  // actually cover what is behind them.
+  return index % 2 === 0 ? "#ffffff" : "#fcfdfe";
 }
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -460,7 +473,7 @@ function renderPivotNodes(
           >
             <td
               title={t.desc ?? t.vendor ?? undefined}
-              style={{ ...firstColStyle, paddingLeft: 8, zIndex: 10, backgroundColor: rowBgFor(rows.length) }}
+              style={{ ...firstColStyle, paddingLeft: 8, zIndex: 20, backgroundColor: rowBgFor(rows.length) }}
               className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-500 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
@@ -526,7 +539,7 @@ function renderPivotNodes(
       >
         <td
           title={node.label}
-          style={{ ...firstColStyle, backgroundColor: effectiveBg, paddingLeft: pl, zIndex: 10, ...firstTdExtra }}
+          style={{ ...firstColStyle, backgroundColor: effectiveBg, paddingLeft: pl, zIndex: 20, ...firstTdExtra }}
           className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${textClass} ${fontClass} ${homesi ? `text-xs ${stickyCol}` : "text-[11px]"}`}
         >
           <span className="inline-flex items-center gap-1">
@@ -598,7 +611,7 @@ function renderPivotNodes(
           >
             <td
               title={t.desc ?? t.vendor ?? undefined}
-              style={{ ...firstColStyle, paddingLeft: leafPl, zIndex: 10, backgroundColor: rowBgFor(rows.length) }}
+              style={{ ...firstColStyle, paddingLeft: leafPl, zIndex: 20, backgroundColor: rowBgFor(rows.length) }}
               className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-400 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
@@ -642,7 +655,7 @@ function renderPivotNodes(
         <tr key={`${nodeKey}|net`} style={{ backgroundColor: footerBg }} className="border-b border-gray-200">
           <td
             title={footerLabel}
-            style={{ ...firstColStyle, backgroundColor: footerBg, borderLeft: `3px solid ${footerAcc}`, paddingLeft: pl + 16, zIndex: 10 }}
+            style={{ ...firstColStyle, backgroundColor: footerBg, borderLeft: `3px solid ${footerAcc}`, paddingLeft: pl + 16, zIndex: 20 }}
             className={`pr-3 py-1.5 text-[11px] font-extrabold ${footerText} whitespace-nowrap truncate`}
           >
             {footerLabel}
