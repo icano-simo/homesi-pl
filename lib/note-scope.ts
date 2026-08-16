@@ -53,6 +53,9 @@ export interface PLNote {
   orphaned_at: string | null;
   note_text: string;
   author: string | null;
+  /** Figure of the cell when the note was written. Null for notes created
+   *  before the column existed — those show only the current amount. */
+  amount_at_creation?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -376,4 +379,19 @@ export function scopeBreadcrumb(
   for (const k of order) push(k);
   for (const k of Object.keys(scope) as ScopeKey[]) push(k);
   return parts;
+}
+
+
+/**
+ * Label for a scope key/value pair, used when no resolver is supplied.
+ *
+ * Lives here rather than in a drawer component: it is the counterpart of
+ * scopeBreadcrumb, and every consumer of one wants the other.
+ */
+export function defaultScopeLabel(key: ScopeKey, value: string): string {
+  if (value === "__unassigned__") return "Unassigned";
+  if (value === "__conflict__")   return "Conflict";
+  if (value === "__no_loan__")    return "No Loan Number";
+  if (key === "year") return String(value);
+  return value || SCOPE_LABELS[key];
 }

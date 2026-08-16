@@ -33,15 +33,27 @@ export async function GET(req: NextRequest) {
   const supabase = createServerClient();
   const sp = new URL(req.url).searchParams;
 
-  const glCode   = sp.get("gl_code");
+  // The cell is a scope, not a GL. Clicking a Category 6 figure has to open
+  // its movements too, and that cell spans many GL accounts — querying by
+  // gl_code alone could only ever serve the deepest level.
+  const glCode     = sp.get("gl_code");
+  const category6  = sp.get("category_6");
+  const category7  = sp.get("category_7");
+  const costCenter = sp.get("cost_center");
   const month    = sp.get("month");
   const years    = sp.getAll("year").map(Number).filter(Boolean);
   const branches = sp.getAll("branch");
   const sources  = sp.getAll("source");
   const ccIds    = sp.getAll("cost_center_id");
 
-  if (!glCode) {
-    return NextResponse.json({ error: "gl_code is required" }, { status: 400 });
+  // A month alone is enough: the Total Income row has no dimension above it, and
+  // one month of it is a list somebody can actually read. What is refused is the
+  // unbounded request — no dimension and no period is the whole table.
+  if (!glCode && !category6 && !category7 && !costCenter && !month) {
+    return NextResponse.json(
+      { error: "a cell scope or a month is required" },
+      { status: 400 },
+    );
   }
 
   try {
@@ -54,7 +66,16 @@ export async function GET(req: NextRequest) {
           "id,gl_code,gl_name,branch,month,year,vendor,ref_numb,debit,credit,movement," +
           "check_description,check_description_2,check_description_3,cost_center_id",
         )
-        .eq("gl_code", glCode);
+        ;
+      if (glCode)     q = q.eq("gl_code", glCode);
+      if (category6)  q = q.eq("category_6", category6);
+      if (category7)  q = q.eq("category_7", category7);
+      // The cost centre of a row is the assignment, and "__unassigned__" /
+      // "__conflict__" are states rather than ids — the same stable values
+      // the pivot uses for its scope.
+      if (costCenter === "__unassigned__")    q = q.is("cost_center_id", null);
+      else if (costCenter === "__conflict__") q = q.eq("cost_center_status", "conflict");
+      else if (costCenter)                    q = q.eq("cost_center_id", costCenter);
       if (month)           q = q.eq("month", month);
       if (years.length)    q = q.in("year", years);
       if (branches.length) q = q.in("branch", branches);

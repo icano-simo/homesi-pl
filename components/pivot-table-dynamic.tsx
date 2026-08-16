@@ -14,15 +14,17 @@ import {
   type TxLeaf,
 } from "@/lib/pivot-engine";
 import { fanOutBySplits, type SplitEntry } from "@/lib/apply-splits";
-import { NoteDrawer, defaultScopeLabel, type NoteDrawerCell } from "@/components/note-drawer";
+import { createPortal } from "react-dom";
 import {
   buildNoteIndex,
   cellKey,
+  notesForCell,
   resolveNotes,
+  type NoteLevel,
   type NoteScope,
   type PLNote,
-  type ScopeKey,
 } from "@/lib/note-scope";
+import type { CellRef } from "@/lib/cell-ref";
 import type { PLReportTx } from "@/types";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -112,6 +114,155 @@ const totalColSize: React.CSSProperties = { minWidth: 135 };
 
 // ─── Note indicators ──────────────────────────────────────────────────────────
 
+/** Enter delay and leave grace for the hover preview, in ms. */
+const HOVER_IN_MS  = 400;
+const HOVER_OUT_MS = 200;
+
+/**
+ * True only where hovering is a gesture of its own.
+ *
+ * A touch screen reports a hover on the tap that precedes the click, so without
+ * this the preview would open under the finger on the way to the figure and the
+ * tap would land on whatever it had just covered. On those devices the dot has
+ * no preview at all: a tap opens the notes window.
+ */
+function useFinePointer(): boolean {
+  const [fine, setFine] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(hover: hover) and (pointer: fine)");
+    const on = () => setFine(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return fine;
+}
+
+/**
+ * The note indicator: a real button, not a decorated span.
+ *
+ * It has a job of its own now — the figure beside it opens the movements, the
+ * dot opens the notes — so it has to be reachable and announced as a control.
+ * The mark stays 6px because the report is read as a column of figures and a
+ * bigger one would compete with them; the button around it is 20px and
+ * transparent, pulled back with negative margins so those extra pixels cost the
+ * row no height and the amounts stay exactly where they were.
+ */
+function NoteDot({
+  isDirect,
+  onOpen,
+  preview,
+}: {
+  isDirect: boolean;
+  onOpen: () => void;
+  /** Read lazily: resolving every cell's notes up front would cost a pass over
+   *  the whole note set per rendered figure, and almost none are ever hovered. */
+  preview: () => PLNote[];
+}) {
+  const fine  = useFinePointer();
+  const ref   = useRef<HTMLButtonElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pop, setPop] = useState<{ x: number; y: number; notes: PLNote[] } | null>(null);
+
+  const clear = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
+  useEffect(() => clear, []);
+
+  const enter = () => {
+    if (!fine) return;
+    clear();
+    // Long enough that a pointer crossing the cell on its way elsewhere never
+    // opens it; short enough that stopping on the dot feels like an answer.
+    timer.current = setTimeout(() => {
+      const r = ref.current?.getBoundingClientRect();
+      if (!r) return;
+      setPop({ x: r.left + r.width / 2, y: r.bottom, notes: preview() });
+    }, HOVER_IN_MS);
+  };
+
+  const leave = () => {
+    if (!fine) return;
+    clear();
+    // Grace on the way out, so the pointer can travel from the dot into the
+    // preview without it closing underneath.
+    timer.current = setTimeout(() => setPop(null), HOVER_OUT_MS);
+  };
+
+  const first = pop?.notes[0];
+  const POP_W = 300;
+
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        onClick={(e) => { e.stopPropagation(); clear(); setPop(null); onOpen(); }}
+        onMouseEnter={enter}
+        onMouseLeave={leave}
+        onFocus={enter}
+        onBlur={leave}
+        aria-label={isDirect ? "Read the note on this cell" : "Read notes from more detailed levels"}
+        // 20px of target around a 6px mark; the negative margins hand the 14px
+        // difference back to the layout so no row grows.
+        className="relative -mx-[7px] -my-2 inline-flex h-5 w-5 shrink-0 items-center justify-center align-middle"
+      >
+        <span
+          aria-hidden
+          className={
+            isDirect
+              ? "inline-block h-1.5 w-1.5 rounded-full bg-[#FF4040]"
+              : "inline-block h-1.5 w-1.5 rounded-full border border-[#001A40]/40"
+          }
+        />
+      </button>
+
+      {/* Portalled to the body on purpose. The cell it belongs to sits inside a
+          scroll container full of sticky columns, each of which is its own
+          stacking context — anchored there, the preview would be clipped by one
+          of them and painted underneath the others. */}
+      {pop && typeof document !== "undefined" && createPortal(
+        <div
+          onMouseEnter={clear}
+          onMouseLeave={leave}
+          style={{
+            position: "fixed",
+            width: POP_W,
+            top: pop.y + 8,
+            // Clamped to the viewport: the dot lands in the last month column as
+            // often as the first, and a preview half off-screen is no preview.
+            left: Math.min(Math.max(8, pop.x - POP_W / 2), Math.max(8, window.innerWidth - POP_W - 8)),
+            zIndex: 80,
+          }}
+          className="rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl"
+        >
+          {first ? (
+            <>
+              <p className="line-clamp-3 whitespace-pre-wrap text-[11px] text-slate-700">
+                {first.note_text}
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="truncate text-[10px] text-slate-400">
+                  {first.author ?? "—"}
+                  {pop.notes.length > 1 ? ` · +${pop.notes.length - 1} more` : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setPop(null); onOpen(); }}
+                  className="shrink-0 text-[10px] font-semibold text-[#FF4040] hover:underline"
+                >
+                  View note{pop.notes.length > 1 ? "s" : ""}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="text-[11px] italic text-slate-400">No note text.</p>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 /**
  * Wraps a numeric cell so it can be clicked to open its notes.
  *
@@ -123,6 +274,8 @@ function NoteCellContent({
   text,
   hasNote,
   isDirect,
+  onOpenNotes,
+  previewNotes,
   badgeClass = "",
   bps,
   reserveBpsSlot = false,
@@ -130,6 +283,9 @@ function NoteCellContent({
   text: string;
   hasNote: boolean;
   isDirect: boolean;
+  /** Opens the notes window for this cell. Absent on rows that carry none. */
+  onOpenNotes?: () => void;
+  previewNotes?: () => PLNote[];
   /** Negative-total badge in the HOMESÍ theme; empty elsewhere. */
   badgeClass?: string;
   /** Already-formatted basis points, rendered beside the figure. */
@@ -147,15 +303,8 @@ function NoteCellContent({
     // the compact density the whole grid is built around.
     <span className="flex w-full flex-row items-center justify-end gap-1.5 whitespace-nowrap">
       <span className={`inline-flex items-center justify-end gap-1 ${badgeClass}`}>
-        {hasNote && (
-          <span
-            aria-label={isDirect ? "Has a note" : "Has notes at a more detailed level"}
-            className={
-              isDirect
-                ? "inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF4040]"
-                : "inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-[#001A40]/40"
-            }
-          />
+        {hasNote && onOpenNotes && previewNotes && (
+          <NoteDot isDirect={isDirect} onOpen={onOpenNotes} preview={previewNotes} />
         )}
         {text}
       </span>
@@ -221,7 +370,10 @@ interface RenderCtx {
   notesOn: boolean;
   noteAny: Set<string>;
   noteDirect: Set<string>;
-  openCell: (cell: NoteDrawerCell) => void;
+  /** Opens the notes-only window for a cell. */
+  openNotes: (ref: CellRef) => void;
+  /** Notes visible on a cell, resolved on demand for the hover preview. */
+  notesAt: (scope: NoteScope) => PLNote[];
   baseScope: NoteScope;
   /** HOMESÍ 2025 styling: zebra striping, sky hover, typographic depth ramp. */
   homesi: boolean;
@@ -230,9 +382,79 @@ interface RenderCtx {
   /** Sum of the displayed months' bases, for the Total column — its denominator
    *  is not any single month but the whole span the column covers. */
   bpsBaseTotal: number;
-  /** Opens the movements behind a GL cell. When set, GL rows stop expanding
-   *  into transaction rows: the modal is the breakdown. */
-  onDrillCell: ((glCode: string, glLabel: string, month: string | null) => void) | null;
+  /**
+   * Opens the detail window for a cell. When set, the tree stops materialising
+   * transaction rows: the breakdown happens in that window instead.
+   */
+  onDrillCell: ((ref: CellRef) => void) | null;
+}
+
+/**
+ * One level of the path down to a cell, kept as the recursion descends.
+ *
+ * This is what makes the whole ancestor chain offerable when a note is written.
+ * Re-deriving it from the cell's scope afterwards would mean guessing which
+ * levels the report was built from and in what order — and it would carry no
+ * figures, which the anchor needs: a note on Category 6 records Category 6's
+ * amount, not the GL amount of whichever row happened to be clicked.
+ */
+interface AncestorRef {
+  level: NoteLevel;
+  levelLabel: string;
+  valueLabel: string;
+  scope: NoteScope;
+  byMonth: Record<string, number>;
+  total: number;
+}
+
+/**
+ * Turns a path and a period into the cell both windows are opened with.
+ *
+ * Anchors run deepest-first: the level just clicked is the one most readers
+ * want, and everything above it is there so that the intermediate levels are
+ * reachable at all. Nothing is preselected — an anchor chosen by default is an
+ * anchor chosen by accident, which is exactly how notes meant for a transaction
+ * ended up on a description.
+ */
+function buildCellRef(
+  chain: readonly AncestorRef[],
+  trail: readonly string[],
+  month: string | null,
+  amount: number,
+  fallbackScope: NoteScope,
+  extraAnchor?: { level: NoteLevel; levelLabel: string; valueLabel: string; scope: NoteScope },
+): CellRef {
+  const withMonth = (s: NoteScope): NoteScope => (month ? { ...s, month } : s);
+  const self = chain[chain.length - 1];
+  const anchors = [...chain].reverse().map((a) => ({
+    level:      a.level,
+    levelLabel: a.levelLabel,
+    valueLabel: a.valueLabel,
+    scope:      withMonth(a.scope),
+    amount:     month ? (a.byMonth[month] ?? 0) : a.total,
+  }));
+  // The deepest anchor when the cell is not a hierarchy node: a transaction row,
+  // or the report's own total.
+  if (extraAnchor) {
+    anchors.unshift({
+      level:      extraAnchor.level,
+      levelLabel: extraAnchor.levelLabel,
+      valueLabel: extraAnchor.valueLabel,
+      scope:      withMonth(extraAnchor.scope),
+      amount,
+    });
+  }
+  return {
+    scope:      withMonth(extraAnchor ? extraAnchor.scope : self ? self.scope : fallbackScope),
+    breadcrumb: month ? [...trail, month] : [...trail],
+    title:      trail[trail.length - 1] ?? "Total Income",
+    month,
+    amount,
+    anchors,
+    // Bounded by a dimension or by a month. The one cell that is neither is the
+    // report's own total, whose movement list is every row loaded.
+    drillable:  chain.length > 0 || month != null,
+  };
 }
 
 /**
@@ -349,6 +571,16 @@ export interface PivotTableDynamicProps {
   /** Reports transaction-level notes whose transaction no longer exists, so the
    *  page can show them instead of letting them disappear. */
   onOrphansChange?: (orphans: PLNote[]) => void;
+  /**
+   * The notes as this table resolved them, handed back so the windows the page
+   * owns read the same set the indicators were drawn from.
+   *
+   * Not a nicety: a transaction note is stored as {transaction_id} alone, which
+   * satisfies no cell's containment test. Only the re-anchoring done here makes
+   * it roll up, so a window given the raw notes would show every aggregate note
+   * and silently omit every transaction one.
+   */
+  onResolvedNotes?: (notes: PLNote[]) => void;
   /** The single year the report covers, when unambiguous. Omitted for
    *  multi-year loads, where a month column merges several years and the cell
    *  genuinely has no single period. */
@@ -377,13 +609,17 @@ export interface PivotTableDynamicProps {
    */
   costCenterFilter?: readonly string[] | null;
   /**
-   * Opens the per-description breakdown of a GL cell.
+   * Opens the detail window for a figure — its movements, and the composer
+   * where a note's anchor level is chosen explicitly.
    *
-   * Supplying it also ends the tree at GL: the transaction rows below it are
-   * not drawn, because which description makes them readable depends on the
-   * account and no fixed level can answer that. The modal asks instead.
+   * Supplying it also ends the tree at the last hierarchy level: the transaction
+   * rows below it are not drawn, because which description makes them readable
+   * depends on the account and no fixed level can answer that. The window asks
+   * instead.
    */
-  onDrillCell?: (glCode: string, glLabel: string, month: string | null) => void;
+  onDrillCell?: (ref: CellRef) => void;
+  /** Opens the notes-only window. Reached from the dot, never from a figure. */
+  onOpenNotes?: (ref: CellRef) => void;
 }
 
 // ─── Recursive renderer (mutates `rows` for performance) ─────────────────────
@@ -395,6 +631,7 @@ function renderPivotNodes(
   pathPrefix: string,
   labelPath: string[],
   ctx: RenderCtx,
+  ancestors: AncestorRef[] = [],
 ) {
   const { months, exp, toggle, descSort, homesi } = ctx;
   const ramp = homesi ? HOMESI_DEPTH_STYLES : DEPTH_STYLES;
@@ -412,23 +649,19 @@ function renderPivotNodes(
   const rowBgFor = (idx: number) => (homesi ? homesiRowBg(idx) : "#ffffff");
 
   /** Numeric cell for a leaf transaction row. */
-  const leafCells = (t: TxLeaf, nodeScope: NoteScope, trail: string[]) => {
+  const leafCells = (t: TxLeaf, nodeScope: NoteScope, trail: string[], chain: AncestorRef[]) => {
     // Key scope, month excluded — cellKey adds the period as its suffix.
     const leafScope: NoteScope = { ...nodeScope, transaction_id: t.txId };
-    const scopeOf = (month: string | null): NoteScope => ({
-      ...leafScope,
-      ...(month ? { month } : {}),
-    });
-    const open = (month: string | null, amount: number) =>
-      ctx.openCell({
-        scope: scopeOf(month),
-        breadcrumb: [...trail, t.desc ?? t.vendor ?? "—", ...(month ? [month] : [])],
-        amount,
-        month,
-        transactions: [t],
-        transactionId: t.txId,
+    const label = t.desc ?? t.vendor ?? "—";
+    const refFor = (month: string | null, amount: number) =>
+      buildCellRef(chain, [...trail, label], month, amount, leafScope, {
         level: "transaction",
+        levelLabel: "Transaction",
+        valueLabel: label,
+        scope: leafScope,
       });
+    const open      = (m: string | null, a: number) => ctx.onDrillCell?.(refFor(m, a));
+    const openNotes = (m: string | null, a: number) => ctx.openNotes(refFor(m, a));
 
     return (
       <>
@@ -449,6 +682,8 @@ function renderPivotNodes(
                   text={fmtM(t.mvmt)}
                   hasNote={ctx.notesOn && ctx.noteAny.has(key)}
                   isDirect={ctx.noteDirect.has(key)}
+                  onOpenNotes={() => openNotes(m, t.mvmt)}
+                  previewNotes={() => ctx.notesAt({ ...leafScope, month: m })}
                   bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBase[m]) ?? "—" : null}
                 />
               )}
@@ -464,6 +699,8 @@ function renderPivotNodes(
             text={fmtM(t.mvmt)}
             hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(leafScope, null))}
             isDirect={ctx.noteDirect.has(cellKey(leafScope, null))}
+            onOpenNotes={() => openNotes(null, t.mvmt)}
+            previewNotes={() => ctx.notesAt(leafScope)}
             bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBaseTotal) ?? "—" : null}
           />
         </td>
@@ -482,11 +719,7 @@ function renderPivotNodes(
     // no chevron.
     const hasContent = node.children.length > 0 ||
       (node.txLeaves.length > 0 && !ctx.onDrillCell);
-    const isDrillable = !!ctx.onDrillCell && node.field === "gl";
-    // The gl key is glLabel's "code — name", so the code is the part before the
-    // em dash. Split rather than re-derived because the node is all the renderer
-    // has, and glLabel is the only thing that builds this string.
-    const glCodeOf = (key: string) => key.split(" — ")[0].trim();
+    const isDrillable = !!ctx.onDrillCell;
     const canToggle  = hasContent || isOpNonOp;
 
     // Flat (no-level) case: render leaf rows directly without a group header
@@ -512,7 +745,7 @@ function renderPivotNodes(
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
-            {leafCells(t, flatScope, labelPath)}
+            {leafCells(t, flatScope, labelPath, ancestors)}
           </tr>
         );
       }
@@ -547,17 +780,25 @@ function renderPivotNodes(
 
     const nodeScope: NoteScope = { ...ctx.baseScope, ...node.scope };
     const nodeTrail = [...labelPath, node.label];
-    const openNodeCell = (month: string | null, amount: number) =>
-      ctx.openCell({
-        scope: month ? { ...nodeScope, month } : nodeScope,
-        breadcrumb: month ? [...nodeTrail, month] : nodeTrail,
-        amount,
-        month,
-        // Only a leaf group has its transactions materialized; an aggregate row
-        // keeps them in its children, so the drawer asks the user to expand.
-        transactions: node.txLeaves,
-        level: node.field,
-      });
+    // The path down to this row, this row included. Passed to the windows so a
+    // note can be anchored to any level of it, not only to the one clicked.
+    const nodeChain: AncestorRef[] = [
+      ...ancestors,
+      {
+        level:      node.field as NoteLevel,
+        levelLabel: FIELD_LABELS[node.field as PivotField] ?? node.field,
+        valueLabel: node.label,
+        scope:      nodeScope,
+        byMonth:    node.byMonth,
+        total:      node.total,
+      },
+    ];
+    const refFor = (month: string | null, amount: number) =>
+      buildCellRef(nodeChain, nodeTrail, month, amount, nodeScope);
+    const openDetail = (month: string | null, amount: number) =>
+      ctx.onDrillCell?.(refFor(month, amount));
+    const openNodeNotes = (month: string | null, amount: number) =>
+      ctx.openNotes(refFor(month, amount));
 
     // Depth-2+ HOMESÍ rows sit on the zebra stripe; depth 0/1 keep the tinted
     // band from the ramp so the top of the hierarchy still reads as a header.
@@ -570,11 +811,11 @@ function renderPivotNodes(
         className={`group border-b ${borderClass} ${canToggle || isDrillable ? "cursor-pointer" : ""} ${homesi ? rowHover : ""}`}
         style={{ backgroundColor: effectiveBg }}
         // A GL row has nothing left to expand, so its row click is free for the
-        // breakdown. The month and Total cells keep opening notes, which is what
-        // keeps every level of the report annotatable the same way.
+        // breakdown of the whole row. Every figure in it opens the same window
+        // for its own month, which is the gesture that actually gets used.
         onClick={() => {
-          if (isDrillable) ctx.onDrillCell!(glCodeOf(node.key), node.label, null);
-          else if (canToggle) toggle(nodeKey);
+          if (canToggle) toggle(nodeKey);
+          else if (isDrillable) openDetail(null, node.total);
         }}
       >
         <td
@@ -597,8 +838,12 @@ function renderPivotNodes(
           return (
             <td
               key={m}
-              onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(m, v ?? 0); } : undefined}
-              className={`${numCell} ${homesi ? colRule : ""} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+              // One gesture, one meaning: the figure opens what is behind it.
+              // It used to open the notes instead, which left the movements
+              // with nowhere to go and made the anchor level of a new note a
+              // consequence of which row the reader happened to click.
+              onClick={isDrillable ? (e) => { e.stopPropagation(); openDetail(m, v ?? 0); } : undefined}
+              className={`${numCell} ${homesi ? colRule : ""} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${isDrillable ? "cursor-pointer" : ""}`}
             >
               {/* No badge on hierarchy rows. Colour carries the sign; the pill
                   is reserved for the Net Income closing lines. */}
@@ -606,20 +851,24 @@ function renderPivotNodes(
                 text={fmtM(v)}
                 hasNote={ctx.notesOn && ctx.noteAny.has(key)}
                 isDirect={ctx.noteDirect.has(key)}
+                onOpenNotes={() => openNodeNotes(m, v ?? 0)}
+                previewNotes={() => ctx.notesAt({ ...nodeScope, month: m })}
                 bps={ctx.bpsBase ? fmtBps(v, ctx.bpsBase[m]) ?? "—" : null}
               />
             </td>
           );
         })}
         <td
-          onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(null, node.total); } : undefined}
+          onClick={isDrillable ? (e) => { e.stopPropagation(); openDetail(null, node.total); } : undefined}
           style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: effectiveBg }}
-          className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+          className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${isDrillable ? "cursor-pointer" : ""}`}
         >
           <NoteCellContent
             text={fmtM(node.total)}
             hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(nodeScope, null))}
             isDirect={ctx.noteDirect.has(cellKey(nodeScope, null))}
+            onOpenNotes={() => openNodeNotes(null, node.total)}
+            previewNotes={() => ctx.notesAt(nodeScope)}
             bps={ctx.bpsBase ? fmtBps(node.total, ctx.bpsBaseTotal) ?? "—" : null}
           />
         </td>
@@ -630,7 +879,7 @@ function renderPivotNodes(
 
     // Recurse into children
     if (node.children.length > 0) {
-      renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx);
+      renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx, nodeChain);
     }
 
     // Leaf transaction rows. Suppressed when a drill-down modal is wired:
@@ -657,7 +906,7 @@ function renderPivotNodes(
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
-            {leafCells(t, nodeScope, nodeTrail)}
+            {leafCells(t, nodeScope, nodeTrail, nodeChain)}
           </tr>
         );
       }
@@ -765,11 +1014,13 @@ export function PivotTableDynamic({
   notes,
   onNotesChanged,
   onOrphansChange,
+  onResolvedNotes,
   scopeYear,
   bpsBaseByMonth,
   bpsBaseLabel,
   costCenterFilter,
   onDrillCell,
+  onOpenNotes,
 }: PivotTableDynamicProps) {
   const [activeLevels, setActiveLevels] = useState<PivotField[]>(() =>
     storageKey ? readStorage(storageKey, defaultLevels) : defaultLevels
@@ -777,7 +1028,6 @@ export function PivotTableDynamic({
   const [addOpen, setAddOpen] = useState(false);
   const [exp, setExp] = useState<Set<string>>(new Set());
   const [descSort, setDescSort] = useState<"asc" | "desc" | null>(null);
-  const [openCell, setOpenCell] = useState<NoteDrawerCell | null>(null);
   const addRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -905,6 +1155,7 @@ export function PivotTableDynamic({
   // Surfaced to the page so it can render the orphan panel — the component
   // owns the resolution, but the panel lives outside the table.
   useEffect(() => { onOrphansChange?.(resolved.orphaned); }, [resolved.orphaned, onOrphansChange]);
+  useEffect(() => { onResolvedNotes?.(resolved.placed); }, [resolved.placed, onResolvedNotes]);
 
   const noteIndex = useMemo(
     () => (enableNotes
@@ -913,26 +1164,19 @@ export function PivotTableDynamic({
     [enableNotes, resolvedNotes, tree, baseScope],
   );
 
-  const scopeOrder = useMemo<ScopeKey[]>(
-    () => [...activeLevels, "month", "year"] as ScopeKey[],
-    [activeLevels],
-  );
-
-  /** Stable ids stored in a scope are not display text — resolve them back. */
-  const labelFor = useMemo(() => {
-    const glNames = new Map<string, string>();
-    const ccNames = new Map<string, string>();
-    for (const tx of workingTxs) {
-      if (tx.gl_code) glNames.set(tx.gl_code, tx.gl_name ? `${tx.gl_code} — ${tx.gl_name}` : tx.gl_code);
-      if (tx.cost_center_id && tx.cost_centers?.name) ccNames.set(tx.cost_center_id, tx.cost_centers.name);
-    }
-    return (key: ScopeKey, value: string): string => {
-      if (key === "gl")          return glNames.get(value) ?? value;
-      if (key === "cost_center") return ccNames.get(value) ?? defaultScopeLabel(key, value);
-      if (key === "transaction_id") return "";
-      return defaultScopeLabel(key, value);
+  /**
+   * Notes on one cell, resolved when asked rather than for every figure drawn.
+   *
+   * The hover preview is the only caller, and it fires for the handful of cells
+   * a reader actually stops on — precomputing it would be a pass over the whole
+   * note set per rendered figure, thousands of times per report.
+   */
+  const notesAt = useMemo(() => {
+    return (scope: NoteScope): PLNote[] => {
+      const { direct, rolledUp } = notesForCell(resolvedNotes, scope);
+      return [...direct, ...rolledUp];
     };
-  }, [workingTxs]);
+  }, [resolvedNotes]);
 
   if (loading) {
     return (
@@ -971,6 +1215,22 @@ export function PivotTableDynamic({
     ? months.reduce((s, m) => s + (bpsBaseByMonth[m] ?? 0), 0)
     : 0;
 
+  /**
+   * The report's own total, as a cell.
+   *
+   * It has no hierarchy above it, so its only anchor is grand_total — supplied
+   * explicitly here rather than derived, because there is no node to derive it
+   * from. Its Total column is the one figure with no bounded movement list:
+   * everything loaded is behind it.
+   */
+  const grandRef = (month: string | null, amount: number): CellRef =>
+    buildCellRef([], ["Total Income"], month, amount, baseScope, {
+      level: "grand_total",
+      levelLabel: "Grand Total",
+      valueLabel: "Total Income",
+      scope: baseScope,
+    });
+
   // Total Income sticky row (always visible, based on raw txs)
   rows.push(
     <tr key="__grand__">
@@ -988,21 +1248,16 @@ export function PivotTableDynamic({
           <td
             key={m}
             style={gtStyle}
-            onClick={enableNotes ? () => setOpenCell({
-              scope: { ...baseScope, month: m },
-              breadcrumb: ["Total Income", m],
-              amount: grandByMonth[m] ?? 0,
-              month: m,
-              transactions: [],
-              level: "grand_total",
-            }) : undefined}
-            className={`${numCell} ${homesiTheme ? `${colRule} font-bold text-[#001A40]` : `font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])}`} ${enableNotes ? "cursor-pointer" : ""}`}
+            onClick={onDrillCell ? () => onDrillCell(grandRef(m, grandByMonth[m] ?? 0)) : undefined}
+            className={`${numCell} ${homesiTheme ? `${colRule} font-bold text-[#001A40]` : `font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])}`} ${onDrillCell ? "cursor-pointer" : ""}`}
           >
             {enableNotes ? (
               <NoteCellContent
                 text={fmtM(grandByMonth[m])}
                 hasNote={noteIndex.any.has(key)}
                 isDirect={noteIndex.direct.has(key)}
+                onOpenNotes={() => onOpenNotes?.(grandRef(m, grandByMonth[m] ?? 0))}
+                previewNotes={() => notesAt({ ...baseScope, month: m })}
                 badgeClass={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}
                 bps={bpsBaseByMonth ? fmtBps(grandByMonth[m], bpsBaseByMonth[m]) ?? "—" : null}
               />
@@ -1016,21 +1271,19 @@ export function PivotTableDynamic({
       })}
       <td
         style={{ ...gtStyle, ...totalColStyle, ...totalColSize, top: 30, zIndex: 21, borderLeft: homesiTheme ? "1px solid #cbd5e1" : "1px solid rgba(255,255,255,0.15)" }}
-        onClick={enableNotes ? () => setOpenCell({
-          scope: baseScope,
-          breadcrumb: ["Total Income"],
-          amount: grandTotal,
-          month: null,
-          transactions: [],
-          level: "grand_total",
-        }) : undefined}
-        className={`${numCell} ${homesiTheme ? "font-bold text-[#001A40]" : `font-extrabold text-[12px] ${mvClsLight(grandTotal)}`} ${enableNotes ? "cursor-pointer" : ""}`}
+        // Bounded by nothing — every loaded row is behind this figure — so it
+        // opens the window without a movement list rather than asking the
+        // server for the whole table.
+        onClick={onDrillCell ? () => onDrillCell(grandRef(null, grandTotal)) : undefined}
+        className={`${numCell} ${homesiTheme ? "font-bold text-[#001A40]" : `font-extrabold text-[12px] ${mvClsLight(grandTotal)}`} ${onDrillCell ? "cursor-pointer" : ""}`}
       >
         {enableNotes ? (
           <NoteCellContent
             text={fmtM(grandTotal)}
             hasNote={noteIndex.any.has(cellKey(baseScope, null))}
             isDirect={noteIndex.direct.has(cellKey(baseScope, null))}
+            onOpenNotes={() => onOpenNotes?.(grandRef(null, grandTotal))}
+            previewNotes={() => notesAt(baseScope)}
             badgeClass={homesiTheme ? grandTotalBadge(grandTotal) : ""}
             bps={bpsBaseByMonth ? fmtBps(grandTotal, bpsBaseTotal) ?? "—" : null}
           />
@@ -1052,7 +1305,8 @@ export function PivotTableDynamic({
     notesOn: enableNotes,
     noteAny: noteIndex.any,
     noteDirect: noteIndex.direct,
-    openCell: setOpenCell,
+    openNotes: (ref) => onOpenNotes?.(ref),
+    notesAt,
     baseScope,
     homesi: homesiTheme,
     bpsBase: bpsBaseByMonth ?? null,
@@ -1214,16 +1468,6 @@ export function PivotTableDynamic({
         </table>
       </div>
 
-      {enableNotes && (
-        <NoteDrawer
-          cell={openCell}
-          notes={resolvedNotes}
-          scopeOrder={scopeOrder}
-          labelFor={labelFor}
-          onClose={() => setOpenCell(null)}
-          onChanged={() => onNotesChanged?.()}
-        />
-      )}
     </div>
   );
 }

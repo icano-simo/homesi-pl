@@ -8,6 +8,7 @@ import { LoanMetricsByMonthBar } from "@/components/loan-metrics-by-month";
 import { useLoanMetrics } from "@/lib/use-loan-metrics";
 import { LoanDetailDrawer } from "@/components/loan-detail-drawer";
 import { CellDetailModal, type CellTarget } from "@/components/cell-detail-modal";
+import { NoteWindow } from "@/components/note-window";
 import { NotesLog } from "@/components/notes-log";
 import { buildSplitsMap } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
@@ -15,7 +16,8 @@ import { hierarchyLabel, hierarchyLevels, SHAPE_LABELS, type HierarchyShape } fr
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
-import { defaultScopeLabel } from "@/components/note-drawer";
+import { defaultScopeLabel } from "@/lib/note-scope";
+import type { CellRef } from "@/lib/cell-ref";
 import type { PLNote, ScopeKey } from "@/lib/note-scope";
 import type { PivotField } from "@/lib/pivot-engine";
 import type { CostCenter, PLReportTx, FilterOptionsResponse } from "@/types";
@@ -54,6 +56,20 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 function srcLabel(s: string) { return SOURCE_LABELS[s] ?? s; }
 
+/**
+ * The one thing on screen besides the report.
+ *
+ * A single value rather than one flag per window, and that is the whole point:
+ * with three booleans, "only one open at a time" is a rule that every new
+ * caller has to remember. With one value it is a property of the state — two
+ * cannot be open because there is nowhere to put the second.
+ */
+type Panel =
+  | { kind: "loans"; month: string }
+  | { kind: "cell";  ref: CellRef }
+  | { kind: "notes"; ref: CellRef }
+  | null;
+
 function FilterChip({ label, value }: { label: string; value: string }) {
   // Branch gets more weight than the rest. It is the context that slips out of
   // mind first when reading a grid of figures, and reading the right numbers
@@ -88,6 +104,8 @@ export default function PLPage() {
   const [allSplits, setAllSplits] = useState<SplitEntry[]>([]);
   const [notes,     setNotes]     = useState<PLNote[]>([]);
   const [orphans,   setOrphans]   = useState<PLNote[]>([]);
+  /** The same set the table drew its indicators from — see onResolvedNotes. */
+  const [placedNotes, setPlacedNotes] = useState<PLNote[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState("");
@@ -112,11 +130,7 @@ export default function PLPage() {
   // Same panel as P&L All, same hook, same filters the table is showing.
   const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources);
 
-  // Month whose loans are open in the detail drawer.
-  const [detailMonth, setDetailMonth] = useState<string | null>(null);
-
-  // GL cell whose movements are open in the modal.
-  const [cellTarget, setCellTarget] = useState<CellTarget | null>(null);
+  const [panel, setPanel] = useState<Panel>(null);
 
   /** Notes come from their own endpoint, so posting one refreshes just them
    *  rather than re-downloading every transaction behind the report. */
@@ -241,6 +255,42 @@ export default function PLPage() {
     return ys.size === 1 ? [...ys][0] : undefined;
   }, [rawTxs]);
 
+  /**
+   * A cell as the pivot describes it, plus the filters the report was run with.
+   * The pivot knows the shape of the cell; the page knows what was loaded.
+   */
+  const toTarget = (ref: CellRef): CellTarget => ({
+    ...ref,
+    years: loadedYears,
+    branches: loadedBranches,
+    sources: loadedSources,
+    costCenterIds: (costCenterFilter ?? []).filter((v) => !v.startsWith("__")),
+  });
+
+  /**
+   * Stable ids in a note's scope are not display text.
+   *
+   * Built here rather than inside the notes window because the raw transactions
+   * are the only place the names live: a scope stores 41309 and a cost centre
+   * UUID, and a window that printed those verbatim would be telling the reader
+   * what the note is anchored to in a language only the database speaks.
+   */
+  const labelFor = useMemo(() => {
+    const glNames = new Map<string, string>();
+    const ccNames = new Map<string, string>();
+    for (const tx of rawTxs) {
+      if (tx.gl_code) glNames.set(tx.gl_code, tx.gl_name ? `${tx.gl_code} — ${tx.gl_name}` : tx.gl_code);
+      if (tx.cost_center_id && tx.cost_centers?.name) ccNames.set(tx.cost_center_id, tx.cost_centers.name);
+    }
+    return (key: ScopeKey, value: string): string => {
+      if (key === "gl")             return glNames.get(value) ?? value;
+      if (key === "cost_center")    return ccNames.get(value) ?? defaultScopeLabel(key, value);
+      // A raw UUID adds nothing to a trail; scopeBreadcrumb drops empty crumbs.
+      if (key === "transaction_id") return "";
+      return defaultScopeLabel(key, value);
+    };
+  }, [rawTxs]);
+
   const loadedChips: { label: string; value: string }[] = [];
   if (loadedYears.length > 0)
     loadedChips.push({ label: "Year", value: loadedYears.length === 1 ? loadedYears[0] : `${loadedYears.length} years` });
@@ -336,10 +386,10 @@ export default function PLPage() {
           </span>
         </div>
         <p className="mt-0.5 text-sm text-slate-500">
-          Click any figure to open its transactions and notes. The hierarchy is
-          fixed — Cost Center → Category 6 → Category 7 → GL Code → Description →
-          Description 3 (OA) — so a note always stays on the same cell.
-          Rows outside Offshore Allocations group under “—” at the last level.
+          Click a figure to open the movements behind it — and to write a note,
+          choosing which level it is about. Click the dot beside a figure to read
+          the notes already there. The hierarchy is fixed, so a note always stays
+          on the same cell.
         </p>
       </div>
 
@@ -357,6 +407,9 @@ export default function PLPage() {
           <span className="inline-block h-1.5 w-1.5 rounded-full border border-[#001A40]/40" />
           Notes from more detailed levels below
         </span>
+        <span className="text-[11px] text-slate-400">
+          Click a dot to read · click the figure for movements and to write
+        </span>
       </div>
 
       {/* Per-month loan metrics — the same panel P&L All shows, from the same
@@ -373,7 +426,7 @@ export default function PLPage() {
           onShowBpsChange={loanMetrics.setShowBps}
           bpsBase={loanMetrics.bpsBase}
           onBpsBaseChange={loanMetrics.setBpsBase}
-          onOpenMonth={(m) => { setCellTarget(null); setDetailMonth(m); }}
+          onOpenMonth={(m) => setPanel({ kind: "loans", month: m })}
         />
       )}
 
@@ -432,16 +485,8 @@ export default function PLPage() {
           splitsMap={splitsMap}
           defaultLevels={levels}
           costCenterFilter={costCenterFilter}
-          onDrillCell={(glCode, glLabel, month) => {
-            // One panel at a time: the modal and the two drawers claim the same
-            // screen, and two of them open at once is a state nobody can read.
-            setDetailMonth(null);
-            setCellTarget({
-              glCode, glLabel, month,
-              years: loadedYears, branches: loadedBranches, sources: loadedSources,
-              costCenterIds: (costCenterFilter ?? []).filter(v => !v.startsWith("__")),
-            });
-          }}
+          onDrillCell={(ref) => setPanel({ kind: "cell", ref })}
+          onOpenNotes={(ref) => setPanel({ kind: "notes", ref })}
           // No storageKey: nothing to persist when the hierarchy cannot change,
           // and it keeps a stale saved order from ever resurfacing here.
           lockHierarchy
@@ -452,20 +497,37 @@ export default function PLPage() {
           notes={notes}
           onNotesChanged={() => refreshNotes(loadedYears)}
           onOrphansChange={setOrphans}
+          onResolvedNotes={setPlacedNotes}
           scopeYear={scopeYear}
           loading={loading}
           emptyMessage="No transactions found for the selected filters."
         />
       )}
-        <CellDetailModal target={cellTarget} onClose={() => setCellTarget(null)} />
+        <CellDetailModal
+          target={panel?.kind === "cell" ? toTarget(panel.ref) : null}
+          onClose={() => setPanel(null)}
+          onNoteSaved={() => refreshNotes(loadedYears)}
+        />
+
+        <NoteWindow
+          target={panel?.kind === "notes" ? { scope: panel.ref.scope, amount: panel.ref.amount } : null}
+          notes={placedNotes}
+          scopeOrder={SCOPE_ORDER}
+          labelFor={labelFor}
+          onClose={() => setPanel(null)}
+          onChanged={() => refreshNotes(loadedYears)}
+          // The short path out of the short window: same cell, full detail,
+          // and the only place a note is written.
+          onOpenDetail={() => setPanel(panel?.kind === "notes" ? { kind: "cell", ref: panel.ref } : null)}
+        />
 
         <LoanDetailDrawer
-          open={detailMonth !== null}
-          month={detailMonth}
+          open={panel?.kind === "loans"}
+          month={panel?.kind === "loans" ? panel.month : null}
           year={loadedYears.length === 1 ? Number(loadedYears[0]) : null}
           branches={loadedBranches}
           sources={loadedSources}
-          onClose={() => setDetailMonth(null)}
+          onClose={() => setPanel(null)}
         />
     </div>
     </div>
