@@ -147,7 +147,14 @@ export function scopeForTransaction(
   const scope: NoteScope = {};
   for (const f of fields) scope[f] = stableScopeValue(tx, f);
   if (tx.month) scope.month = tx.month;
-  if (year != null) scope.year = year;
+  // The year always belongs in the scope. It used to be added only when the
+  // report covered exactly one, so a two-year load produced scopes with no
+  // year at all — which changes the key, and with it which notes count as
+  // written-on-this-cell rather than inherited. Falling back to the
+  // transaction’s own year keeps the anchor stable no matter how many years
+  // happen to be loaded.
+  const resolvedYear = year ?? tx.year ?? null;
+  if (resolvedYear != null) scope.year = resolvedYear;
   scope.transaction_id = tx.id;
   return scope;
 }

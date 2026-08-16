@@ -7,6 +7,7 @@ import {
   FIELD_LABELS,
   buildDynamicPivot,
   expandForOpNonOp,
+  stableScopeValue,
   type ExpandedTx,
   type PivotField,
   type PivotNode,
@@ -229,6 +230,9 @@ interface RenderCtx {
   /** Sum of the displayed months' bases, for the Total column — its denominator
    *  is not any single month but the whole span the column covers. */
   bpsBaseTotal: number;
+  /** Opens the movements behind a GL cell. When set, GL rows stop expanding
+   *  into transaction rows: the modal is the breakdown. */
+  onDrillCell: ((glCode: string, glLabel: string, month: string | null) => void) | null;
 }
 
 /**
@@ -359,6 +363,27 @@ export interface PivotTableDynamicProps {
   /** Name of the chosen base, printed in the table header so a screenshot of
    *  the grid alone still says what the bps were computed against. */
   bpsBaseLabel?: string | null;
+  /**
+   * Cost centres to keep, as the stable values stableScopeValue produces —
+   * a cost_center_id, or "__unassigned__" / "__conflict__".
+   *
+   * Filtering here rather than in the caller is what keeps a single data
+   * path. The page used to pre-fan its rows and then withhold splitsMap so
+   * they would not be fanned twice; that left the notes code reading
+   * already-duplicated transactions through a branch nothing had exercised.
+   * Now the table always receives raw txs plus splitsMap, fans them itself,
+   * and drops what the filter excludes — so the rows notes are resolved
+   * against are the same rows in every mode.
+   */
+  costCenterFilter?: readonly string[] | null;
+  /**
+   * Opens the per-description breakdown of a GL cell.
+   *
+   * Supplying it also ends the tree at GL: the transaction rows below it are
+   * not drawn, because which description makes them readable depends on the
+   * account and no fixed level can answer that. The modal asks instead.
+   */
+  onDrillCell?: (glCode: string, glLabel: string, month: string | null) => void;
 }
 
 // ─── Recursive renderer (mutates `rows` for performance) ─────────────────────
@@ -452,7 +477,16 @@ function renderPivotNodes(
     const isOpNonOp  = node.field === "op_nonop";
     const isOp       = isOpNonOp && node.key === "Operational";
     const isNonOp    = isOpNonOp && node.key === "Non-Operational";
-    const hasContent = node.children.length > 0 || node.txLeaves.length > 0;
+    // With the modal wired, a node whose only content is transactions has
+    // nothing to open — offering a chevron that reveals nothing is worse than
+    // no chevron.
+    const hasContent = node.children.length > 0 ||
+      (node.txLeaves.length > 0 && !ctx.onDrillCell);
+    const isDrillable = !!ctx.onDrillCell && node.field === "gl";
+    // The gl key is glLabel's "code — name", so the code is the part before the
+    // em dash. Split rather than re-derived because the node is all the renderer
+    // has, and glLabel is the only thing that builds this string.
+    const glCodeOf = (key: string) => key.split(" — ")[0].trim();
     const canToggle  = hasContent || isOpNonOp;
 
     // Flat (no-level) case: render leaf rows directly without a group header
@@ -533,9 +567,15 @@ function renderPivotNodes(
     rows.push(
       <tr
         key={nodeKey}
-        className={`group border-b ${borderClass} ${canToggle ? "cursor-pointer" : ""} ${homesi ? rowHover : ""}`}
+        className={`group border-b ${borderClass} ${canToggle || isDrillable ? "cursor-pointer" : ""} ${homesi ? rowHover : ""}`}
         style={{ backgroundColor: effectiveBg }}
-        onClick={() => { if (canToggle) toggle(nodeKey); }}
+        // A GL row has nothing left to expand, so its row click is free for the
+        // breakdown. The month and Total cells keep opening notes, which is what
+        // keeps every level of the report annotatable the same way.
+        onClick={() => {
+          if (isDrillable) ctx.onDrillCell!(glCodeOf(node.key), node.label, null);
+          else if (canToggle) toggle(nodeKey);
+        }}
       >
         <td
           title={node.label}
@@ -593,8 +633,9 @@ function renderPivotNodes(
       renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx);
     }
 
-    // Leaf transaction rows
-    if (node.txLeaves.length > 0) {
+    // Leaf transaction rows. Suppressed when a drill-down modal is wired:
+    // the tree ends at GL and the breakdown happens there instead.
+    if (node.txLeaves.length > 0 && !ctx.onDrillCell) {
       const leafPl = (depth + 1) * 16 + 8;
       const sortedLeaves = descSort
         ? [...node.txLeaves].sort((a, b) => {
@@ -727,6 +768,8 @@ export function PivotTableDynamic({
   scopeYear,
   bpsBaseByMonth,
   bpsBaseLabel,
+  costCenterFilter,
+  onDrillCell,
 }: PivotTableDynamicProps) {
   const [activeLevels, setActiveLevels] = useState<PivotField[]>(() =>
     storageKey ? readStorage(storageKey, defaultLevels) : defaultLevels
@@ -812,12 +855,20 @@ export function PivotTableDynamic({
     // carries its prorated movement and its own cost_center_id (same as CC Report).
     // Only applied when a splitsMap is provided — callers that pre-fan their data
     // (P&L All CC mode, Cost Center Report) omit splitsMap to avoid double-fanning.
-    const base: PLReportTx[] =
-      activeLevels.includes("cost_center") && splitsMap
-        ? fanOutBySplits(txs, splitsMap)
-        : txs;
-    return activeLevels.includes("op_nonop") ? expandForOpNonOp(base) : base as ExpandedTx[];
-  }, [txs, activeLevels, splitsMap]);
+    // Fanned when Cost Centre is a level OR when a cost-centre filter is on:
+    // a transaction split 60/40 has to contribute its prorated share to the
+    // selected centre, not all of itself or none.
+    const needsFan = splitsMap && (activeLevels.includes("cost_center") || !!costCenterFilter);
+    const fanned: PLReportTx[] = needsFan ? fanOutBySplits(txs, splitsMap!) : txs;
+
+    // Filtered AFTER the fan-out, so each virtual row is judged by the centre
+    // it was allocated to rather than by the transaction it came from.
+    const kept = costCenterFilter
+      ? fanned.filter((tx) => costCenterFilter.includes(stableScopeValue(tx as ExpandedTx, "cost_center")))
+      : fanned;
+
+    return activeLevels.includes("op_nonop") ? expandForOpNonOp(kept) : kept as ExpandedTx[];
+  }, [txs, activeLevels, splitsMap, costCenterFilter]);
 
   // Scope shared by every cell of the report. The grand total row sits at this
   // level, so wrapping the tree in a synthetic root makes the note walk below
@@ -1006,6 +1057,7 @@ export function PivotTableDynamic({
     homesi: homesiTheme,
     bpsBase: bpsBaseByMonth ?? null,
     bpsBaseTotal,
+    onDrillCell: onDrillCell ?? null,
   });
 
   return (

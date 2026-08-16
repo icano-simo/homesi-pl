@@ -1,40 +1,50 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MessageSquare } from "lucide-react";
+import { Download, ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
 import { PivotTableDynamic } from "@/components/pivot-table-dynamic";
 import { ReportFilter } from "@/components/report-filter";
 import { LoanMetricsByMonthBar } from "@/components/loan-metrics-by-month";
 import { useLoanMetrics } from "@/lib/use-loan-metrics";
 import { LoanDetailDrawer } from "@/components/loan-detail-drawer";
+import { CellDetailModal, type CellTarget } from "@/components/cell-detail-modal";
+import { NotesLog } from "@/components/notes-log";
 import { buildSplitsMap } from "@/lib/apply-splits";
+import { downloadCSV } from "@/lib/csv";
+import { hierarchyLabel, hierarchyLevels, SHAPE_LABELS, type HierarchyShape } from "@/lib/pl-hierarchies";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
 import { defaultScopeLabel } from "@/components/note-drawer";
 import type { PLNote, ScopeKey } from "@/lib/note-scope";
 import type { PivotField } from "@/lib/pivot-engine";
-import type { PLReportTx, FilterOptionsResponse } from "@/types";
+import type { CostCenter, PLReportTx, FilterOptionsResponse } from "@/types";
 
 const MONTH_ORDER = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
 ];
 
-/**
- * Fixed hierarchy — the reason this view exists.
- *
- * P&L All and Cost Center Report let the user rearrange the levels, which makes
- * a note appear on a differently-shaped row from one day to the next even
- * though the figure behind it never moved. Notes therefore live only here,
- * where a cell always means the same thing and an anchor stays put.
- */
-const FIXED_LEVELS: PivotField[] = [
-  "cost_center", "category_6", "category_7", "gl", "description", "check_desc_3",
+/** Every dimension a note can be anchored by here, for orphan breadcrumbs. */
+const SCOPE_ORDER: ScopeKey[] = [
+  "cost_center", "op_nonop", "category_6", "category_7", "gl", "month", "year",
 ];
 
-/** Order breadcrumbs follow when describing an orphaned note's stored scope. */
-const SCOPE_ORDER: ScopeKey[] = [...FIXED_LEVELS, "month", "year"];
+const CSV_COLUMNS = [
+  { key: "month",            label: "Month" },
+  { key: "branch",           label: "Branch" },
+  { key: "gl_code",          label: "GL Code" },
+  { key: "gl_name",          label: "GL Name" },
+  { key: "category_2",       label: "Category 2" },
+  { key: "category_6",       label: "Category 6" },
+  { key: "category_7",       label: "Category 7" },
+  { key: "check_description",label: "Description" },
+  { key: "vendor",           label: "Vendor" },
+  { key: "ref_numb",         label: "Ref #" },
+  { key: "debit",            label: "Debit" },
+  { key: "credit",           label: "Credit" },
+  { key: "movement",         label: "Movement" },
+];
 
 const SOURCE_LABELS: Record<string, string> = {
   original:             "Original",
@@ -65,7 +75,7 @@ function FilterChip({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function PLNotesPage() {
+export default function PLPage() {
   const { activeBranches, isLoaded: branchFilterLoaded } = useActiveBranches();
   const [opts, setOpts] = useState<FilterOptionsResponse | null>(null);
 
@@ -84,6 +94,16 @@ export default function PLNotesPage() {
   const [loaded,  setLoaded]  = useState(false);
   const autoLoaded = useRef(false);
 
+  // The four named views. No reordering, so nothing to persist and nothing
+  // that can differ between two people looking at the same report.
+  const [shape,   setShape]   = useState<HierarchyShape>("regular");
+  const [opNonOp, setOpNonOp] = useState(false);
+
+  const [costCenterNames, setCostCenterNames] = useState<string[]>([]);
+  const [costCenters,     setCostCenters]     = useState<CostCenter[]>([]);
+  const [glCodes, setGlCodes] = useState<string[]>([]);
+  const [logOpen, setLogOpen] = useState(true);
+
   const [loadedYears,    setLoadedYears]    = useState<string[]>([]);
 
   const [loadedBranches, setLoadedBranches] = useState<string[]>([]);
@@ -94,6 +114,9 @@ export default function PLNotesPage() {
 
   // Month whose loans are open in the detail drawer.
   const [detailMonth, setDetailMonth] = useState<string | null>(null);
+
+  // GL cell whose movements are open in the modal.
+  const [cellTarget, setCellTarget] = useState<CellTarget | null>(null);
 
   /** Notes come from their own endpoint, so posting one refreshes just them
    *  rather than re-downloading every transaction behind the report. */
@@ -137,9 +160,11 @@ export default function PLNotesPage() {
     Promise.all([
       fetch("/api/transactions/filter-options").then(r => r.json()),
       fetch("/api/cc-allocation-splits").then(r => r.json()),
-    ]).then(([filterOpts, splits]: [FilterOptionsResponse, SplitEntry[]]) => {
+      fetch("/api/cost-centers").then(r => r.json()),
+    ]).then(([filterOpts, splits, ccs]: [FilterOptionsResponse, SplitEntry[], CostCenter[]]) => {
       setOpts(filterOpts);
       setAllSplits(splits);
+      setCostCenters(ccs);
       const defaultYear = filterOpts.year.length > 0
         ? [filterOpts.year[filterOpts.year.length - 1]]
         : [];
@@ -157,12 +182,56 @@ export default function PLNotesPage() {
     [rawTxs]
   );
 
-  const txs = useMemo(
-    () => (months.length > 0 ? rawTxs.filter(t => t.month && months.includes(t.month)) : rawTxs),
-    [rawTxs, months]
+  const glCodeOptions = useMemo(
+    () => [...new Set(rawTxs.map(t => t.gl_code).filter(Boolean) as string[])].sort(),
+    [rawTxs]
   );
 
+  const txs = useMemo(() => {
+    let out = rawTxs;
+    if (months.length  > 0) out = out.filter(t => t.month   && months.includes(t.month));
+    if (glCodes.length > 0) out = out.filter(t => t.gl_code && glCodes.includes(t.gl_code));
+    return out;
+  }, [rawTxs, months, glCodes]);
+
   const splitsMap = useMemo(() => buildSplitsMap(allSplits), [allSplits]);
+
+  const levels = useMemo(() => hierarchyLevels({ shape, opNonOp }), [shape, opNonOp]);
+
+  const ccOptions = useMemo(
+    () => [...costCenters.map(c => c.name).sort(), "Unassigned", "Conflict"],
+    [costCenters]
+  );
+
+  /**
+   * The filter as stable scope values, which is what the table compares
+   * against. Resolved here and memoised so the table’s own memo is not
+   * invalidated on every render.
+   */
+  const costCenterFilter = useMemo<string[] | null>(() => {
+    if (costCenterNames.length === 0) return null;
+    return costCenterNames.map((name) => {
+      if (name === "Unassigned") return "__unassigned__";
+      if (name === "Conflict")   return "__conflict__";
+      return costCenters.find(c => c.name === name)?.id ?? "__none__";
+    });
+  }, [costCenterNames, costCenters]);
+
+  /** A log belongs to one entity; with several picked there is no single
+   *  history to show. */
+  const logCostCenter = useMemo(() => {
+    if (costCenterNames.length !== 1) return null;
+    const name = costCenterNames[0];
+    if (name === "Unassigned") return { id: "__unassigned__", name };
+    if (name === "Conflict")   return { id: "__conflict__",   name };
+    const cc = costCenters.find(c => c.name === name);
+    return cc ? { id: cc.id, name: cc.name } : null;
+  }, [costCenterNames, costCenters]);
+
+  function handleExport() {
+    const suffix = loadedYears.length === 1 ? `_${loadedYears[0]}` : "";
+    downloadCSV(`pl${suffix}.csv`, txs as unknown as Record<string, unknown>[], CSV_COLUMNS);
+  }
 
   /** Anchor notes to a year only when the report covers exactly one. With
    *  several loaded a month column merges them, so the cell spans periods and
@@ -181,6 +250,10 @@ export default function PLNotesPage() {
     loadedChips.push({ label: "Source", value: loadedSources.map(srcLabel).join(", ") });
   if (months.length > 0)
     loadedChips.push({ label: "Month", value: months.length === 1 ? months[0] : `${months.length} months` });
+  if (costCenterNames.length > 0)
+    loadedChips.push({ label: "Cost Center", value: costCenterNames.length === 1 ? costCenterNames[0] : `${costCenterNames.length} centers` });
+  if (glCodes.length > 0)
+    loadedChips.push({ label: "GL Code", value: glCodes.length === 1 ? glCodes[0] : `${glCodes.length} codes` });
 
   return (
     // Canvas colour is scoped here rather than applied to <body> so the rest of
@@ -210,7 +283,15 @@ export default function PLNotesPage() {
           {loaded && (
             <>
               <span className="text-slate-300">|</span>
-              <ReportFilter label="Month" options={monthOptions} selected={months} onChange={setMonths} />
+              <ReportFilter label="Month"       options={monthOptions}  selected={months}          onChange={setMonths} />
+              <ReportFilter label="Cost Center" options={ccOptions}     selected={costCenterNames} onChange={setCostCenterNames} />
+              <ReportFilter label="GL Code"     options={glCodeOptions} selected={glCodes}         onChange={setGlCodes} />
+              <button
+                onClick={handleExport}
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-300"
+              >
+                <Download size={12} /> CSV
+              </button>
             </>
           )}
         </div>
@@ -226,7 +307,34 @@ export default function PLNotesPage() {
 
       {/* Title */}
       <div>
-        <h2 className="text-xl font-bold text-[#001A40]">P&amp;L Notes</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-xl font-bold text-[#001A40]">P&amp;L</h2>
+          {/* The view is named, and the name is on screen. A screenshot of
+              this report says which of the four shapes produced it. */}
+          <div className="inline-flex rounded-full border border-slate-200 bg-white p-0.5">
+            {(Object.keys(SHAPE_LABELS) as HierarchyShape[]).map((sh) => (
+              <button
+                key={sh}
+                onClick={() => setShape(sh)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  shape === sh ? "bg-[#A6DEFF]/30 font-semibold text-[#001A40]" : "text-slate-500 hover:text-[#001A40]"}`}
+              >
+                {SHAPE_LABELS[sh]}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setOpNonOp(v => !v)}
+            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+              opNonOp ? "border-sky-200 bg-sky-50 text-sky-900"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"}`}
+          >
+            Op / Non-Op
+          </button>
+          <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+            {hierarchyLabel({ shape, opNonOp })}
+          </span>
+        </div>
         <p className="mt-0.5 text-sm text-slate-500">
           Click any figure to open its transactions and notes. The hierarchy is
           fixed — Cost Center → Category 6 → Category 7 → GL Code → Description →
@@ -265,8 +373,36 @@ export default function PLNotesPage() {
           onShowBpsChange={loanMetrics.setShowBps}
           bpsBase={loanMetrics.bpsBase}
           onBpsBaseChange={loanMetrics.setBpsBase}
-          onOpenMonth={setDetailMonth}
+          onOpenMonth={(m) => { setCellTarget(null); setDetailMonth(m); }}
         />
+      )}
+
+      {logCostCenter && (
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-xs">
+          <button
+            onClick={() => setLogOpen(o => !o)}
+            className="flex w-full items-center gap-2 px-4 py-2.5 text-left"
+          >
+            {logOpen
+              ? <ChevronDown  size={14} className="shrink-0 text-slate-400" />
+              : <ChevronRight size={14} className="shrink-0 text-slate-400" />}
+            <MessageSquare size={13} className="shrink-0 text-slate-400" />
+            <span className="text-xs font-bold uppercase tracking-wider text-[#001A40]">
+              Cost Center Notes Log
+            </span>
+            <span className="truncate text-xs text-slate-500">— {logCostCenter.name}</span>
+          </button>
+          {logOpen && (
+            <div className="border-t border-slate-200 px-4 py-3">
+              <NotesLog
+                level="cost_center"
+                scope={{ cost_center_id: logCostCenter.id }}
+                entityLabel={logCostCenter.name}
+                emptyMessage="No notes for this cost center yet."
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {/* Notes whose transaction was removed by a re-upload. Sits right after
@@ -294,7 +430,18 @@ export default function PLNotesPage() {
         <PivotTableDynamic
           txs={txs}
           splitsMap={splitsMap}
-          defaultLevels={FIXED_LEVELS}
+          defaultLevels={levels}
+          costCenterFilter={costCenterFilter}
+          onDrillCell={(glCode, glLabel, month) => {
+            // One panel at a time: the modal and the two drawers claim the same
+            // screen, and two of them open at once is a state nobody can read.
+            setDetailMonth(null);
+            setCellTarget({
+              glCode, glLabel, month,
+              years: loadedYears, branches: loadedBranches, sources: loadedSources,
+              costCenterIds: (costCenterFilter ?? []).filter(v => !v.startsWith("__")),
+            });
+          }}
           // No storageKey: nothing to persist when the hierarchy cannot change,
           // and it keeps a stale saved order from ever resurfacing here.
           lockHierarchy
@@ -310,6 +457,8 @@ export default function PLNotesPage() {
           emptyMessage="No transactions found for the selected filters."
         />
       )}
+        <CellDetailModal target={cellTarget} onClose={() => setCellTarget(null)} />
+
         <LoanDetailDrawer
           open={detailMonth !== null}
           month={detailMonth}
