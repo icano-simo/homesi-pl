@@ -46,6 +46,29 @@ export const CORPORATE_BRANCH = "700";
  * Canonical branch for a loan_officials row.
  * Returns null when the loan is not part of this division (Rule 2).
  */
+/**
+ * Rule 1 alone: the same branch written two ways becomes one.
+ *
+ * Deliberately separate from normalizeLoanBranch, which also applies Rule 2 and
+ * drops everything outside the division. The two rules answer different
+ * questions and only one of them belongs to Loan Count.
+ *
+ *   Rule 1 is IDENTITY. "Affinity" and "716" are one branch under two labels,
+ *   so counting them apart splits 77 loans into 46 and 31 and neither figure is
+ *   the branch's.
+ *
+ *   Rule 2 is ACCOUNTING SCOPE — which branches belong to this division's P&L.
+ *   Loan Count is not about accounting; it counts the loans in the loan count
+ *   file. Applying it there would hide the 4 loans on branches 150 and 276 and
+ *   leave the module disagreeing with its own source file, 375 against 379,
+ *   for a reason nobody reading the screen could see.
+ */
+export function resolveLoanBranchAlias(raw: string | null | undefined): string | null {
+  const b = (raw ?? "").trim();
+  if (!b) return null;
+  return BRANCH_ALIASES[b] ?? b;
+}
+
 export function normalizeLoanBranch(raw: string | null | undefined): string | null {
   const b = (raw ?? "").trim();
   if (!b) return null;

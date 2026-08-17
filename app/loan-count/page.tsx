@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, RefreshCw, CheckCircle2, AlertCircle, Save, X } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { downloadCSV } from "@/lib/csv";
+import { resolveLoanBranchAlias } from "@/lib/loan-branch";
 import type { LoanOfficial } from "@/types";
 import { LoanValidationTab } from "./loan-validation-tab";
 
@@ -289,7 +290,22 @@ export default function LoanCountPage() {
   const yearOptions = useMemo(() => allYears.map(String), [allYears]);
 
   // Column filter option lists derived from loaded data
-  const branchOptions  = useMemo(() => [...new Set(loans.map(l => l.branch).filter(Boolean) as string[])].sort(), [loans]);
+  /**
+   * The branch of a loan, here, is the one in the loan count file — with
+   * "Affinity" and "716" resolved to the single branch they are. Nothing else:
+   * no accounting branch, no pl_transactions.
+   *
+   * Applied on read rather than written into `loans`, because the rows in that
+   * state are also what the inline editor PATCHes back, and normalising them in
+   * place would eventually save 716 over an "Affinity" nobody asked to change.
+   *
+   * The out-of-division branches 150 and 276 keep their own options: this
+   * module counts the file it was given, and quietly dropping four loans would
+   * put it at 375 against a source of 379.
+   */
+  const branchOf = (l: LoanOfficial) => resolveLoanBranchAlias(l.branch);
+
+  const branchOptions  = useMemo(() => [...new Set(loans.map(branchOf).filter(Boolean) as string[])].sort(), [loans]);
   const loOptions      = useMemo(() => [...new Set(loans.map(l => l.loan_officer).filter(Boolean) as string[])].sort(), [loans]);
   const channelOptions = useMemo(() => [...new Set(loans.map(l => l.loan_info_channel).filter(Boolean) as string[])].sort(), [loans]);
 
@@ -304,7 +320,7 @@ export default function LoanCountPage() {
     let out = loans;
     const lnSearch = filterLoanNumber.trim().toLowerCase();
     if (lnSearch) out = out.filter(l => l.loan_number?.toLowerCase().includes(lnSearch));
-    if (filterBranches.length)  out = out.filter(l => l.branch           && filterBranches.includes(l.branch));
+    if (filterBranches.length)  out = out.filter(l => { const b = branchOf(l); return !!b && filterBranches.includes(b); });
     if (filterLOs.length)       out = out.filter(l => l.loan_officer      && filterLOs.includes(l.loan_officer));
     if (filterChannels.length)  out = out.filter(l => l.loan_info_channel && filterChannels.includes(l.loan_info_channel));
     const applyBool = (arr: LoanOfficial[], f: BoolFilter, key: keyof LoanOfficial) =>
@@ -355,7 +371,10 @@ export default function LoanCountPage() {
   }
 
   function handleExport() {
-    downloadCSV("loan_count.csv", displayedLoans as unknown as Record<string, unknown>[], CSV_COLUMNS);
+    // The branch as the screen shows it, so the export and the table cannot
+    // disagree about which branch a loan is on.
+    const rows = displayedLoans.map((l) => ({ ...l, branch: branchOf(l) }));
+    downloadCSV("loan_count.csv", rows as unknown as Record<string, unknown>[], CSV_COLUMNS);
   }
 
   async function handleReextract() {
@@ -648,7 +667,12 @@ export default function LoanCountPage() {
                     {loan.loan_info_channel ?? "—"}
                   </td>
                   <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                    {loan.branch ?? "—"}
+                    {/* The resolved branch, so a row found by filtering 716
+                        does not then print "Affinity" and look like a mismatch.
+                        The value in the file stays one hover away. */}
+                    <span title={loan.branch && branchOf(loan) !== loan.branch ? `In the file: ${loan.branch}` : undefined}>
+                      {branchOf(loan) ?? "—"}
+                    </span>
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {fmt(loan.loan_amount)}
