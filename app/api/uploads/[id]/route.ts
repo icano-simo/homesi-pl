@@ -28,7 +28,19 @@ export async function DELETE(
     return NextResponse.json({ error: "Upload not found" }, { status: 404 });
   }
 
-  await deleteUpload(supabase, id);
+  // deleteUpload throws on any step that fails, and an uncaught throw here
+  // leaves Next to answer with something that is not the JSON the client
+  // parses — so the browser saw an exception instead of a message, showed
+  // nothing, and left the row on screen. Whatever goes wrong now comes back
+  // as an error the user can read.
+  try {
+    await deleteUpload(supabase, id);
+  } catch (e) {
+    return NextResponse.json(
+      { error: `Could not delete "${upload.file_name}": ${e instanceof Error ? e.message : String(e)}` },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({ deleted: true, upload_id: id });
 }

@@ -787,9 +787,23 @@ function UploadHistory({ refreshKey }: { refreshKey: number }) {
     setDeletingId(id); setErrorMsg("");
     try {
       const res = await fetch(`/api/uploads/${id}`, { method: "DELETE" });
-      if (!res.ok) { const j = await res.json(); setErrorMsg(j.error ?? "Delete failed"); return; }
+      if (!res.ok) {
+        // .json() on a response that is not JSON throws, and with only a
+        // `finally` here that exception escaped the handler: no message, no
+        // removal, and a row that looked like the delete had been ignored.
+        const j = await res.json().catch(() => ({} as { error?: string }));
+        setErrorMsg(j.error ?? `Delete failed (${res.status})`);
+        return;
+      }
       setUploads((prev) => prev.filter((u) => u.id !== id));
-    } finally { setDeletingId(null); setConfirmId(null); }
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingId(null); setConfirmId(null);
+      // Re-read rather than trust the optimistic removal: if the server only
+      // got half way, the row belongs back on screen.
+      void load();
+    }
   }
 
   return (

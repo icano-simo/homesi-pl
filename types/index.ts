@@ -149,6 +149,12 @@ export interface NormalizeWarning {
 export interface NormalizePLResult {
   rows: NormalizedRow[];
   warnings: NormalizeWarning[];
+  /** Sheet the rows were read from, and whether it was matched or fallen back to. */
+  sheet: { name: string; matched: boolean };
+  /** Header cells found in the first row, verbatim. */
+  headers: string[];
+  /** Expected columns absent from that row. Non-empty means nothing mapped. */
+  missingColumns: string[];
 }
 
 // ─── Enrichment pipeline ──────────────────────────────────────────────────────

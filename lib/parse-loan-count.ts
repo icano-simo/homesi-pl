@@ -24,7 +24,7 @@ export function parseLoanCount(buffer: Buffer): {
   rows: ParsedLoanRow[];
   warnings: string[];
 } {
-  const raw = readSheetRaw(buffer, () => true);
+  const { rows: raw } = readSheetRaw(buffer, () => true);
   if (raw.length < 2) return { rows: [], warnings: [] };
 
   const headers = (raw[0] as unknown[]).map(trimStr);
