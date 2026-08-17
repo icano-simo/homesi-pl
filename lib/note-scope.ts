@@ -275,14 +275,25 @@ export function buildNoteIndex(
 
   const month = (note: PLNote) => note.scope.month as string | undefined;
 
-  /** Marks the month cell (when the note has a period) and the Total column. */
+  /**
+   * Marks the month cell (when the note has a period) and the Total column.
+   *
+   * "Direct" is decided per cell, not once for both. A note written on June is
+   * direct on June and inherited on the Total column — the Total column is a
+   * cell of its own, with no month in its scope, and a note can be written
+   * straight onto it. Deciding once made a June note claim the Total column as
+   * its own, so the two were indistinguishable there.
+   */
   const mark = (base: NoteScope, note: PLNote) => {
     const key = canonicalScopeKey(base);
     const m = month(note);
-    const isDirect = note.scope_key === canonicalScopeKey({ ...base, ...(m ? { month: m } : {}) });
-    for (const cell of [...(m ? [`${key}@${m}`] : []), `${key}@__total__`]) {
+    const cells: [string, NoteScope][] = [
+      ...(m ? ([[`${key}@${m}`, { ...base, month: m }]] as [string, NoteScope][]) : []),
+      [`${key}@__total__`, base],
+    ];
+    for (const [cell, cellScope] of cells) {
       any.add(cell);
-      if (isDirect) direct.add(cell);
+      if (note.scope_key === canonicalScopeKey(cellScope)) direct.add(cell);
     }
   };
 

@@ -390,70 +390,53 @@ interface RenderCtx {
 }
 
 /**
- * One level of the path down to a cell, kept as the recursion descends.
+ * Turns a node and a period into the cell both windows are opened with.
  *
- * This is what makes the whole ancestor chain offerable when a note is written.
- * Re-deriving it from the cell's scope afterwards would mean guessing which
- * levels the report was built from and in what order — and it would carry no
- * figures, which the anchor needs: a note on Category 6 records Category 6's
- * amount, not the GL amount of whichever row happened to be clicked.
+ * The breakdown comes from the node's own children, not from a second query.
+ * That is deliberate: the figures in the window are then the figures in the
+ * report by construction, rather than by two computations agreeing — and it is
+ * what makes a cost centre no more expensive to open than a GL, because neither
+ * one reaches past the level immediately below it.
  */
-interface AncestorRef {
+function buildCellRef(opts: {
+  scope: NoteScope;
+  trail: readonly string[];
+  month: string | null;
+  amount: number;
   level: NoteLevel;
   levelLabel: string;
   valueLabel: string;
-  scope: NoteScope;
-  byMonth: Record<string, number>;
-  total: number;
-}
-
-/**
- * Turns a path and a period into the cell both windows are opened with.
- *
- * Anchors run deepest-first: the level just clicked is the one most readers
- * want, and everything above it is there so that the intermediate levels are
- * reachable at all. Nothing is preselected — an anchor chosen by default is an
- * anchor chosen by accident, which is exactly how notes meant for a transaction
- * ended up on a description.
- */
-function buildCellRef(
-  chain: readonly AncestorRef[],
-  trail: readonly string[],
-  month: string | null,
-  amount: number,
-  fallbackScope: NoteScope,
-  extraAnchor?: { level: NoteLevel; levelLabel: string; valueLabel: string; scope: NoteScope },
-): CellRef {
+  /** Children of the node. Empty or absent means the deepest level. */
+  children?: readonly PivotNode[];
+}): CellRef {
+  const { scope, trail, month, amount, children } = opts;
   const withMonth = (s: NoteScope): NoteScope => (month ? { ...s, month } : s);
-  const self = chain[chain.length - 1];
-  const anchors = [...chain].reverse().map((a) => ({
-    level:      a.level,
-    levelLabel: a.levelLabel,
-    valueLabel: a.valueLabel,
-    scope:      withMonth(a.scope),
-    amount:     month ? (a.byMonth[month] ?? 0) : a.total,
-  }));
-  // The deepest anchor when the cell is not a hierarchy node: a transaction row,
-  // or the report's own total.
-  if (extraAnchor) {
-    anchors.unshift({
-      level:      extraAnchor.level,
-      levelLabel: extraAnchor.levelLabel,
-      valueLabel: extraAnchor.valueLabel,
-      scope:      withMonth(extraAnchor.scope),
-      amount,
-    });
-  }
+  const kids = children ?? [];
   return {
-    scope:      withMonth(extraAnchor ? extraAnchor.scope : self ? self.scope : fallbackScope),
+    scope:      withMonth(scope),
     breadcrumb: month ? [...trail, month] : [...trail],
     title:      trail[trail.length - 1] ?? "Total Income",
     month,
     amount,
-    anchors,
-    // Bounded by a dimension or by a month. The one cell that is neither is the
-    // report's own total, whose movement list is every row loaded.
-    drillable:  chain.length > 0 || month != null,
+    self: {
+      level:      opts.level,
+      levelLabel: opts.levelLabel,
+      valueLabel: opts.valueLabel,
+      scope:      withMonth(scope),
+      amount,
+    },
+    children: kids.length
+      ? kids.map((c) => ({
+          level:      c.field as NoteLevel,
+          levelLabel: FIELD_LABELS[c.field as PivotField] ?? c.field,
+          valueLabel: c.label,
+          scope:      withMonth({ ...scope, ...c.scope }),
+          amount:     month ? (c.byMonth[month] ?? 0) : c.total,
+        }))
+      : null,
+    childLevelLabel: kids.length
+      ? FIELD_LABELS[kids[0].field as PivotField] ?? kids[0].field
+      : null,
   };
 }
 
@@ -631,7 +614,6 @@ function renderPivotNodes(
   pathPrefix: string,
   labelPath: string[],
   ctx: RenderCtx,
-  ancestors: AncestorRef[] = [],
 ) {
   const { months, exp, toggle, descSort, homesi } = ctx;
   const ramp = homesi ? HOMESI_DEPTH_STYLES : DEPTH_STYLES;
@@ -649,16 +631,16 @@ function renderPivotNodes(
   const rowBgFor = (idx: number) => (homesi ? homesiRowBg(idx) : "#ffffff");
 
   /** Numeric cell for a leaf transaction row. */
-  const leafCells = (t: TxLeaf, nodeScope: NoteScope, trail: string[], chain: AncestorRef[]) => {
+  const leafCells = (t: TxLeaf, nodeScope: NoteScope, trail: string[]) => {
     // Key scope, month excluded — cellKey adds the period as its suffix.
     const leafScope: NoteScope = { ...nodeScope, transaction_id: t.txId };
     const label = t.desc ?? t.vendor ?? "—";
+    // A transaction has nothing below it, so its window is the figure and the
+    // notes on it — there is no next level to break down.
     const refFor = (month: string | null, amount: number) =>
-      buildCellRef(chain, [...trail, label], month, amount, leafScope, {
-        level: "transaction",
-        levelLabel: "Transaction",
-        valueLabel: label,
-        scope: leafScope,
+      buildCellRef({
+        scope: leafScope, trail: [...trail, label], month, amount,
+        level: "transaction", levelLabel: "Transaction", valueLabel: label,
       });
     const open      = (m: string | null, a: number) => ctx.onDrillCell?.(refFor(m, a));
     const openNotes = (m: string | null, a: number) => ctx.openNotes(refFor(m, a));
@@ -745,7 +727,7 @@ function renderPivotNodes(
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
-            {leafCells(t, flatScope, labelPath, ancestors)}
+            {leafCells(t, flatScope, labelPath)}
           </tr>
         );
       }
@@ -780,21 +762,14 @@ function renderPivotNodes(
 
     const nodeScope: NoteScope = { ...ctx.baseScope, ...node.scope };
     const nodeTrail = [...labelPath, node.label];
-    // The path down to this row, this row included. Passed to the windows so a
-    // note can be anchored to any level of it, not only to the one clicked.
-    const nodeChain: AncestorRef[] = [
-      ...ancestors,
-      {
+    const refFor = (month: string | null, amount: number) =>
+      buildCellRef({
+        scope: nodeScope, trail: nodeTrail, month, amount,
         level:      node.field as NoteLevel,
         levelLabel: FIELD_LABELS[node.field as PivotField] ?? node.field,
         valueLabel: node.label,
-        scope:      nodeScope,
-        byMonth:    node.byMonth,
-        total:      node.total,
-      },
-    ];
-    const refFor = (month: string | null, amount: number) =>
-      buildCellRef(nodeChain, nodeTrail, month, amount, nodeScope);
+        children:   node.children,
+      });
     const openDetail = (month: string | null, amount: number) =>
       ctx.onDrillCell?.(refFor(month, amount));
     const openNodeNotes = (month: string | null, amount: number) =>
@@ -879,7 +854,7 @@ function renderPivotNodes(
 
     // Recurse into children
     if (node.children.length > 0) {
-      renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx, nodeChain);
+      renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx);
     }
 
     // Leaf transaction rows. Suppressed when a drill-down modal is wired:
@@ -906,7 +881,7 @@ function renderPivotNodes(
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
-            {leafCells(t, nodeScope, nodeTrail, nodeChain)}
+            {leafCells(t, nodeScope, nodeTrail)}
           </tr>
         );
       }
@@ -1224,11 +1199,12 @@ export function PivotTableDynamic({
    * everything loaded is behind it.
    */
   const grandRef = (month: string | null, amount: number): CellRef =>
-    buildCellRef([], ["Total Income"], month, amount, baseScope, {
-      level: "grand_total",
-      levelLabel: "Grand Total",
-      valueLabel: "Total Income",
-      scope: baseScope,
+    buildCellRef({
+      scope: baseScope, trail: ["Total Income"], month, amount,
+      level: "grand_total", levelLabel: "Grand Total", valueLabel: "Total Income",
+      // Its next level is the top of the hierarchy — the same rows the report
+      // opens with, so even the report total costs one level and no more.
+      children: tree,
     });
 
   // Total Income sticky row (always visible, based on raw txs)

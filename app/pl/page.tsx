@@ -386,10 +386,10 @@ export default function PLPage() {
           </span>
         </div>
         <p className="mt-0.5 text-sm text-slate-500">
-          Click a figure to open the movements behind it — and to write a note,
-          choosing which level it is about. Click the dot beside a figure to read
-          the notes already there. The hierarchy is fixed, so a note always stays
-          on the same cell.
+          Click a figure to open it one level down — a cost centre into
+          categories, a category into accounts, an account into descriptions —
+          and to write a note about that cell or any row beneath it. Click the
+          dot beside a figure to read, edit and add notes on that same cell.
         </p>
       </div>
 
@@ -408,7 +408,7 @@ export default function PLPage() {
           Notes from more detailed levels below
         </span>
         <span className="text-[11px] text-slate-400">
-          Click a dot to read · click the figure for movements and to write
+          Click a dot to read, edit and add · click the figure to open one level down
         </span>
       </div>
 
@@ -510,7 +510,7 @@ export default function PLPage() {
         />
 
         <NoteWindow
-          target={panel?.kind === "notes" ? { scope: panel.ref.scope, amount: panel.ref.amount } : null}
+          cell={panel?.kind === "notes" ? panel.ref : null}
           notes={placedNotes}
           scopeOrder={SCOPE_ORDER}
           labelFor={labelFor}
