@@ -47,14 +47,37 @@ export interface CellRef {
   /** The cell itself, as an anchor. */
   self: AnchorOption;
   /**
-   * The level below, already resolved from the tree — so its figures are the
-   * report's own figures rather than a second computation that could disagree.
+   * The level below, resolved from the tree — so its figures are the report's
+   * own figures rather than a second computation that could disagree.
    *
    * Null at the deepest level of the hierarchy, where what comes next is a
-   * description rather than a level of the pivot, and only the server can say
-   * which of the three descriptions the rows actually carry.
+   * description rather than a level of the pivot. `descriptions` covers that
+   * case, and it too comes from the tree.
    */
   children: BreakdownRow[] | null;
   /** Header for the breakdown column. Null when `children` is. */
   childLevelLabel: string | null;
+  /**
+   * The three description breakdowns of the deepest cell, from its own rows.
+   *
+   * Measured, and the reason this is not a query: under a cost centre the rows
+   * behind a GL cell are the report's rows — prorated by the allocation split
+   * and expanded for op/non-op — while a query by cost_center_id returns the
+   * raw assignment. On CC01 in June, 7 of 18 GL cells disagreed, the worst by
+   * 10.161,63 against a figure of 18.993,66. A window whose heading and whose
+   * breakdown are two different numbers is worse than no window.
+   *
+   * All three are computed because no single description serves every account,
+   * and only the counts can say which one this cell actually carries.
+   */
+  descriptions: DescriptionBreakdown[] | null;
+}
+
+export interface DescriptionBreakdown {
+  /** Note level this dimension anchors to: description / check_desc_2 / _3. */
+  level: NoteLevel;
+  label: string;
+  /** Rows in this cell that carry it. Zero means picking it shows nothing. */
+  populated: number;
+  rows: BreakdownRow[];
 }

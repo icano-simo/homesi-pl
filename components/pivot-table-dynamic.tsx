@@ -4,8 +4,10 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ArrowUpAZ, ArrowDownAZ, ChevronsUpDown } from "lucide-react";
 import {
   ALL_FIELDS,
+  DESC_DIMENSIONS,
   FIELD_LABELS,
   buildDynamicPivot,
+  descGroupOfLeaf,
   expandForOpNonOp,
   stableScopeValue,
   type ExpandedTx,
@@ -408,10 +410,51 @@ function buildCellRef(opts: {
   valueLabel: string;
   /** Children of the node. Empty or absent means the deepest level. */
   children?: readonly PivotNode[];
+  /** Rows of the node, used only when it has no children. */
+  leaves?: readonly TxLeaf[];
 }): CellRef {
-  const { scope, trail, month, amount, children } = opts;
+  const { scope, trail, month, amount, children, leaves } = opts;
   const withMonth = (s: NoteScope): NoteScope => (month ? { ...s, month } : s);
   const kids = children ?? [];
+
+  /**
+   * The level below the deepest cell, grouped from that cell's own rows.
+   *
+   * Those rows have already been prorated by the cost-centre split and
+   * expanded for op/non-op, so these figures add up to the heading above them.
+   * Asking the server instead would answer from the raw assignment, and the
+   * two do not reconcile — measured on CC01 in June, 7 of 18 GL cells.
+   */
+  const descriptions = !kids.length && leaves?.length
+    ? DESC_DIMENSIONS.map((dim) => {
+        const mine = month ? leaves.filter((l) => l.month === month) : leaves;
+        const g = new Map<string, { key: string; label: string; total: number; count: number }>();
+        let populated = 0;
+        for (const leaf of mine) {
+          const { key, label } = descGroupOfLeaf(leaf, dim);
+          if (key !== dim.blankKey) populated++;
+          const e = g.get(key) ?? { key, label, total: 0, count: 0 };
+          e.total += leaf.mvmt;
+          e.count++;
+          g.set(key, e);
+        }
+        return {
+          level: dim.field as NoteLevel,
+          label: dim.label,
+          populated,
+          rows: [...g.values()]
+            .sort((a, b) => Math.abs(b.total) - Math.abs(a.total))
+            .map((r) => ({
+              level:      dim.field as NoteLevel,
+              levelLabel: dim.label,
+              valueLabel: r.label,
+              scope:      withMonth({ ...scope, [dim.field]: r.key }),
+              amount:     r.total,
+              count:      r.count,
+            })),
+        };
+      })
+    : null;
   return {
     scope:      withMonth(scope),
     breadcrumb: month ? [...trail, month] : [...trail],
@@ -437,6 +480,7 @@ function buildCellRef(opts: {
     childLevelLabel: kids.length
       ? FIELD_LABELS[kids[0].field as PivotField] ?? kids[0].field
       : null,
+    descriptions,
   };
 }
 
@@ -769,6 +813,7 @@ function renderPivotNodes(
         levelLabel: FIELD_LABELS[node.field as PivotField] ?? node.field,
         valueLabel: node.label,
         children:   node.children,
+        leaves:     node.txLeaves,
       });
     const openDetail = (month: string | null, amount: number) =>
       ctx.onDrillCell?.(refFor(month, amount));

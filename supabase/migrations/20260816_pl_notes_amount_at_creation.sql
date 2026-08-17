@@ -1,7 +1,12 @@
 -- Migration: remember what the figure was when a note was written.
 --
--- NOT APPLIED. Review before running, and run it against finance_division only.
--- The Postgres project is shared with the other portal apps.
+-- APPLIED to production on 2026-08-16, and verified there: the column is
+-- numeric(14,2) and nullable, all 5 existing notes hold NULL, RLS is on with
+-- privileges only for service_role, nothing was created in public, and the
+-- PostgREST cache was reloaded. Do not run it again.
+--
+-- It targets finance_division only. The Postgres project is shared with the
+-- other portal apps.
 --
 -- PROBLEM: a note anchored to a cell describes a figure that is recomputed on
 --          every load. Someone writes "check this charge" against 12,400 and a

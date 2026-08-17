@@ -7,7 +7,7 @@ import { ReportFilter } from "@/components/report-filter";
 import { LoanMetricsByMonthBar } from "@/components/loan-metrics-by-month";
 import { useLoanMetrics } from "@/lib/use-loan-metrics";
 import { LoanDetailDrawer } from "@/components/loan-detail-drawer";
-import { CellDetailModal, type CellTarget } from "@/components/cell-detail-modal";
+import { CellDetailModal } from "@/components/cell-detail-modal";
 import { NoteWindow } from "@/components/note-window";
 import { NotesLog } from "@/components/notes-log";
 import { buildSplitsMap } from "@/lib/apply-splits";
@@ -256,18 +256,6 @@ export default function PLPage() {
   }, [rawTxs]);
 
   /**
-   * A cell as the pivot describes it, plus the filters the report was run with.
-   * The pivot knows the shape of the cell; the page knows what was loaded.
-   */
-  const toTarget = (ref: CellRef): CellTarget => ({
-    ...ref,
-    years: loadedYears,
-    branches: loadedBranches,
-    sources: loadedSources,
-    costCenterIds: (costCenterFilter ?? []).filter((v) => !v.startsWith("__")),
-  });
-
-  /**
    * Stable ids in a note's scope are not display text.
    *
    * Built here rather than inside the notes window because the raw transactions
@@ -504,7 +492,7 @@ export default function PLPage() {
         />
       )}
         <CellDetailModal
-          target={panel?.kind === "cell" ? toTarget(panel.ref) : null}
+          cell={panel?.kind === "cell" ? panel.ref : null}
           onClose={() => setPanel(null)}
           onNoteSaved={() => refreshNotes(loadedYears)}
         />

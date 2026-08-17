@@ -34,6 +34,32 @@ export const ALL_FIELDS: PivotField[] = [
 
 // ─── Tree types ───────────────────────────────────────────────────────────────
 
+/**
+ * The three description dimensions, in one place.
+ *
+ * Written once because two things depend on these exact strings: how the pivot
+ * groups rows, and what a note anchored to a description stores in its scope.
+ * A second copy anywhere — an API route grouping the same rows its own way —
+ * anchors notes to cells the pivot never builds, so they exist in the table and
+ * appear nowhere.
+ *
+ * Description 3 is the odd one: only Offshore Allocations rows carry it, so
+ * everywhere else it collapses into a single dash-labelled bucket sorted last
+ * rather than a wordy "(No Description 3)" heading that reads like a real
+ * category. Its key is a sentinel rather than its label, so notes stay anchored
+ * if the label is ever reworded.
+ */
+export const DESC_DIMENSIONS = [
+  { field: "description",  column: "check_description",   label: "Description",
+    blankKey: "(No Description)",   blankLabel: "(No Description)",   blankSort: "(No Description)" },
+  { field: "check_desc_2", column: "check_description_2", label: "Description 2",
+    blankKey: "(No Description 2)", blankLabel: "(No Description 2)", blankSort: "(No Description 2)" },
+  { field: "check_desc_3", column: "check_description_3", label: "Description 3",
+    blankKey: "__no_desc3__",       blankLabel: "—",                  blankSort: "￿" },
+] as const;
+
+export type DescDimension = (typeof DESC_DIMENSIONS)[number];
+
 export interface TxLeaf {
   /** Render key. Composite — a transaction fanned across cost centers or split
    *  Operational/Non-Operational produces several leaves sharing one txId. */
@@ -43,9 +69,23 @@ export interface TxLeaf {
   month: string;
   mvmt: number;
   desc: string | null;
+  /** The other two descriptions, carried so the level below a GL cell can be
+   *  grouped from these rows — which are the report's own rows, prorated by
+   *  the cost-centre split and expanded for op/non-op — instead of from a
+   *  second query against the raw assignment, which reconciles with nothing. */
+  desc2: string | null;
+  desc3: string | null;
   vendor: string | null;
   debit: number;
   credit: number;
+}
+
+/** Group key and label for a leaf under one of the description dimensions. */
+export function descGroupOfLeaf(leaf: TxLeaf, dim: DescDimension): { key: string; label: string } {
+  const raw = (dim.field === "description" ? leaf.desc
+             : dim.field === "check_desc_2" ? leaf.desc2
+             : leaf.desc3)?.trim();
+  return raw ? { key: raw, label: raw } : { key: dim.blankKey, label: dim.blankLabel };
 }
 
 /**
@@ -178,22 +218,12 @@ function getGroup(tx: ExpandedTx, field: PivotField): { key: string; label: stri
       const name = tx.cost_centers?.name ?? tx.cost_center_id;
       return { key: tx.cost_center_id, label: name, sortKey: name };
     }
-    case "description": {
-      const v = tx.check_description?.trim() || "(No Description)";
-      return { key: v, label: v, sortKey: v };
-    }
-    case "check_desc_2": {
-      const v = tx.check_description_2?.trim() || "(No Description 2)";
-      return { key: v, label: v, sortKey: v };
-    }
+    case "description":
+    case "check_desc_2":
     case "check_desc_3": {
-      // Only Offshore Allocations rows carry this. Everything else groups into
-      // a single dash-labelled bucket sorted last, rather than a wordy
-      // "(No Description 3)" heading that reads like a real category. The key
-      // is a sentinel rather than the label so notes stay anchored if the
-      // label is ever reworded — same pattern as loan_number below.
-      const v = tx.check_description_3?.trim();
-      if (!v) return { key: "__no_desc3__", label: "—", sortKey: "￿" };
+      const dim = DESC_DIMENSIONS.find((d) => d.field === field)!;
+      const v = tx[dim.column]?.trim();
+      if (!v) return { key: dim.blankKey, label: dim.blankLabel, sortKey: dim.blankSort };
       return { key: v, label: v, sortKey: v };
     }
     case "loan_number": {
@@ -226,6 +256,8 @@ function toLeaf(tx: ExpandedTx): TxLeaf {
     month: tx.month ?? "Unknown",
     mvmt: tx.movement ?? 0,
     desc: tx.check_description,
+    desc2: tx.check_description_2 ?? null,
+    desc3: tx.check_description_3 ?? null,
     vendor: tx.vendor,
     debit: tx.debit,
     credit: tx.credit,
