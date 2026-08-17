@@ -55,22 +55,39 @@ function todayISO() {
 
 // ─── Summary strip ────────────────────────────────────────────────────────────
 
-function SummaryStrip({ summary }: { summary: ValidationResult["summary"] }) {
+/**
+ * Counts what the table below is showing.
+ *
+ * It used to print the server's totals whatever the filters were — the comment
+ * beside it even said so — so typing a loan number narrowed the rows and left
+ * the strip untouched. The loaded totals still matter, so they are kept beside
+ * the filtered ones and labelled rather than dropped.
+ */
+function SummaryStrip({ summary, shown }: {
+  summary: ValidationResult["summary"];
+  /** Null when nothing is filtered, so no "of N" is drawn. */
+  shown: { match: number; missing: number; surplus: number } | null;
+}) {
+  const Of = ({ v, full, cls }: { v: number; full: number; cls: string }) =>
+    v === full ? null : <span className={`text-[10px] ${cls}`}>of {full}</span>;
   return (
     <div className="flex items-center gap-3 flex-wrap">
       <div className="flex items-center gap-1.5 rounded-lg border border-green-200 bg-green-50 px-3 py-1.5">
         <CheckCircle size={13} className="text-green-600" />
-        <span className="text-xs font-semibold text-green-700">{summary.match_count}</span>
-        <span className="text-xs text-green-600">match{summary.match_count !== 1 ? "es" : ""}</span>
+        <span className="text-xs font-semibold text-green-700">{shown ? shown.match : summary.match_count}</span>
+        {shown && <Of v={shown.match} full={summary.match_count} cls="text-green-500" />}
+        <span className="text-xs text-green-600">match{(shown ? shown.match : summary.match_count) !== 1 ? "es" : ""}</span>
       </div>
       <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5">
         <AlertTriangle size={13} className="text-amber-600" />
-        <span className="text-xs font-semibold text-amber-700">{summary.missing_count}</span>
+        <span className="text-xs font-semibold text-amber-700">{shown ? shown.missing : summary.missing_count}</span>
+        {shown && <Of v={shown.missing} full={summary.missing_count} cls="text-amber-500" />}
         <span className="text-xs text-amber-600">missing in accounting</span>
       </div>
       <div className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5">
         <TrendingUp size={13} className="text-blue-600" />
-        <span className="text-xs font-semibold text-blue-700">{summary.surplus_count}</span>
+        <span className="text-xs font-semibold text-blue-700">{shown ? shown.surplus : summary.surplus_count}</span>
+        {shown && <Of v={shown.surplus} full={summary.surplus_count} cls="text-blue-500" />}
         <span className="text-xs text-blue-600">surplus in accounting</span>
       </div>
     </div>
@@ -470,7 +487,6 @@ function ValidationSection({
   const showAccountingAmt = type !== "b2b";
   const showTxColumns     = type === "b2b";
 
-  // Derived view — summary strip always uses full data.summary regardless of active filters
   const visibleRows: ValidationRow[] = !data ? [] :
     data.rows.filter((r) => {
       const lnSearch = filterLoanNumber.trim().toLowerCase();
@@ -558,7 +574,16 @@ function ValidationSection({
         <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-600">{error}</div>
       ) : data ? (
         <>
-          <SummaryStrip summary={data.summary} />
+          <SummaryStrip
+            summary={data.summary}
+            shown={filterLoanNumber.trim() || statusFilter.length > 0
+              ? {
+                  match:   visibleRows.filter((r) => r.status === "match").length,
+                  missing: visibleRows.filter((r) => r.status === "missing").length,
+                  surplus: showSurplus ? data.surplus.length : 0,
+                }
+              : null}
+          />
           <ValidationTable
             rows={visibleRows}
             showLoanOfficer={showLoanOfficer}
@@ -1364,6 +1389,19 @@ export function LoanValidationTab({
           placeholder="Loan # search…"
           className="h-7 w-40 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
         />
+        {selBranches.length > 0 && (
+          // Which side it narrows, said next to it. The filter restricts the
+          // accounting rows by the branch the TRANSACTION was booked in; the
+          // master list is compared whole. Measured on 41309: 332 of its rows
+          // sit in the corporate branch 700, so picking almost any other branch
+          // leaves 0 accounting rows against all 379 loans and every one of
+          // them reads as missing. Stated rather than silently changed —
+          // scoping by the LOAN's branch instead is a change to what this tool
+          // validates, and that is not a decision to make in passing.
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-800">
+            branch narrows the accounting side only — the master list is compared whole
+          </span>
+        )}
         {hasFilters && (
           <button
             onClick={() => { setSelMonths([]); setSelYears([]); setSelBranches([]); setFilterLoanNumber(""); }}

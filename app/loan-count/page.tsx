@@ -317,18 +317,35 @@ export default function LoanCountPage() {
     return out;
   }, [loans, filterLoanNumber, filterBranches, filterLOs, filterChannels, filterB2B, filterAffinity, filterProcessing, filterOnDemand, filterRecruit]);
 
-  // Dashboard metrics computed from the full loaded set (before column filters)
-  const metrics = useMemo(() => ({
-    total:            loans.length,
-    banked:           loans.filter(l => l.loan_info_channel === "Banked - Retail").length,
-    brokered:         loans.filter(l => l.loan_info_channel === "Brokered").length,
-    other:            loans.filter(l => l.loan_info_channel && l.loan_info_channel !== "Banked - Retail" && l.loan_info_channel !== "Brokered").length,
-    b2b:              loans.filter(l => l.b2b).length,
-    processing:       loans.filter(l => l.processing).length,
-    support_on_demand:loans.filter(l => l.support_on_demand).length,
-    affinity:         loans.filter(l => l.affinity).length,
-    recruitment:      loans.filter(l => l.recruitment).length,
-  }), [loans]);
+  /**
+   * The strip counts what is on screen.
+   *
+   * It used to count `loans`, the whole loaded set, while the table beside it
+   * showed the filtered rows — so filtering by branch changed the rows and left
+   * the count where it was. On a page whose entire subject IS the count, that
+   * reads as "the filter is broken".
+   *
+   * There was no reason recorded for it: the comment arrived with a bulk
+   * "añadir nuevos archivos" commit and says what the code does, not why.
+   *
+   * The loaded total is still worth having — it is the figure people quote for
+   * the month — so it is kept and shown beside the filtered one, labelled,
+   * whenever a column filter is on. Two numbers that say what they are beat one
+   * number that quietly answers a different question.
+   */
+  const countOf = (rows: LoanOfficial[]) => ({
+    total:            rows.length,
+    banked:           rows.filter(l => l.loan_info_channel === "Banked - Retail").length,
+    brokered:         rows.filter(l => l.loan_info_channel === "Brokered").length,
+    other:            rows.filter(l => l.loan_info_channel && l.loan_info_channel !== "Banked - Retail" && l.loan_info_channel !== "Brokered").length,
+    b2b:              rows.filter(l => l.b2b).length,
+    processing:       rows.filter(l => l.processing).length,
+    support_on_demand:rows.filter(l => l.support_on_demand).length,
+    affinity:         rows.filter(l => l.affinity).length,
+    recruitment:      rows.filter(l => l.recruitment).length,
+  });
+  const metrics    = useMemo(() => countOf(displayedLoans), [displayedLoans]);
+  const allMetrics = useMemo(() => countOf(loans), [loans]);
 
   function clearColumnFilters() {
     setFilterLoanNumber("");
@@ -516,20 +533,20 @@ export default function LoanCountPage() {
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Overview</div>
           <div className="flex items-center gap-6 min-w-max">
             <div className="flex items-end gap-4">
-              <MetricCard label="Total"    value={metrics.total}    accent="gray" />
-              <MetricCard label="Banked"   value={metrics.banked}   accent="blue" />
-              <MetricCard label="Brokered" value={metrics.brokered} accent="indigo" />
-              {metrics.other > 0 && <MetricCard label="Other" value={metrics.other} accent="orange" />}
+              <MetricCard label="Total"    value={metrics.total}    of={hasColumnFilters ? allMetrics.total : null}    accent="gray" />
+              <MetricCard label="Banked"   value={metrics.banked}   of={hasColumnFilters ? allMetrics.banked : null}   accent="blue" />
+              <MetricCard label="Brokered" value={metrics.brokered} of={hasColumnFilters ? allMetrics.brokered : null} accent="indigo" />
+              {allMetrics.other > 0 && <MetricCard label="Other" value={metrics.other} of={hasColumnFilters ? allMetrics.other : null} accent="orange" />}
             </div>
-            {(metrics.b2b + metrics.processing + metrics.support_on_demand + metrics.affinity + metrics.recruitment > 0) && (
+            {(allMetrics.b2b + allMetrics.processing + allMetrics.support_on_demand + allMetrics.affinity + allMetrics.recruitment > 0) && (
               <>
                 <div className="h-10 w-px self-stretch bg-gray-100" />
                 <div className="flex flex-wrap gap-1.5">
-                  {metrics.b2b > 0              && <TagPill label="B2B"         value={metrics.b2b} />}
-                  {metrics.processing > 0        && <TagPill label="Processing"  value={metrics.processing} />}
-                  {metrics.support_on_demand > 0 && <TagPill label="On Demand"   value={metrics.support_on_demand} />}
-                  {metrics.affinity > 0          && <TagPill label="Affinity"    value={metrics.affinity} />}
-                  {metrics.recruitment > 0       && <TagPill label="Recruitment" value={metrics.recruitment} />}
+                  {allMetrics.b2b > 0 && <TagPill label="B2B" value={metrics.b2b} of={hasColumnFilters ? allMetrics.b2b : null} />}
+                  {allMetrics.processing > 0 && <TagPill label="Processing" value={metrics.processing} of={hasColumnFilters ? allMetrics.processing : null} />}
+                  {allMetrics.support_on_demand > 0 && <TagPill label="On Demand" value={metrics.support_on_demand} of={hasColumnFilters ? allMetrics.support_on_demand : null} />}
+                  {allMetrics.affinity > 0 && <TagPill label="Affinity" value={metrics.affinity} of={hasColumnFilters ? allMetrics.affinity : null} />}
+                  {allMetrics.recruitment > 0 && <TagPill label="Recruitment" value={metrics.recruitment} of={hasColumnFilters ? allMetrics.recruitment : null} />}
                 </div>
               </>
             )}
@@ -669,20 +686,35 @@ export default function LoanCountPage() {
   );
 }
 
-function MetricCard({ label, value, accent }: { label: string; value: number; accent: "gray" | "blue" | "indigo" | "orange" }) {
+function MetricCard({ label, value, of, accent }: {
+  label: string; value: number;
+  /** The loaded total, shown beside the filtered figure while a filter is on. */
+  of: number | null;
+  accent: "gray" | "blue" | "indigo" | "orange";
+}) {
   const colors = { gray: "text-gray-900", blue: "text-blue-700", indigo: "text-indigo-700", orange: "text-orange-700" };
   return (
     <div className="flex flex-col items-center min-w-[40px]">
-      <span className={`text-xl font-bold tabular-nums ${colors[accent]}`}>{value.toLocaleString()}</span>
+      <span className="flex items-baseline gap-1">
+        <span className={`text-xl font-bold tabular-nums ${colors[accent]}`}>{value.toLocaleString()}</span>
+        {/* Only while filtering, and only when it differs — an "of N" that
+            always equals the number beside it is noise. */}
+        {of != null && of !== value && (
+          <span className="text-[11px] tabular-nums text-gray-400">of {of.toLocaleString()}</span>
+        )}
+      </span>
       <span className="text-[10px] text-gray-400 mt-0.5">{label}</span>
     </div>
   );
 }
 
-function TagPill({ label, value }: { label: string; value: number }) {
+function TagPill({ label, value, of }: { label: string; value: number; of: number | null }) {
   return (
+    // Shown whenever the loaded set has any, even when the filter leaves none:
+    // a tag that vanishes is indistinguishable from a tag that never existed.
     <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-[11px]">
       <span className="font-semibold text-indigo-700">{value}</span>
+      {of != null && of !== value && <span className="text-indigo-400">of {of}</span>}
       <span className="text-indigo-500">{label}</span>
     </span>
   );
