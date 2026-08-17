@@ -57,8 +57,9 @@ interface DetailData {
   loans: LoanRow[];
   summary: Summary;
   branch_filter: string[];
-  orphans: { loan_number: string; branch: string | null; concepts: Record<string, number>; total: number }[];
-  orphans_total: number;
+  missing:      StrayBucket;
+  other_period: StrayBucket;
+  out_of_scope: StrayBucket;
   unattributed_total: number;
   unattributed_rows: number;
   net_groups: string[];
@@ -301,25 +302,25 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
             </table>
           )}
 
-          {data && !loading && data.orphans.length > 0 && (
-            <details className="m-5 rounded-xl border border-slate-200 bg-slate-50">
-              <summary className="cursor-pointer px-4 py-2.5 text-xs font-semibold text-slate-700">
-                Not in the master loan list — {data.orphans.length} loan{data.orphans.length > 1 ? "s" : ""} · {money(data.orphans_total)}
-              </summary>
-              <table className="w-full border-collapse text-xs">
-                <tbody>
-                  {data.orphans.map((o) => (
-                    <tr key={o.loan_number} className="border-t border-slate-200/60">
-                      <Td className="font-mono">{o.loan_number}</Td>
-                      <Td className="text-center font-mono">{o.branch ?? "—"}</Td>
-                      <Td className="text-right font-mono tabular-nums">{fmt(o.total)}</Td>
-                      <Td className="text-right text-slate-300">—</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </details>
-          )}
+          {/* Three different things, and only the first is a missing record.
+              The old label called all of them "not in the master loan list",
+              which was false for every case anyone reported: those loans were
+              in the master, they had simply originated in another month. */}
+          <StraySection
+            bucket={data && !loading ? data.missing : null}
+            title="Loan number not found in loan_officials"
+            note="No record of these numbers anywhere in the master list."
+          />
+          <StraySection
+            bucket={data && !loading ? data.other_period : null}
+            title="Margin on loans from another month"
+            note="These loans exist; they are not on this card because they originated in a different month. Revenue landing after origination, not a gap in the data."
+          />
+          <StraySection
+            bucket={data && !loading ? data.out_of_scope : null}
+            title="Margin on loans outside this card"
+            note="Originated this month, but on another branch or through a channel this card does not cover."
+          />
         </div>
 
         <div className="border-t border-slate-200 px-5 py-3 text-[11px] text-slate-500">
@@ -331,6 +332,67 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
         </div>
       </div>
     </>
+  );
+}
+
+/** One loan whose margin is in these books but not on one of this card's loans. */
+interface StrayLoan {
+  loan_number: string;
+  branch: string | null;
+  concepts: Record<string, number>;
+  total: number;
+  origin: { branch: string | null; month: string | null; year: number | null; channel: string | null } | null;
+  /** Exact opposite of the same concept in another branch, same month. */
+  counterparts: { branch: string; concept: string; amount: number }[];
+}
+
+interface StrayBucket { rows: StrayLoan[]; total: number }
+
+/**
+ * Revenue in the books being read that does not belong to a loan on this card.
+ *
+ * Three sections rather than one, because the three causes are different and
+ * two of them are not errors. A loan that originated in April and earns in June
+ * is not missing from anything — saying so sent someone to check five loan
+ * numbers one by one against a master list they were already in.
+ */
+function StraySection({ bucket, title, note }: { bucket: StrayBucket | null; title: string; note: string }) {
+  if (!bucket || bucket.rows.length === 0) return null;
+  return (
+    <details className="m-5 rounded-xl border border-slate-200 bg-slate-50">
+      <summary className="cursor-pointer px-4 py-2.5 text-xs font-semibold text-slate-700">
+        {title} — {bucket.rows.length} loan{bucket.rows.length > 1 ? "s" : ""} · {money(bucket.total)}
+      </summary>
+      <p className="px-4 pb-2 text-[11px] text-slate-500">{note}</p>
+      <table className="w-full border-collapse text-xs">
+        <tbody>
+          {bucket.rows.map((o) => (
+            <tr key={`${o.loan_number}|${o.branch ?? ""}`} className="border-t border-slate-200/60 align-top">
+              <Td className="font-mono">
+                {o.loan_number}
+                {o.origin && (
+                  <span className="ml-2 font-sans text-[10px] text-slate-500">
+                    loan on branch {o.origin.branch ?? "—"}
+                    {o.origin.month ? ` · ${o.origin.month} ${o.origin.year ?? ""}` : ""}
+                    {o.origin.channel ? ` · ${o.origin.channel}` : ""}
+                  </span>
+                )}
+                {/* An equal and opposite entry in another branch is a transfer,
+                    not revenue arriving from nowhere — and read through a
+                    branch filter only one half of it is ever on screen. */}
+                {o.counterparts.length > 0 && (
+                  <span className="ml-2 inline-block rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-sans text-[10px] text-amber-800">
+                    transfer · offset in branch {[...new Set(o.counterparts.map((c) => c.branch))].join(", ")}
+                  </span>
+                )}
+              </Td>
+              <Td className="text-center font-mono">{o.branch ?? "—"}</Td>
+              <Td className="text-right font-mono tabular-nums">{fmt(o.total)}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 
