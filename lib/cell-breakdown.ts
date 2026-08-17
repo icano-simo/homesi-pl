@@ -44,9 +44,13 @@ export function describeLeaves(
     };
     const g = new Map<string, Agg>();
     let populated = 0;
+    const populatedByMonth: Record<string, number> = {};
     for (const leaf of mine) {
       const { key, label } = descGroupOfLeaf(leaf, dim);
-      if (key !== dim.blankKey) populated++;
+      if (key !== dim.blankKey) {
+        populated++;
+        populatedByMonth[leaf.month] = (populatedByMonth[leaf.month] ?? 0) + 1;
+      }
       let e = g.get(key);
       if (!e) { e = { key, label, total: 0, count: 0, byMonth: {}, counts: {} }; g.set(key, e); }
       e.total += leaf.mvmt;
@@ -101,6 +105,7 @@ export function describeLeaves(
       level: dim.field as NoteLevel,
       label: dim.label,
       populated,
+      populatedByMonth,
       rows,
       perMonth,
       compression,

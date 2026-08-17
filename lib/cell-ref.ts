@@ -57,6 +57,15 @@ export interface CellRef {
   months: string[];
   /** The figure as it stands right now. */
   amount: number;
+  /**
+   * The same figure split by month, straight from the report.
+   *
+   * The heading of the window reads from here when the month filter is on, so
+   * it shows the number the P&L shows in that month's column — not a sum of
+   * whatever rows happen to be listed below, which would be a second
+   * computation able to disagree with the first.
+   */
+  byMonth: Record<string, number>;
   /** The cell itself, as an anchor. */
   self: AnchorOption;
   /**
@@ -92,6 +101,8 @@ export interface DescriptionBreakdown {
   label: string;
   /** Rows in this cell that carry it. Zero means picking it shows nothing. */
   populated: number;
+  /** The same count per month, so the pills follow the month filter. */
+  populatedByMonth: Record<string, number>;
   /** One row per description. The whole breakdown in a month cell; the rows of
    *  the matrix, and the "all months" anchors, on the Total column. */
   rows: BreakdownRow[];

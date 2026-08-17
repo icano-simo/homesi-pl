@@ -411,6 +411,8 @@ function buildCellRef(opts: {
   children?: readonly PivotNode[];
   /** Rows of the node, used only when it has no children. */
   leaves?: readonly TxLeaf[];
+  /** The cell's own figure per month, for the heading under a month filter. */
+  byMonth?: Record<string, number>;
 }): CellRef {
   const { scope, trail, month, amount, children, leaves } = opts;
   const withMonth = (s: NoteScope): NoteScope => (month ? { ...s, month } : s);
@@ -437,6 +439,7 @@ function buildCellRef(opts: {
     title:      trail[trail.length - 1] ?? "Total Income",
     month,
     amount,
+    byMonth: opts.byMonth ?? {},
     self: {
       level:      opts.level,
       levelLabel: opts.levelLabel,
@@ -664,6 +667,7 @@ function renderPivotNodes(
       buildCellRef({
         scope: leafScope, trail: [...trail, label], month, amount,
         level: "transaction", levelLabel: "Transaction", valueLabel: label,
+        byMonth: { [t.month]: t.mvmt },
       });
     const open      = (m: string | null, a: number) => ctx.onDrillCell?.(refFor(m, a));
     const openNotes = (m: string | null, a: number) => ctx.openNotes(refFor(m, a));
@@ -793,6 +797,7 @@ function renderPivotNodes(
         valueLabel: node.label,
         children:   node.children,
         leaves:     node.txLeaves,
+        byMonth:    node.byMonth,
       });
     const openDetail = (month: string | null, amount: number) =>
       ctx.onDrillCell?.(refFor(month, amount));
@@ -1256,6 +1261,7 @@ export function PivotTableDynamic({
       // Its next level is the top of the hierarchy — the same rows the report
       // opens with, so even the report total costs one level and no more.
       children: tree,
+      byMonth: grandByMonth,
     });
 
   // Total Income sticky row (always visible, based on raw txs)

@@ -133,8 +133,12 @@ export function CellDetailModal({
   /** Only what this view can actually represent is offered. */
   const anchors = useMemo<{ id: "self" | "row" | "cell"; label: string; a: AnchorOption }[]>(() => {
     if (!cell) return [];
+    // The clicked cell, never the filter. A month filter narrows the reading,
+    // not what was pulled up: the anchor is the figure the reader pointed at,
+    // and so is the amount stored with the note. Spelled out in the label
+    // because with a filter on it will not match the heading above.
     const out: { id: "self" | "row" | "cell"; label: string; a: AnchorOption }[] = [
-      { id: "self", label: "This cell", a: cell.self },
+      { id: "self", label: `This cell · ${cell.month ?? "all months"}`, a: cell.self },
     ];
     if (picked) {
       const c = cellByKey.get(`${picked.key}|${picked.month ?? ""}`);
@@ -159,6 +163,21 @@ export function CellDetailModal({
 
   const isTotalColumn = cell.month == null;
   const trend = isTotalColumn && !!desc?.perMonth && mode === "trend";
+  /**
+   * The period the window is showing, filter included.
+   *
+   * The heading used to be the cell and the table below it the filtered month,
+   * and the two were then talking about different things: 41309 read 457.136,54
+   * "all months shown" over the 32 rows of March. A filter narrows what is being
+   * read, so it has to narrow the figure that is being read too.
+   *
+   * Only in the list — the matrix has no filter, and a stale one left over from
+   * the other view must not leak into its heading.
+   */
+  const readMonth   = cell.month ?? (trend ? null : monthFilter);
+  const readAmount  = cell.month != null || !readMonth
+    ? cell.amount
+    : cell.byMonth[readMonth] ?? 0;
   const listRows = desc?.perMonth
     ? (monthFilter ? desc.perMonth.filter((r) => r.month === monthFilter) : desc.perMonth)
     : desc?.rows ?? null;
@@ -231,13 +250,13 @@ export function CellDetailModal({
               ))}
             </p>
             <p className="mt-1 flex items-baseline gap-2">
-              <span className={`font-mono text-2xl font-bold tabular-nums ${cell.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
-                {fmt(cell.amount)}
+              <span className={`font-mono text-2xl font-bold tabular-nums ${readAmount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
+                {fmt(readAmount)}
               </span>
               <span className="text-[11px] text-slate-500">
-                {/* The Total column is a period of its own — every month on
-                    screen — and a note written there carries no month. */}
-                {cell.month ?? "all months shown"}
+                {/* Moves with the figure beside it. A label that says "all
+                    months" over one month's number is worse than no label. */}
+                {readMonth ?? "all months shown"}
               </span>
             </p>
           </div>
@@ -254,7 +273,13 @@ export function CellDetailModal({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[11px] font-semibold text-slate-600">Break down by</span>
                 {cell.descriptions.map((d, i) => {
-                  const empty = d.populated === 0;
+                  // Follows the filter for the same reason the heading does:
+                  // "130 rows carry this" over a table of twenty is a lie about
+                  // what is on screen.
+                  const carried = readMonth && !cell.month
+                    ? d.populatedByMonth[readMonth] ?? 0
+                    : d.populated;
+                  const empty = carried === 0;
                   return (
                     <button
                       key={d.level}
@@ -273,7 +298,7 @@ export function CellDetailModal({
                           gives a blank list that reads as a broken page, and only
                           the data can say which one is populated for THIS cell. */}
                       <span className={`ml-1.5 font-mono text-[10px] ${empty ? "text-slate-400" : "text-slate-500"}`}>
-                        {d.populated}
+                        {carried}
                       </span>
                       {i === 0 && <span className="ml-1 text-[9px] uppercase tracking-wide text-slate-400">usual</span>}
                     </button>
