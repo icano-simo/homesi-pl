@@ -1042,9 +1042,27 @@ export function PivotTableDynamic({
   onDrillCell,
   onOpenNotes,
 }: PivotTableDynamicProps) {
-  const [activeLevels, setActiveLevels] = useState<PivotField[]>(() =>
+  /**
+   * The hierarchy this table is actually drawing.
+   *
+   * Only the reorderable pivot owns it. With `lockHierarchy` the prop is the
+   * truth and is read straight through — it is not copied into state, because
+   * that copy is exactly what broke: the initialiser below is lazy, so it ran
+   * once on mount and every later change to `defaultLevels` was ignored.
+   * Switching to the Cost Center view rebuilt the tree, correctly, out of the
+   * levels the page had been mounted with. Run Report did not help: it changes
+   * the transactions, not the levels, so the memo re-ran and produced the same
+   * shape again.
+   *
+   * Derived rather than synced with an effect on purpose. An effect would make
+   * the two agree one render later; deriving makes it impossible for them to
+   * disagree at all.
+   */
+  const [ownLevels, setOwnLevels] = useState<PivotField[]>(() =>
     storageKey ? readStorage(storageKey, defaultLevels) : defaultLevels
   );
+  const activeLevels  = lockHierarchy ? defaultLevels : ownLevels;
+  const setActiveLevels = setOwnLevels;
   const [addOpen, setAddOpen] = useState(false);
   const [exp, setExp] = useState<Set<string>>(new Set());
   const [descSort, setDescSort] = useState<"asc" | "desc" | null>(null);
@@ -1063,9 +1081,18 @@ export function PivotTableDynamic({
 
   // Persist hierarchy to localStorage whenever it changes
   useEffect(() => {
-    if (!storageKey) return;
+    if (!storageKey || lockHierarchy) return;
     try { localStorage.setItem(storageKey, JSON.stringify(activeLevels)); } catch { /* ignore */ }
-  }, [storageKey, activeLevels]);
+  }, [storageKey, lockHierarchy, activeLevels]);
+
+  /**
+   * A different hierarchy is a different set of rows, so nothing that was open
+   * in the old one means anything in the new one. Keyed on the levels rather
+   * than the array so a re-render with an equal-but-new array does not collapse
+   * the report under the reader.
+   */
+  const levelsKey = activeLevels.join("|");
+  useEffect(() => { setExp(new Set()); }, [levelsKey]);
 
   function toggle(key: string) {
     setExp(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s; });
