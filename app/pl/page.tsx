@@ -493,6 +493,7 @@ export default function PLPage() {
       )}
         <CellDetailModal
           cell={panel?.kind === "cell" ? panel.ref : null}
+          notes={placedNotes}
           onClose={() => setPanel(null)}
           onNoteSaved={() => refreshNotes(loadedYears)}
         />

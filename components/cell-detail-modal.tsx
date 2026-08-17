@@ -2,10 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { X, MessageSquarePlus } from "lucide-react";
-import type { AnchorOption, BreakdownRow, CellRef } from "@/lib/cell-ref";
+import type { AnchorOption, BreakdownMode, BreakdownRow, CellRef } from "@/lib/cell-ref";
+import { canonicalScopeKey, scopeContains, type NoteScope, type PLNote } from "@/lib/note-scope";
 
 const fmt = (v: number) =>
   v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** Solid: written here. Hollow: written somewhere below this. */
+function Dot({ state }: { state: "direct" | "below" | null }) {
+  if (!state) return null;
+  return (
+    <span
+      aria-label={state === "direct" ? "Has a note" : "Has notes at a more detailed level"}
+      className={`mr-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full align-middle ${
+        state === "direct" ? "bg-[#FF4040]" : "border border-[#001A40]/40"
+      }`}
+    />
+  );
+}
 
 /**
  * One cell, one level down.
@@ -23,17 +37,20 @@ const fmt = (v: number) =>
  * breakdown that did not add up to the heading above it, the worst by
  * 10.161,63 against 18.993,66.
  *
- * It is also where notes are written, and the anchor is picked from a named
- * list: this cell, or any row of the breakdown. Never inferred from where the
- * click landed — that is what put notes meant for a transaction onto a
- * description, twice, without either person noticing.
+ * On the Total column the same rows can be read two ways — a matrix of months,
+ * or a list with a month column — and the reader picks, from a switch that is
+ * always on screen. Never automatically: a table that changes shape on its own
+ * does not say why.
  */
 export function CellDetailModal({
   cell,
+  notes,
   onClose,
   onNoteSaved,
 }: {
   cell: CellRef | null;
+  /** Resolved notes, for the indicators on the breakdown rows. */
+  notes: readonly PLNote[];
   onClose: () => void;
   onNoteSaved: () => void;
 }) {
@@ -43,8 +60,16 @@ export function CellDetailModal({
    * account-dependent, which is the whole reason the choice exists.
    */
   const [descIdx, setDescIdx] = useState<number | null>(null);
+  /** Null until a description is picked, then seeded from its suggestion. */
+  const [mode, setMode] = useState<BreakdownMode | null>(null);
+  /** List view only. Null is every month. */
+  const [monthFilter, setMonthFilter] = useState<string | null>(null);
 
-  const [anchorKey, setAnchorKey] = useState<string>("");
+  /** Which description row was clicked, and on which month if any. */
+  const [picked, setPicked] = useState<{ key: string; month: string | null } | null>(null);
+  /** Grain of the anchor: the cell itself, the description, or one of its months. */
+  const [grain, setGrain] = useState<"" | "self" | "row" | "cell">("");
+
   const [draft, setDraft]         = useState("");
   const [saving, setSaving]       = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -56,37 +81,91 @@ export function CellDetailModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [cell, onClose]);
 
-  // A new cell is a new choice, in both selectors.
+  // A new cell is a new set of choices.
   const cellKey = cell ? JSON.stringify(cell.scope) : "";
   useEffect(() => {
-    setDescIdx(null); setAnchorKey(""); setDraft(""); setSaveError("");
+    setDescIdx(null); setMode(null); setMonthFilter(null);
+    setPicked(null); setGrain(""); setDraft(""); setSaveError("");
   }, [cellKey]);
 
-  /**
-   * The breakdown, and with it the anchors on offer — they are the same rows.
-   * A note is either about this cell or about one of the lines under it.
-   */
-  const breakdown = useMemo<BreakdownRow[] | null>(() => {
-    if (!cell) return null;
-    if (cell.children) return cell.children;
-    if (descIdx == null) return null;
-    return cell.descriptions?.[descIdx]?.rows ?? null;
-  }, [cell, descIdx]);
+  const desc = cell && descIdx != null ? cell.descriptions?.[descIdx] ?? null : null;
 
-  const anchors = useMemo<AnchorOption[]>(
-    () => (cell ? [cell.self, ...(breakdown ?? [])] : []),
-    [cell, breakdown],
-  );
-  const keyOf = (a: AnchorOption, i: number) => `${i}|${a.level}|${a.valueLabel}`;
-  const anchor = anchors.find((a, i) => keyOf(a, i) === anchorKey) ?? null;
+  /** Picking a description re-suggests the mode; the reader can still change it. */
+  function chooseDesc(i: number) {
+    setDescIdx(i);
+    setMode(cell?.descriptions?.[i]?.suggestedMode ?? null);
+    setMonthFilter(null);
+    setPicked(null); setGrain("");
+  }
+
+  /**
+   * Note state for a scope, under the rule the whole report uses: a note shows
+   * on a cell when its own scope carries every constraint of that cell.
+   *
+   * Which is why a note on a description across all months does not appear on
+   * that description's month cells — it has no month, so it is the looser of
+   * the two and cannot roll down. Nothing to draw there, and one note never
+   * paints twelve marks.
+   */
+  const noteAt = useMemo(() => {
+    const own = new Set(notes.map((n) => n.scope_key));
+    return (scope: NoteScope): "direct" | "below" | null => {
+      const k = canonicalScopeKey(scope);
+      if (own.has(k)) return "direct";
+      return notes.some((n) => n.scope_key !== k && scopeContains(n.scope, scope)) ? "below" : null;
+    };
+  }, [notes]);
+
+  const rowByKey = useMemo(() => {
+    const m = new Map<string, BreakdownRow>();
+    for (const r of desc?.rows ?? []) if (r.key) m.set(r.key, r);
+    return m;
+  }, [desc]);
+
+  const cellByKey = useMemo(() => {
+    const m = new Map<string, BreakdownRow>();
+    for (const r of desc?.perMonth ?? desc?.rows ?? []) {
+      if (r.key) m.set(`${r.key}|${r.month ?? ""}`, r);
+    }
+    return m;
+  }, [desc]);
+
+  /** Only what this view can actually represent is offered. */
+  const anchors = useMemo<{ id: "self" | "row" | "cell"; label: string; a: AnchorOption }[]>(() => {
+    if (!cell) return [];
+    const out: { id: "self" | "row" | "cell"; label: string; a: AnchorOption }[] = [
+      { id: "self", label: "This cell", a: cell.self },
+    ];
+    if (picked) {
+      const c = cellByKey.get(`${picked.key}|${picked.month ?? ""}`);
+      if (c && picked.month) out.push({ id: "cell", label: `${c.valueLabel} · ${picked.month}`, a: c });
+      // "All months" exists only where a row means all months — the matrix. In
+      // the list every row already is a description and a month, and there is
+      // no row that would mean anything else.
+      const r = rowByKey.get(picked.key);
+      if (r && mode === "trend" && cell.month == null) {
+        out.push({ id: "row", label: `${r.valueLabel} · all months`, a: r });
+      }
+      if (c && !picked.month && cell.month != null) {
+        out.push({ id: "cell", label: `${c.valueLabel} · ${cell.month}`, a: c });
+      }
+    }
+    return out;
+  }, [cell, picked, mode, rowByKey, cellByKey]);
+
+  const anchor = anchors.find((o) => o.id === grain)?.a ?? null;
 
   if (!cell) return null;
 
-  const byDescription = !cell.children && !!cell.descriptions;
-  const columnLabel = cell.children
-    ? cell.childLevelLabel
-    : descIdx != null ? cell.descriptions?.[descIdx]?.label ?? null : null;
-  const rowCount = cell.descriptions?.[0]?.rows.reduce((s, r) => s + (r.count ?? 0), 0) ?? 0;
+  const isTotalColumn = cell.month == null;
+  const trend = isTotalColumn && !!desc?.perMonth && mode === "trend";
+  const listRows = desc?.perMonth
+    ? (monthFilter ? desc.perMonth.filter((r) => r.month === monthFilter) : desc.perMonth)
+    : desc?.rows ?? null;
+
+  const hierarchyRows = cell.children;
+  const columnLabel = hierarchyRows ? cell.childLevelLabel : desc?.label ?? null;
+  const movements = desc?.rows.reduce((s, r) => s + (r.count ?? 0), 0) ?? 0;
 
   async function save() {
     const text = draft.trim();
@@ -112,7 +191,7 @@ export function CellDetailModal({
         return;
       }
       setDraft("");
-      setAnchorKey("");
+      setGrain("");
       onNoteSaved();
     } catch (e) {
       setSaveError(String(e));
@@ -121,13 +200,23 @@ export function CellDetailModal({
     }
   }
 
+  const pick = (key: string, month: string | null, id: "row" | "cell") => {
+    const same = picked?.key === key && picked.month === month && grain === id;
+    setPicked(same ? null : { key, month });
+    setGrain(same ? "" : id);
+  };
+
   return (
     <>
       <div className="fixed inset-0 z-[60] bg-slate-900/30" onClick={onClose} />
       <div
         role="dialog"
         aria-label="Cell detail"
-        className="fixed left-1/2 top-1/2 z-[61] flex max-h-[85vh] w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl"
+        // The matrix is the only thing here that needs room, so it is the only
+        // thing that gets it — and the switch the reader just used is what
+        // explains the change of shape.
+        style={{ maxWidth: trend ? "min(96vw, 1400px)" : "48rem" }}
+        className="fixed left-1/2 top-1/2 z-[61] flex max-h-[85vh] w-full -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl transition-[max-width] duration-200"
       >
         {/* ── The cell itself ─────────────────────────────────────────────── */}
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
@@ -158,88 +247,226 @@ export function CellDetailModal({
           </button>
         </div>
 
-        {/* ── Which description, at the deepest level ─────────────────────── */}
-        {byDescription && (
+        {/* ── Which description, and how to read it ───────────────────────── */}
+        {!hierarchyRows && cell.descriptions && (
           <div className="border-b border-slate-200 px-5 py-3">
-            <p className="mb-2 text-[11px] font-semibold text-slate-600">Break down by</p>
-            <div className="flex flex-wrap gap-2">
-              {cell.descriptions!.map((d, i) => {
-                const empty = d.populated === 0;
-                const usual = i === 0;
-                return (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold text-slate-600">Break down by</span>
+                {cell.descriptions.map((d, i) => {
+                  const empty = d.populated === 0;
+                  return (
+                    <button
+                      key={d.level}
+                      onClick={() => chooseDesc(i)}
+                      title={empty ? "No rows in this cell carry this description" : undefined}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                        descIdx === i
+                          ? "border-sky-300 bg-sky-100 text-sky-900"
+                          : empty
+                            ? "border-slate-200 bg-slate-50 text-slate-400"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                      }`}
+                    >
+                      {d.label}
+                      {/* The count is the whole point: picking an empty description
+                          gives a blank list that reads as a broken page, and only
+                          the data can say which one is populated for THIS cell. */}
+                      <span className={`ml-1.5 font-mono text-[10px] ${empty ? "text-slate-400" : "text-slate-500"}`}>
+                        {d.populated}
+                      </span>
+                      {i === 0 && <span className="ml-1 text-[9px] uppercase tracking-wide text-slate-400">usual</span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* The switch. Always visible, never automatic — it arrives on the
+                  sensible option for this account and stays where it is put. */}
+              {isTotalColumn && desc?.perMonth && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-slate-600">Read as</span>
+                  <div className="inline-flex rounded-full border border-slate-200 bg-white p-0.5">
+                    {([["trend", "Trend"], ["byMonth", "By month"]] as const).map(([m, lbl]) => (
+                      <button
+                        key={m}
+                        onClick={() => { setMode(m); setPicked(null); setGrain(""); }}
+                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                          mode === m ? "bg-[#A6DEFF]/30 font-semibold text-[#001A40]" : "text-slate-500 hover:text-[#001A40]"
+                        }`}
+                      >
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
+                  {desc.compression != null && (
+                    <span className="text-[10px] text-slate-400">
+                      {desc.perMonth.length} rows by month · {desc.rows.length} descriptions
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Month filter, list view only. Getting to one month without
+                closing the window and starting again. */}
+            {isTotalColumn && desc?.perMonth && mode === "byMonth" && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-[11px] font-semibold text-slate-600">Month</span>
+                {[null, ...cell.months].map((m) => (
                   <button
-                    key={d.level}
-                    onClick={() => setDescIdx(i)}
-                    title={empty ? "No rows in this cell carry this description" : undefined}
-                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                      descIdx === i
+                    key={m ?? "__all__"}
+                    onClick={() => { setMonthFilter(m); setPicked(null); setGrain(""); }}
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                      monthFilter === m
                         ? "border-sky-300 bg-sky-100 text-sky-900"
-                        : empty
-                          ? "border-slate-200 bg-slate-50 text-slate-400"
-                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                        : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
                     }`}
                   >
-                    {d.label}
-                    {/* The count is the whole point: picking an empty description
-                        gives a blank list that reads as a broken page, and only
-                        the data can say which one is populated for THIS cell. */}
-                    <span className={`ml-1.5 font-mono text-[10px] ${empty ? "text-slate-400" : "text-slate-500"}`}>
-                      {d.populated}
-                    </span>
-                    {usual && <span className="ml-1 text-[9px] uppercase tracking-wide text-slate-400">usual</span>}
+                    {m ?? "All"}
                   </button>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {/* ── One level down ──────────────────────────────────────────────── */}
         <div className="flex-1 overflow-auto">
-          {!breakdown && (
+          {!hierarchyRows && !desc && (
             <p className="p-5 text-sm text-slate-500">
-              {byDescription
-                ? <>Pick a description to break these {rowCount} movements down by.
-                    The number on each option is how many of them carry it.</>
-                : "Nothing below this level."}
+              Pick a description to break these {movements} movements down by.
+              The number on each option is how many of them carry it.
             </p>
           )}
 
-          {breakdown && (
+          {/* A level of the hierarchy: one column, one row per child. */}
+          {hierarchyRows && (
             <table className="w-full border-collapse text-xs">
               <thead className="sticky top-0 bg-slate-100/95">
                 <tr className="border-b-2 border-slate-200 text-left">
-                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700">
-                    {columnLabel}
-                  </th>
-                  {byDescription && (
-                    <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-700">Rows</th>
-                  )}
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700">{columnLabel}</th>
                   <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-700">
                     {cell.month ?? "Total"}
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {breakdown.map((row, i) => {
-                  const k = keyOf(row, i + 1);
-                  const picked = anchorKey === k;
+                {hierarchyRows.map((row, i) => {
+                  const on = picked?.key === row.valueLabel;
                   return (
                     <tr
-                      key={k}
-                      // A shortcut for the selector below, not a second way of
-                      // choosing: both drive the same value, and the composer
-                      // restates it in words before anything is saved.
-                      onClick={() => setAnchorKey(picked ? "" : k)}
-                      className={`cursor-pointer border-b border-slate-200/60 ${picked ? "bg-sky-50" : "hover:bg-slate-50"}`}
-                      style={{ backgroundColor: picked ? undefined : i % 2 ? "#fcfdfe" : "#ffffff" }}
+                      key={`${row.valueLabel}-${i}`}
+                      onClick={() => pick(row.valueLabel, cell.month, "cell")}
+                      className={`cursor-pointer border-b border-slate-200/60 ${on ? "bg-sky-50" : "hover:bg-slate-50"}`}
+                      style={{ backgroundColor: on ? undefined : i % 2 ? "#fcfdfe" : "#ffffff" }}
                     >
                       <td className="max-w-[420px] truncate px-3 py-1.5 text-slate-700" title={row.valueLabel}>
-                        {row.valueLabel}
+                        <Dot state={noteAt(row.scope)} />{row.valueLabel}
                       </td>
-                      {byDescription && (
-                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-slate-500">{row.count}</td>
+                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${row.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
+                        {fmt(row.amount)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+
+          {/* Trend: one row per description, one column per month it has. */}
+          {trend && desc && (
+            <table className="w-full border-collapse text-xs">
+              <thead className="sticky top-0 z-10 bg-slate-100/95">
+                <tr className="border-b-2 border-slate-200 text-left">
+                  <th style={{ minWidth: 180, maxWidth: 380, position: "sticky", left: 0 }}
+                      className="bg-slate-100 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700">
+                    {desc.label}
+                  </th>
+                  {cell.months.map((m) => (
+                    <th key={m} className="whitespace-nowrap px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-700">
+                      {m.slice(0, 3)}
+                    </th>
+                  ))}
+                  <th className="border-l border-slate-200 px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-700">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {desc.rows.map((row, i) => {
+                  const bg = i % 2 ? "#fcfdfe" : "#ffffff";
+                  const rowOn = picked?.key === row.key && picked?.month === null;
+                  return (
+                    <tr key={row.key} className="border-b border-slate-200/60" style={{ backgroundColor: rowOn ? "#f0f9ff" : bg }}>
+                      {/* The row's name is the "all months" anchor, and where
+                          both of that row's indicators live. */}
+                      <td
+                        onClick={() => pick(row.key!, null, "row")}
+                        title={row.valueLabel}
+                        style={{ minWidth: 180, maxWidth: 380, position: "sticky", left: 0, backgroundColor: rowOn ? "#f0f9ff" : bg }}
+                        className="cursor-pointer truncate border-r border-slate-200 px-3 py-1.5 text-slate-700 hover:text-[#001A40]"
+                      >
+                        <Dot state={noteAt(row.scope)} />{row.valueLabel}
+                      </td>
+                      {cell.months.map((m) => {
+                        const v = row.byMonth?.[m];
+                        const c = cellByKey.get(`${row.key}|${m}`);
+                        const on = picked?.key === row.key && picked?.month === m;
+                        return (
+                          <td
+                            key={m}
+                            onClick={c ? () => pick(row.key!, m, "cell") : undefined}
+                            style={{ backgroundColor: on ? "#e0f2fe" : undefined }}
+                            className={`whitespace-nowrap px-3 py-1.5 text-right font-mono tabular-nums ${
+                              c ? "cursor-pointer" : ""
+                            } ${v == null ? "text-slate-300" : v < 0 ? "text-rose-600" : "text-[#001A40]"}`}
+                          >
+                            {c && <Dot state={noteAt(c.scope)} />}
+                            {v == null ? "—" : fmt(v)}
+                          </td>
+                        );
+                      })}
+                      <td className={`whitespace-nowrap border-l border-slate-200 px-3 py-1.5 text-right font-mono font-semibold tabular-nums ${row.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
+                        {fmt(row.amount)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+
+          {/* By month: one row per description and month, with a Month column. */}
+          {!hierarchyRows && desc && !trend && listRows && (
+            <table className="w-full border-collapse text-xs">
+              <thead className="sticky top-0 bg-slate-100/95">
+                <tr className="border-b-2 border-slate-200 text-left">
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700">{desc.label}</th>
+                  {isTotalColumn && (
+                    <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700">Month</th>
+                  )}
+                  <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-700">Rows</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-700">
+                    {cell.month ?? "Movement"}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {listRows.map((row, i) => {
+                  const on = picked?.key === row.key && picked?.month === (row.month ?? null);
+                  return (
+                    <tr
+                      key={`${row.key}|${row.month ?? ""}`}
+                      onClick={() => pick(row.key!, row.month ?? null, "cell")}
+                      className={`cursor-pointer border-b border-slate-200/60 ${on ? "bg-sky-50" : "hover:bg-slate-50"}`}
+                      style={{ backgroundColor: on ? undefined : i % 2 ? "#fcfdfe" : "#ffffff" }}
+                    >
+                      <td className="max-w-[420px] truncate px-3 py-1.5 text-slate-700" title={row.valueLabel}>
+                        <Dot state={noteAt(row.scope)} />{row.valueLabel}
+                      </td>
+                      {isTotalColumn && (
+                        <td className="whitespace-nowrap px-3 py-1.5 text-slate-500">{row.month}</td>
                       )}
+                      <td className="px-3 py-1.5 text-right font-mono tabular-nums text-slate-500">{row.count}</td>
                       <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${row.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
                         {fmt(row.amount)}
                       </td>
@@ -258,16 +485,17 @@ export function CellDetailModal({
           </label>
           <select
             id="note-anchor"
-            value={anchorKey}
-            onChange={(e) => setAnchorKey(e.target.value)}
+            value={grain}
+            onChange={(e) => setGrain(e.target.value as typeof grain)}
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#001A40] focus:outline-none"
           >
             {/* No preselection. An anchor chosen by default is an anchor chosen
-                by accident — which is how this went wrong in the first place. */}
+                by accident — which is how this went wrong in the first place.
+                And only what this view can represent is ever listed. */}
             <option value="">— pick what the note is about —</option>
-            {anchors.map((a, i) => (
-              <option key={keyOf(a, i)} value={keyOf(a, i)}>
-                {i === 0 ? "This cell" : a.levelLabel} · {a.valueLabel} · {fmt(a.amount)}
+            {anchors.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label} · {fmt(o.a.amount)}
               </option>
             ))}
           </select>
@@ -282,14 +510,14 @@ export function CellDetailModal({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
-            placeholder={anchor ? `Note on ${anchor.valueLabel}…` : "Pick what the note is about, then write it…"}
+            placeholder={anchor ? `Note on ${anchor.valueLabel}…` : "Click a row, then pick what the note is about…"}
             className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] text-slate-800 placeholder:text-slate-300 focus:border-[#001A40] focus:outline-none"
           />
           <div className="mt-2 flex items-center justify-between gap-3">
             <p className="min-w-0 truncate text-[10px] text-slate-400">
               {anchor
                 ? <>Anchored to {anchor.levelLabel} · {anchor.valueLabel}
-                    {cell.month ? ` · ${cell.month}` : " · all months shown"} ·{" "}
+                    {anchor.scope.month ? ` · ${anchor.scope.month}` : " · all months shown"} ·{" "}
                     <span className="font-mono">{fmt(anchor.amount)}</span> at the time of writing</>
                 : "Nothing picked yet."}
             </p>

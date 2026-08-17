@@ -4,10 +4,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ArrowUpAZ, ArrowDownAZ, ChevronsUpDown } from "lucide-react";
 import {
   ALL_FIELDS,
-  DESC_DIMENSIONS,
   FIELD_LABELS,
   buildDynamicPivot,
-  descGroupOfLeaf,
   expandForOpNonOp,
   stableScopeValue,
   type ExpandedTx,
@@ -27,6 +25,7 @@ import {
   type PLNote,
 } from "@/lib/note-scope";
 import type { CellRef } from "@/lib/cell-ref";
+import { describeLeaves } from "@/lib/cell-breakdown";
 import type { PLReportTx } from "@/types";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -425,35 +424,12 @@ function buildCellRef(opts: {
    * Asking the server instead would answer from the raw assignment, and the
    * two do not reconcile — measured on CC01 in June, 7 of 18 GL cells.
    */
+  // Extracted to lib/cell-breakdown.ts rather than written here: it is data
+  // logic, not rendering, and inside a .tsx component it can only be exercised
+  // by mounting React. The one bug on this branch that no verification caught —
+  // the view switch that changed nothing — was exactly of that kind.
   const descriptions = !kids.length && leaves?.length
-    ? DESC_DIMENSIONS.map((dim) => {
-        const mine = month ? leaves.filter((l) => l.month === month) : leaves;
-        const g = new Map<string, { key: string; label: string; total: number; count: number }>();
-        let populated = 0;
-        for (const leaf of mine) {
-          const { key, label } = descGroupOfLeaf(leaf, dim);
-          if (key !== dim.blankKey) populated++;
-          const e = g.get(key) ?? { key, label, total: 0, count: 0 };
-          e.total += leaf.mvmt;
-          e.count++;
-          g.set(key, e);
-        }
-        return {
-          level: dim.field as NoteLevel,
-          label: dim.label,
-          populated,
-          rows: [...g.values()]
-            .sort((a, b) => Math.abs(b.total) - Math.abs(a.total))
-            .map((r) => ({
-              level:      dim.field as NoteLevel,
-              levelLabel: dim.label,
-              valueLabel: r.label,
-              scope:      withMonth({ ...scope, [dim.field]: r.key }),
-              amount:     r.total,
-              count:      r.count,
-            })),
-        };
-      })
+    ? describeLeaves(leaves, scope, month)
     : null;
   return {
     scope:      withMonth(scope),
@@ -480,6 +456,9 @@ function buildCellRef(opts: {
     childLevelLabel: kids.length
       ? FIELD_LABELS[kids[0].field as PivotField] ?? kids[0].field
       : null,
+    // Calendar order, and only the months this cell has — the columns of the
+    // trend matrix.
+    months: MONTH_ORDER.filter((m) => leaves?.some((l) => l.month === m)),
     descriptions,
   };
 }
