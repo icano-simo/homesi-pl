@@ -4,19 +4,16 @@ import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
 import { ChevronDown, ChevronRight, Download, AlertTriangle, CheckCircle, TrendingUp } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import * as XLSX from "xlsx";
-import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
+import { useActiveBranches } from "@/components/branch-filter-provider";
 import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan-validation/route";
-import type { OnDemandResult } from "@/app/api/loan-validation/on-demand/route";
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
 
-type ValType = "b2b" | "on_demand" | "processing" | "all_loans";
+type ValType = "b2b" | "all_loans";
 
 const SUB_TABS: { type: ValType; label: string; glLabel: string }[] = [
   { type: "all_loans",  label: "All Loans",  glLabel: "DM Margin (41309)" },
   { type: "b2b",        label: "B2B",        glLabel: "B2B Success Fee" },
-  { type: "on_demand",  label: "On Demand",  glLabel: "Other HUD Fees (41205)" },
-  { type: "processing", label: "Processing", glLabel: "Processing Fee (55275)" },
 ];
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -55,22 +52,49 @@ function todayISO() {
 
 // ─── Summary strip ────────────────────────────────────────────────────────────
 
-function SummaryStrip({ summary }: { summary: ValidationResult["summary"] }) {
+/**
+ * Counts what the table below is showing.
+ *
+ * It used to print the server's totals whatever the filters were — the comment
+ * beside it even said so — so typing a loan number narrowed the rows and left
+ * the strip untouched. The loaded totals still matter, so they are kept beside
+ * the filtered ones and labelled rather than dropped.
+ */
+function SummaryStrip({ summary, shown }: {
+  summary: ValidationResult["summary"];
+  /** Null when nothing is filtered, so no "of N" is drawn. */
+  shown: { match: number; missing: number; exempt: number; surplus: number } | null;
+}) {
+  const Of = ({ v, full, cls }: { v: number; full: number; cls: string }) =>
+    v === full ? null : <span className={`text-[10px] ${cls}`}>of {full}</span>;
   return (
     <div className="flex items-center gap-3 flex-wrap">
       <div className="flex items-center gap-1.5 rounded-lg border border-green-200 bg-green-50 px-3 py-1.5">
         <CheckCircle size={13} className="text-green-600" />
-        <span className="text-xs font-semibold text-green-700">{summary.match_count}</span>
-        <span className="text-xs text-green-600">match{summary.match_count !== 1 ? "es" : ""}</span>
+        <span className="text-xs font-semibold text-green-700">{shown ? shown.match : summary.match_count}</span>
+        {shown && <Of v={shown.match} full={summary.match_count} cls="text-green-500" />}
+        <span className="text-xs text-green-600">match{(shown ? shown.match : summary.match_count) !== 1 ? "es" : ""}</span>
       </div>
       <div className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5">
         <AlertTriangle size={13} className="text-amber-600" />
-        <span className="text-xs font-semibold text-amber-700">{summary.missing_count}</span>
+        <span className="text-xs font-semibold text-amber-700">{shown ? shown.missing : summary.missing_count}</span>
+        {shown && <Of v={shown.missing} full={summary.missing_count} cls="text-amber-500" />}
         <span className="text-xs text-amber-600">missing in accounting</span>
       </div>
+      {/* Counted apart from missing, and in slate: these are not findings, and
+          folding them into the amber number would inflate exactly the figure
+          someone acts on. */}
+      {(shown ? shown.exempt : summary.exempt_count) > 0 && (
+        <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
+          <span className="text-xs font-semibold text-slate-700">{shown ? shown.exempt : summary.exempt_count}</span>
+          {shown && <Of v={shown.exempt} full={summary.exempt_count} cls="text-slate-400" />}
+          <span className="text-xs text-slate-600">branch exempt</span>
+        </div>
+      )}
       <div className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5">
         <TrendingUp size={13} className="text-blue-600" />
-        <span className="text-xs font-semibold text-blue-700">{summary.surplus_count}</span>
+        <span className="text-xs font-semibold text-blue-700">{shown ? shown.surplus : summary.surplus_count}</span>
+        {shown && <Of v={shown.surplus} full={summary.surplus_count} cls="text-blue-500" />}
         <span className="text-xs text-blue-600">surplus in accounting</span>
       </div>
     </div>
@@ -87,7 +111,7 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
   const flaggedRows    = isFlagged ? rows.filter((r) => r.surplus_reason === "loan_exists_not_flagged") : [];
   const notFoundRows   = isFlagged ? rows.filter((r) => r.surplus_reason === "loan_not_found") : [];
   const unresolvedRows = isFlagged ? rows.filter((r) => r.surplus_reason === "loan_number_unresolved") : [];
-  const flagName = type === "b2b" ? "b2b" : type === "on_demand" ? "support_on_demand" : "processing";
+  const flagName = "b2b";
 
   function handleExport() {
     exportToXlsx(`surplus-${type}-${todayISO()}.xlsx`, rows.map((r) => ({
@@ -352,6 +376,7 @@ function ValidationTable({
             <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Number</th>
             <th className="px-3 py-2 font-medium">Borrower Name</th>
             {showLoanOfficer && <th className="px-3 py-2 font-medium">Loan Officer</th>}
+            <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Program</th>
             <th className="px-3 py-2 font-medium">Branch</th>
             <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
             {showLoanAmount && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>}
@@ -364,15 +389,24 @@ function ValidationTable({
         <tbody>
           {rows.map((row) => {
             const missing = row.status === "missing";
+            const exempt  = row.status === "exempt";
             return (
               <tr
                 key={row.loan_number}
                 className={`border-b border-gray-50 hover:brightness-95 ${missing ? "bg-amber-50/70" : ""}`}
               >
                 <td className="px-3 py-1.5">
+                  {/* Three states, and only one of them is a finding. An exempt
+                      branch owes no fee, so its absence is the correct answer —
+                      slate, not amber, and no warning triangle. */}
                   {missing ? (
                     <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
                       <AlertTriangle size={9} /> Missing
+                    </span>
+                  ) : exempt ? (
+                    <span title="This branch is exempt from the B2B success fee, so no fee is expected."
+                          className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                      Branch exempt · not charged
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">
@@ -389,6 +423,7 @@ function ValidationTable({
                     {row.loan_officer ?? "—"}
                   </td>
                 )}
+                <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.loan_program ?? undefined}>{row.loan_program ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.month ?? "—"}</td>
                 {showLoanAmount && (
@@ -427,7 +462,7 @@ function ValidationTable({
   );
 }
 
-const STATUS_OPTS = ["Matched", "Missing in Accounting", "Surplus in Accounting"] as const;
+const STATUS_OPTS = ["Matched", "Missing in Accounting", "Branch exempt", "Surplus in Accounting"] as const;
 
 // ─── Single validation section (one sub-tab) ──────────────────────────────────
 
@@ -470,14 +505,14 @@ function ValidationSection({
   const showAccountingAmt = type !== "b2b";
   const showTxColumns     = type === "b2b";
 
-  // Derived view — summary strip always uses full data.summary regardless of active filters
   const visibleRows: ValidationRow[] = !data ? [] :
     data.rows.filter((r) => {
       const lnSearch = filterLoanNumber.trim().toLowerCase();
       if (lnSearch && !r.loan_number.toLowerCase().includes(lnSearch)) return false;
       if (statusFilter.length === 0) return true;
       return (statusFilter.includes("Matched") && r.status === "match") ||
-             (statusFilter.includes("Missing in Accounting") && r.status === "missing");
+             (statusFilter.includes("Missing in Accounting") && r.status === "missing") ||
+             (statusFilter.includes("Branch exempt") && r.status === "exempt");
     });
 
   const showSurplus = !data ? false :
@@ -527,8 +562,6 @@ function ValidationSection({
           ) : (
             <>
               GL {glLabel}
-              {type === "on_demand"  && <span className="ml-1 text-gray-400">· desc contains &ldquo;LOA ON DEMAND FEE&rdquo;</span>}
-              {type === "processing" && <span className="ml-1 text-gray-400">· desc contains &ldquo;PROCESSING FEE ON FILE&rdquo;</span>}
             </>
           )}
         </p>
@@ -558,7 +591,17 @@ function ValidationSection({
         <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-600">{error}</div>
       ) : data ? (
         <>
-          <SummaryStrip summary={data.summary} />
+          <SummaryStrip
+            summary={data.summary}
+            shown={filterLoanNumber.trim() || statusFilter.length > 0
+              ? {
+                  match:   visibleRows.filter((r) => r.status === "match").length,
+                  missing: visibleRows.filter((r) => r.status === "missing").length,
+                  exempt:  visibleRows.filter((r) => r.status === "exempt").length,
+                  surplus: showSurplus ? data.surplus.length : 0,
+                }
+              : null}
+          />
           <ValidationTable
             rows={visibleRows}
             showLoanOfficer={showLoanOfficer}
@@ -594,203 +637,6 @@ function DiffBadge({ diff }: { diff: number }) {
 }
 
 // ─── On Demand: pivot section (Branch vs LOA On Demand) ───────────────────────
-
-function OnDemandSection({ months, years }: {
-  months: string[];
-  years: string[];
-}) {
-  const [data, setData] = useState<OnDemandResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const p = new URLSearchParams();
-      months.forEach((m) => p.append("month", m));
-      years.forEach((y) => p.append("year", y));
-      const res = await fetch(`/api/loan-validation/on-demand?${p}`);
-      const json = await res.json();
-      if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
-      setData(json);
-    } finally {
-      setLoading(false);
-    }
-  }, [months, years]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const toggle = (branch: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(branch) ? next.delete(branch) : next.add(branch);
-      return next;
-    });
-
-  const totalAccounting = data?.branches.reduce((s, r) => s + r.accounting_count, 0) ?? 0;
-  const totalOfficial   = data?.branches.reduce((s, r) => s + r.official_count, 0) ?? 0;
-  const totalDiff       = totalAccounting - totalOfficial;
-
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-gray-500">
-        Branch comparison — <span className="font-medium">LOA ON DEMAND FEE</span> in accounting vs{" "}
-        <span className="font-medium">support_on_demand = true</span> in Loan Officials.{" "}
-        <span className="text-gray-400">Branch filter not applied — all branches shown.</span>
-      </p>
-
-      {loading ? (
-        <div className="py-12 text-center">
-          <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-300 border-t-blue-600" />
-        </div>
-      ) : error ? (
-        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-600">{error}</div>
-      ) : data ? (
-        <>
-          {/* Summary strip */}
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5">
-              <span className="text-xs font-semibold text-gray-700">{totalAccounting}</span>
-              <span className="text-xs text-gray-500">unique descriptions in accounting</span>
-            </div>
-            <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5">
-              <span className="text-xs font-semibold text-gray-700">{totalOfficial}</span>
-              <span className="text-xs text-gray-500">loans in Loan Officials</span>
-            </div>
-            <div className={[
-              "flex items-center gap-1.5 rounded-lg border px-3 py-1.5",
-              totalDiff === 0 ? "border-green-200 bg-green-50" :
-              totalDiff  < 0 ? "border-amber-200 bg-amber-50" :
-                               "border-orange-200 bg-orange-50",
-            ].join(" ")}>
-              <span className={[
-                "text-xs font-semibold",
-                totalDiff === 0 ? "text-green-700" : totalDiff < 0 ? "text-amber-700" : "text-orange-700",
-              ].join(" ")}>
-                {totalDiff === 0
-                  ? "✓ All branches match"
-                  : `${totalDiff > 0 ? "+" : ""}${totalDiff} overall`}
-              </span>
-            </div>
-          </div>
-
-          {/* Pivot table */}
-          <div className="overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 z-10 bg-gray-50">
-                <tr className="border-b border-gray-100 text-gray-500">
-                  <th className="px-3 py-2 font-medium text-left">Branch</th>
-                  <th className="px-3 py-2 font-medium text-right whitespace-nowrap">In Accounting</th>
-                  <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Marked as On Demand</th>
-                  <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Difference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.branches.map((row) => {
-                  const exp = expanded.has(row.branch);
-                  return (
-                    <Fragment key={`od-${row.branch}`}>
-                      <tr
-                        onClick={() => toggle(row.branch)}
-                        className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer select-none"
-                      >
-                        <td className="px-3 py-2.5 font-medium text-gray-800">
-                          <span className="mr-1.5 text-[10px] text-gray-400">{exp ? "▾" : "▸"}</span>
-                          Branch {row.branch}
-                        </td>
-                        <td className="px-3 py-2.5 text-right font-mono text-gray-700">{row.accounting_count}</td>
-                        <td className="px-3 py-2.5 text-right font-mono text-gray-700">{row.official_count}</td>
-                        <td className="px-3 py-2.5 text-right"><DiffBadge diff={row.difference} /></td>
-                      </tr>
-
-                      {exp && (
-                        <tr className="border-b border-gray-100">
-                          <td colSpan={4} className="p-0">
-                            <div className="grid grid-cols-2 gap-3 p-3 bg-gray-50/50 border-t border-gray-100">
-
-                              {/* Accounting sub-table */}
-                              <div>
-                                <p className="mb-1.5 text-[11px] font-semibold text-gray-600">
-                                  {row.accounting_count} unique LOA ON DEMAND description{row.accounting_count !== 1 ? "s" : ""}
-                                </p>
-                                <div className="overflow-auto max-h-56 rounded-lg border border-gray-200 bg-white">
-                                  {row.accounting_items.length === 0 ? (
-                                    <p className="px-3 py-4 text-center text-[11px] text-gray-400">No transactions</p>
-                                  ) : (
-                                    <table className="w-full text-[11px]">
-                                      <thead className="sticky top-0 bg-gray-50">
-                                        <tr className="border-b border-gray-100 text-left text-gray-500">
-                                          <th className="px-2 py-1.5 font-medium">Description</th>
-                                          <th className="px-2 py-1.5 font-medium text-right whitespace-nowrap"># Txns</th>
-                                          <th className="px-2 py-1.5 font-medium text-right whitespace-nowrap">Net Movement</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {row.accounting_items.map((item, i) => (
-                                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
-                                            <td className="max-w-[220px] truncate px-2 py-1.5 text-gray-700" title={item.description}>
-                                              {item.description}
-                                            </td>
-                                            <td className="px-2 py-1.5 text-right font-mono text-gray-600">{item.tx_count}</td>
-                                            <td className="px-2 py-1.5 text-right whitespace-nowrap">{fmtMov(item.net_movement)}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* Loan Officials sub-table */}
-                              <div>
-                                <p className="mb-1.5 text-[11px] font-semibold text-gray-600">
-                                  {row.official_count} On Demand loan{row.official_count !== 1 ? "s" : ""} in Loan Officials
-                                </p>
-                                <div className="overflow-auto max-h-56 rounded-lg border border-gray-200 bg-white">
-                                  {row.official_loans.length === 0 ? (
-                                    <p className="px-3 py-4 text-center text-[11px] text-gray-400">No loans</p>
-                                  ) : (
-                                    <table className="w-full text-[11px]">
-                                      <thead className="sticky top-0 bg-gray-50">
-                                        <tr className="border-b border-gray-100 text-left text-gray-500">
-                                          <th className="px-2 py-1.5 font-medium whitespace-nowrap">Loan Number</th>
-                                          <th className="px-2 py-1.5 font-medium">Borrower Name</th>
-                                          <th className="px-2 py-1.5 font-medium">Loan Officer</th>
-                                          <th className="px-2 py-1.5 font-medium text-right whitespace-nowrap">Loan Amount</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {row.official_loans.map((loan, i) => (
-                                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60">
-                                            <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{loan.loan_number}</td>
-                                            <td className="max-w-[140px] truncate px-2 py-1.5 text-gray-700" title={loan.borrower_name ?? ""}>{loan.borrower_name ?? "—"}</td>
-                                            <td className="max-w-[120px] truncate px-2 py-1.5 text-gray-600" title={loan.loan_officer ?? ""}>{loan.loan_officer ?? "—"}</td>
-                                            <td className="px-2 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(loan.loan_amount)}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  )}
-                                </div>
-                              </div>
-
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
-}
 
 // ─── All Loans: types & helpers ───────────────────────────────────────────────
 
@@ -1048,6 +894,7 @@ function DetailView({
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Number</th>
             {filterHeader("borrower_name", "Borrower Name")}
             {filterHeader("loan_officer", "Loan Officer")}
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Program</th>
             <th className="px-3 py-2 font-medium text-left">Branch</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month / Year</th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
@@ -1077,6 +924,7 @@ function DetailView({
                 <td className="px-3 py-1.5 font-mono text-gray-800 whitespace-nowrap">{row.loan_number}</td>
                 <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.borrower_name ?? ""}>{row.borrower_name ?? "—"}</td>
                 <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.loan_officer ?? ""}>{row.loan_officer ?? "—"}</td>
+                <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.loan_program ?? undefined}>{row.loan_program ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">
                   {row.month ?? "—"}{row.year ? ` ${row.year}` : ""}
@@ -1220,7 +1068,7 @@ function AllLoansSection({
           return true;
         })
         .map((r) => ({
-          status:        r.status === "missing" ? "Missing" : "Match",
+          status:        r.status === "missing" ? "Missing" : r.status === "exempt" ? "Branch exempt" : "Match",
           loan_number:   r.loan_number,
           borrower_name: r.borrower_name ?? "",
           loan_officer:  r.loan_officer ?? "",
@@ -1344,7 +1192,26 @@ export function LoanValidationTab({
   const [selBranches, setSelBranches] = useState<string[]>([]);
   const [filterLoanNumber, setFilterLoanNumber] = useState("");
 
-  const effectiveBranches = mergeWithGlobal(activeBranches, selBranches);
+  /**
+   * The Branch filter of this tab, and only this tab.
+   *
+   * It used to be mergeWithGlobal(activeBranches, selBranches), which returns
+   * the GLOBAL list whenever the local one is empty — so with every dropdown
+   * here clear, a global branch filter was still reaching the endpoint. That was
+   * harmless while `branch` narrowed the accounting side; it stopped being
+   * harmless the moment it started narrowing the master list, because the
+   * global filter names ACCOUNTING branches and loan_officials has none of them
+   * in common with the usual choice: its branches are 150 276 701 702 703 707
+   * 710 716 718 724 728 733 741 747 760 770 771 776 and Affinity — there is no
+   * 700. Filtering the master by 700 returns nothing, which is exactly the
+   * empty screen this produced.
+   *
+   * So the global accounting filter no longer feeds this screen at all. It has
+   * nothing to act on here either: the transactions are matched by loan number
+   * regardless of where they are booked.
+   */
+  const loanBranches = selBranches;
+  const globalBranchIgnored = activeBranches.length > 0;
 
   const yearOptions = allYears.map(String);
   const hasFilters = selMonths.length > 0 || selYears.length > 0 || selBranches.length > 0 || filterLoanNumber !== "";
@@ -1364,6 +1231,14 @@ export function LoanValidationTab({
           placeholder="Loan # search…"
           className="h-7 w-40 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
         />
+        {globalBranchIgnored && (
+          <span
+            title="This screen filters by the branch that produced the loan; the global filter names accounting branches."
+            className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] text-slate-600"
+          >
+            global branch filter ({activeBranches.join(", ")}) does not apply here
+          </span>
+        )}
         {hasFilters && (
           <button
             onClick={() => { setSelMonths([]); setSelYears([]); setSelBranches([]); setFilterLoanNumber(""); }}
@@ -1397,11 +1272,9 @@ export function LoanValidationTab({
         <AllLoansSection
           months={selMonths}
           years={selYears}
-          branches={effectiveBranches}
+          branches={loanBranches}
           filterLoanNumber={filterLoanNumber}
         />
-      ) : activeType === "on_demand" ? (
-        <OnDemandSection months={selMonths} years={selYears} />
       ) : (
         SUB_TABS.filter((t) => t.type === activeType).map((t) => (
           <ValidationSection
@@ -1410,7 +1283,7 @@ export function LoanValidationTab({
             glLabel={t.glLabel}
             months={selMonths}
             years={selYears}
-            branches={effectiveBranches}
+            branches={loanBranches}
             filterLoanNumber={filterLoanNumber}
           />
         ))

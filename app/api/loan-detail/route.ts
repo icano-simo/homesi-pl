@@ -3,6 +3,7 @@ import { createServerClient } from "@/lib/supabase-server";
 import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
 import {
   ALL_MARGIN_ACCOUNTS,
+  CORPORATE_MARGIN_ACCOUNTS,
   MARGIN_FOR_PERIOD,
   NET_GROUPS,
   expectedMarginAccounts,
@@ -253,6 +254,16 @@ export async function GET(req: NextRequest) {
         loan_number: l.loan_number,
         borrower_name: l.borrower_name,
         loan_officer: l.loan_officer,
+        /**
+         * The margin net: DM Margin + RM Margin and nothing else.
+         *
+         * A different number from the revenue net beside it, and deliberately
+         * so — Processing Income, Fee Income and the rest are revenue but they
+         * are not margin. Measured across the table the two are 814.522,13 and
+         * 4.414.688,43, so they cannot be confused by accident; they are
+         * labelled apart all the same.
+         */
+        margin_net: CORPORATE_MARGIN_ACCOUNTS.reduce((sum: number, acc: string) => sum + (a.concepts[acc] ?? 0), 0),
         branch: l.branch!,
         loan_program: l.loan_program,
         loan_info_channel: l.loan_info_channel,
@@ -311,10 +322,28 @@ export async function GET(req: NextRequest) {
       net_bps: bps(summaryNet, summaryVolume),
     };
 
-    // ── Revenue that cannot be placed on any of these loans ─────────────────
-    // Both buckets are scoped to this month so their figures sit alongside the
-    // rest rather than describing a different period.
-    const knownLoans = new Set(rawLoans.map((l) => l.loan_number as string));
+    // ── Margin in these books that is not on one of this card's loans ───────
+    //
+    // The label used to say "Not in the master loan list", and it was false.
+    // The test was membership of loan_officials FOR THIS MONTH — no branch and
+    // no channel entered it — so a loan that originated in April and earned in
+    // June read as missing from a list it has always been in. Measured on the
+    // five reported cases: all five exist, all branch 703, four from April and
+    // one from May.
+    //
+    // Three different things were collapsed into one, and only the first is an
+    // absent record:
+    //
+    //   missing        the number appears in no row of loan_officials
+    //   other_period   it does, but the loan originated in another month
+    //   out_of_scope   it originated this month, but the loan is not on this
+    //                  card — another branch, or not Banked
+    //
+    // The last two are not gaps in the data. They are revenue from elsewhere
+    // turning up in the books being read: worth knowing, and not an error.
+    // Measured across the whole table: 7 missing, 10 from another period, and
+    // 0 out of scope with no branch filter applied.
+    const cardLoans = new Set(loans.map((l) => l.loan_number as string));
 
     const monthTx = await page(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -329,32 +358,119 @@ export async function GET(req: NextRequest) {
       return q;
     });
 
-    const orphanAgg = new Map<string, { branch: string | null; concepts: Record<string, number> }>();
+    /**
+     * Keyed by loan AND by the branch it was booked in, not by loan alone.
+     *
+     * A transfer is +V in one branch and −V in another. Summed per loan they
+     * cancel, so with no branch filter the whole thing showed as 0,00 with
+     * nothing to explain it — the one reading where both halves are on screen
+     * was the one that said least. One row per side, each pointing at the
+     * other.
+     */
+    const strayAgg = new Map<string, { loan_number: string; branch: string | null; concepts: Record<string, number> }>();
     let unattributed = 0;
     let unattributedRows = 0;
     for (const t of monthTx) {
       const v = money(t.movement);
       if (!t.loan_number) { unattributed += v; unattributedRows++; continue; }
-      if (knownLoans.has(t.loan_number)) continue;
-      let o = orphanAgg.get(t.loan_number);
-      if (!o) { o = { branch: t.branch, concepts: {} }; orphanAgg.set(t.loan_number, o); }
+      // Against the card's own list, not against the month's master. A loan in
+      // the master but not on this card was skipped in silence, so its revenue
+      // appeared in neither table.
+      if (cardLoans.has(t.loan_number)) continue;
+      const k = `${t.loan_number}|${t.branch ?? ""}`;
+      let o = strayAgg.get(k);
+      if (!o) { o = { loan_number: t.loan_number, branch: t.branch, concepts: {} }; strayAgg.set(k, o); }
       if (t.category_7) o.concepts[t.category_7] = (o.concepts[t.category_7] ?? 0) + v;
     }
 
-    const orphans = [...orphanAgg.entries()].map(([loan_number, o]) => ({
-      loan_number,
-      branch: o.branch,
-      concepts: o.concepts,
-      total: Object.values(o.concepts).reduce((s, v) => s + v, 0),
-    }));
+    const strayNumbers = [...new Set([...strayAgg.values()].map((o) => o.loan_number))];
+
+    // Every period of those loans, so the window can say which one each belongs
+    // to instead of asserting it belongs to none.
+    const originRows = strayNumbers.length
+      ? await page(() =>
+          supabase
+            .from("loan_officials")
+            .select("loan_number,branch,month,year,loan_info_channel,loan_program,loan_officer")
+            .in("loan_number", strayNumbers),
+        )
+      : [];
+
+    /**
+     * The same rows across every branch, deliberately WITHOUT the branch filter.
+     *
+     * A transfer between branches is +V in one and −V in another, and through a
+     * filter only one half is visible — which is exactly how one side of a pair
+     * reads as revenue appearing from nowhere. To say "this is a transfer, its
+     * other half is in 724", the other half has to be looked at.
+     */
+    const acrossBranches = strayNumbers.length
+      ? await page(() =>
+          supabase
+            .from("pl_transactions")
+            .select("loan_number,branch,category_7,movement")
+            .eq("month", month)
+            .eq("year", year)
+            .in("category_7", ALL_MARGIN_ACCOUNTS as string[])
+            .in("loan_number", strayNumbers),
+        )
+      : [];
+
+    const stray = [...strayAgg.values()].map((agg) => {
+      const loan_number = agg.loan_number;
+      const origins = originRows.filter((r) => r.loan_number === loan_number);
+      const here = origins.find((r) => r.month === month && r.year === year);
+      const origin = here ?? origins[0] ?? null;
+
+      // An exact opposite of the same concept in another branch, same month.
+      // Equal magnitude and opposite sign is the whole test: this is one entry
+      // moved, not two independent amounts that happen to cancel.
+      const mine = acrossBranches.filter((r) => r.loan_number === loan_number);
+      const counterparts: { branch: string; concept: string; amount: number }[] = [];
+      for (const [concept, amount] of Object.entries(agg.concepts)) {
+        for (const r of mine) {
+          if (r.category_7 !== concept || r.branch === agg.branch) continue;
+          if (Math.abs(money(r.movement) + amount) < 0.005) {
+            counterparts.push({ branch: r.branch as string, concept, amount: money(r.movement) });
+          }
+        }
+      }
+
+      return {
+        loan_number,
+        branch: agg.branch,
+        concepts: agg.concepts,
+        total: Object.values(agg.concepts).reduce((s, v) => s + v, 0),
+        kind: !origins.length ? ("missing" as const)
+            : here            ? ("out_of_scope" as const)
+            :                   ("other_period" as const),
+        origin: origin
+          ? {
+              branch:  origin.branch as string | null,
+              month:   origin.month as string | null,
+              year:    origin.year as number | null,
+              channel: origin.loan_info_channel as string | null,
+              program: origin.loan_program as string | null,
+              officer: origin.loan_officer as string | null,
+            }
+          : null,
+        counterparts,
+      };
+    });
+
+    const bucket = (k: string) => {
+      const rows = stray.filter((s) => s.kind === k);
+      return { rows, total: rows.reduce((s, r) => s + r.total, 0) };
+    };
 
     return NextResponse.json({
       month, year,
       branch_filter: branches,
       loans: rows,
       summary,
-      orphans,
-      orphans_total: orphans.reduce((s, o) => s + o.total, 0),
+      missing:      bucket("missing"),
+      other_period: bucket("other_period"),
+      out_of_scope: bucket("out_of_scope"),
       unattributed_total: unattributed,
       unattributed_rows: unattributedRows,
       net_groups: NET_GROUPS,

@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
 
 export const dynamic = "force-dynamic";
 
-type ValType = "b2b" | "on_demand" | "processing" | "all_loans";
+// On Demand and Processing were retired from the UI; the type keeps only what
+// is reachable.
+type ValType = "b2b" | "all_loans";
 
 export interface ValidationRow {
   loan_number: string;
   borrower_name: string | null;
   loan_officer: string | null;
   branch: string | null;
+  loan_program: string | null;
   month: string | null;
   year: number | null;
   loan_amount: number | null;
   accounting_total: number;
   bps: number | null;
-  status: "match" | "missing";
+  status: "match" | "missing" | "exempt";
   tx_description: string | null;
   tx_movement: number | null;
 }
@@ -41,6 +45,8 @@ export interface ValidationResult {
   summary: {
     match_count: number;
     missing_count: number;
+    /** Fee absent on a branch that does not pay it. Not a finding. */
+    exempt_count: number;
     surplus_count: number;
   };
 }
@@ -58,30 +64,53 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let loQuery: any = supabase
     .from("loan_officials")
-    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year")
+    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program")
     .order("loan_number");
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
   if (years.length > 0) loQuery = loQuery.in("year", years);
-  // branch filter intentionally NOT applied to loan_officials — the master loan list
-  // is always the full universe; branch only restricts the accounting-side transactions.
+  /**
+   * The branch filter narrows the MASTER LIST — the branch that produced the
+   * loan — and no longer the accounting side. Applied in JS just below, not
+   * here, because the value has to pass through resolveLoanBranchAlias first:
+   * "Affinity" and 716 are one branch, and a SQL `in` on the raw column would
+   * answer for only half of it.
+   *
+   * It used to be the other way round, and that made the screen useless the
+   * moment a branch was picked. The margin of nearly every loan is booked in
+   * the corporate branch 700, so restricting the ACCOUNTING side by branch left
+   * five of eight branches with zero rows against the whole master, and every
+   * loan read as "missing in accounting".
+   */
 
   if (type === "b2b") loQuery = loQuery.eq("b2b", true);
-  else if (type === "on_demand") loQuery = loQuery.eq("support_on_demand", true);
-  else if (type === "processing") loQuery = loQuery.eq("processing", true);
-  // all_loans: no flag filter
+  // all_loans: no flag filter.
+  //
+  // Brokered loans are dropped from it: they do not earn margin the way banked
+  // loans do, so listing them as "missing in accounting" reports an absence
+  // that was never going to be there. Measured 2026-08-17: 48 brokered of 436.
+  if (type === "all_loans") loQuery = loQuery.eq("loan_info_channel", "Banked - Retail");
 
-  const { data: loanOfficials, error: loError } = await loQuery;
+  const { data: loanOfficialsAll, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
+
+  /**
+   * The loans this screen is about: the master list of the period, narrowed to
+   * the branches that PRODUCED them, with "Affinity" resolved to 716 by the one
+   * function that owns that rule.
+   */
+  const loanOfficials = branches.length > 0
+    ? (loanOfficialsAll ?? []).filter((lo: Record<string, unknown>) => {
+        const b = resolveLoanBranchAlias(lo.branch as string | null);
+        return b !== null && branches.includes(b);
+      })
+    : (loanOfficialsAll ?? []);
 
   // ── 2. Determine transaction filter strategy ───────────────────────────────
   // B2B, On Demand, Processing: match by check_description text regardless of GL code.
   // Recruitment and all_loans: match by GL code 41309 (description text TBD for recruitment).
   const glCode: string | null = type === "all_loans" ? "41309" : null;
-  const descFilter: string | null =
-    type === "b2b"        ? "B2B SUCCESS FEE" :
-    type === "on_demand"  ? "LOA ON DEMAND FEE" :
-    type === "processing" ? "PROCESSING FEE ON FILE" : null;
+  const descFilter: string | null = type === "b2b" ? "B2B SUCCESS FEE" : null;
 
   // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
   // Paginate to avoid Supabase's default 1000-row cap.
@@ -95,7 +124,10 @@ export async function GET(req: NextRequest) {
     if (descFilter)      q = q.ilike("check_description", `%${descFilter}%`);
     if (months.length  > 0) q = q.in("month",  months);
     if (years.length   > 0) q = q.in("year",   years);
-    if (branches.length > 0) q = q.in("branch", branches);
+    // No branch filter. A loan's fee is matched by loan_number wherever it was
+    // booked — which is the whole point of the change above, and the same rule
+    // /api/loan-detail already follows: the branch of the LOAN and the branch
+    // of the TRANSACTION are different questions.
     return q;
   };
 
@@ -136,9 +168,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Set of loan_numbers from the filtered loan_officials
+  /**
+   * Surplus is judged against the WHOLE master of the period, not against the
+   * branch-filtered list.
+   *
+   * "A fee that belongs to no loan we know of" is the useful signal. "A fee that
+   * belongs to a loan of another branch" is not — with a branch picked, judging
+   * against the narrowed list would turn every other branch's fee into a
+   * finding and bury the real ones.
+   */
   const loSet = new Set<string>(
-    (loanOfficials ?? []).map((lo: Record<string, unknown>) => lo.loan_number as string)
+    (loanOfficialsAll ?? []).map((lo: Record<string, unknown>) => lo.loan_number as string)
   );
 
   // ── 5. Build validation rows (one per loan in loan_officials) ───────────────
@@ -157,13 +197,28 @@ export async function GET(req: NextRequest) {
       loan_number: loanNum,
       borrower_name: lo.borrower_name as string | null,
       loan_officer: lo.loan_officer as string | null,
-      branch: lo.branch as string | null,
+      // Resolved, so this screen and Loan Count name the same branch the same
+      // way. The value in the file stays available in loan_officials.
+      branch: resolveLoanBranchAlias(lo.branch as string | null),
+      loan_program: lo.loan_program as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,
       loan_amount,
       accounting_total,
       bps,
-      status: total !== undefined ? "match" : "missing",
+      /**
+       * Exempt is not a third kind of absence — it is the same absence, on a
+       * branch that does not pay the fee. 733 and 776 do not owe the B2B
+       * success fee, so no fee found there is correct and must not read as a
+       * finding; the validation exists to catch the branches that are charged
+       * and came back empty.
+       *
+       * Nothing about the detection changes. The check that already ran is the
+       * one that ran; this only decides how its answer is presented.
+       */
+      status: total !== undefined
+        ? "match"
+        : (type === "b2b" && isB2BFeeExempt(lo.branch as string | null)) ? "exempt" : "missing",
       tx_description: b700?.description ?? null,
       tx_movement: b700 != null ? b700.movement : null,
     };
@@ -248,6 +303,7 @@ export async function GET(req: NextRequest) {
     summary: {
       match_count: rows.filter((r) => r.status === "match").length,
       missing_count: rows.filter((r) => r.status === "missing").length,
+      exempt_count: rows.filter((r) => r.status === "exempt").length,
       surplus_count: surplus.length,
     },
   } satisfies ValidationResult);

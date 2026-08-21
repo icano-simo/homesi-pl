@@ -68,15 +68,32 @@ export function extractLoanNumber(desc: string): string | null {
  * 9. Trim text fields
  */
 export function normalizePL(buffer: Buffer): NormalizePLResult {
-  const raw = readSheetRaw(
+  const { rows: raw, sheet } = readSheetRaw(
     buffer,
     (name) => name.toLowerCase().includes(GL_SHEET_IDENTIFIER)
   );
 
-  if (raw.length < 2) return { rows: [], warnings: [] };
-
   // ── Step 1: promote headers ──────────────────────────────────────────────
-  const headers = (raw[0] as unknown[]).map(trimStr);
+  const headers = raw.length > 0 ? (raw[0] as unknown[]).map(trimStr) : [];
+
+  /**
+   * Columns without which nothing can be read.
+   *
+   * `col()` below answers `undefined` for a header it cannot find, and every
+   * step downstream treats that as an empty value: no GL code, no branch, no
+   * date and therefore no period, and a movement of zero. The row count comes
+   * out right, so the upload used to finish as "completed" having imported
+   * nothing at all. It has happened twice — 13.848 rows on 27 July and again
+   * this month — so the absence is reported instead of tolerated.
+   */
+  const REQUIRED = [
+    GL_COL.GL_NUMBER, GL_COL.CHECK_DESCRIPTION,
+    GL_COL.JOURNAL_POST_DATE, GL_COL.DEBIT, GL_COL.CREDIT,
+  ] as const;
+  const missingColumns = REQUIRED.filter((c) => !headers.includes(c));
+
+  if (raw.length < 2) return { rows: [], warnings: [], sheet, headers, missingColumns };
+
   const dataRows = raw.slice(1) as unknown[][];
 
   function col(row: unknown[], key: string): unknown {
@@ -158,5 +175,5 @@ export function normalizePL(buffer: Buffer): NormalizePLResult {
     }
   });
 
-  return { rows, warnings };
+  return { rows, warnings, sheet, headers, missingColumns };
 }

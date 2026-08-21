@@ -32,8 +32,7 @@ type NavItem = NavLeaf | NavGroup;
 
 const NAV_ITEMS: NavItem[] = [
   { label: "Transaction Review", href: "/transactions", icon: Table2 },
-  { label: "P&L All", href: "/pl-all", icon: TrendingUp },
-  { label: "P&L Notes", href: "/pl-notes", icon: MessageSquare },
+  { label: "P&L", href: "/pl", icon: TrendingUp },
   { label: "Vendors", href: "/vendors", icon: Store },
   { label: "Offshore Allocations", href: "/offshore-allocations", icon: Globe },
   { label: "Manual Entry", href: "/manual-entry", icon: PenLine },

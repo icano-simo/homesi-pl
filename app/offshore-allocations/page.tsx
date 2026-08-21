@@ -1136,6 +1136,20 @@ export default function OffshoreAllocationsPage() {
     [blocks],
   );
 
+  /**
+   * The same count over the rows the filters actually leave on screen.
+   *
+   * The heading counted every loaded row while the blocks below it showed the
+   * filtered ones, so narrowing to a branch changed the list and left the
+   * number where it was. Both are worth having — the loaded total is the size
+   * of the upload — so both are shown, labelled.
+   */
+  const visibleTx = useMemo(
+    () => blocks.reduce((sum, b) => sum + b.rows.reduce(
+      (s, r) => s + (rowVisible(r, filterYears, filterMonths, filterBranches, filterCategories, filterPositions, filterVendors, search) ? r.tx_count : 0), 0), 0),
+    [blocks, filterYears, filterMonths, filterBranches, filterCategories, filterPositions, filterVendors, search],
+  );
+
   const splitsMap = useMemo(() => buildSplitsMap(allSplits), [allSplits]);
 
   const allCostCenters = useMemo(() => {
@@ -1257,7 +1271,10 @@ export default function OffshoreAllocationsPage() {
         <div>
           <h2 className="text-xl font-bold text-gray-900">Offshore Allocations</h2>
           <p className="text-sm text-gray-500">
-            {loading ? "Loading…" : `${totalTx.toLocaleString()} transactions`}
+            {loading ? "Loading…"
+              : visibleTx === totalTx
+                ? `${totalTx.toLocaleString()} transactions`
+                : `${visibleTx.toLocaleString()} of ${totalTx.toLocaleString()} transactions`}
           </p>
         </div>
         <div className="flex items-center gap-2">

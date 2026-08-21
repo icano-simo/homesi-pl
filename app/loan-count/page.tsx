@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, RefreshCw, CheckCircle2, AlertCircle, Save, X } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { downloadCSV } from "@/lib/csv";
+import { resolveLoanBranchAlias } from "@/lib/loan-branch";
 import type { LoanOfficial } from "@/types";
 import { LoanValidationTab } from "./loan-validation-tab";
 
@@ -22,6 +23,7 @@ const CSV_COLUMNS = [
   { key: "borrower_name",     label: "Borrower Name" },
   { key: "loan_officer",      label: "Loan Officer" },
   { key: "lead_source_lo",    label: "Lead Source LO" },
+  { key: "loan_program",      label: "Loan Program" },
   { key: "loan_info_channel", label: "Loan Info Channel" },
   { key: "branch",            label: "Branch" },
   { key: "loan_amount",       label: "Loan Amount" },
@@ -289,7 +291,22 @@ export default function LoanCountPage() {
   const yearOptions = useMemo(() => allYears.map(String), [allYears]);
 
   // Column filter option lists derived from loaded data
-  const branchOptions  = useMemo(() => [...new Set(loans.map(l => l.branch).filter(Boolean) as string[])].sort(), [loans]);
+  /**
+   * The branch of a loan, here, is the one in the loan count file — with
+   * "Affinity" and "716" resolved to the single branch they are. Nothing else:
+   * no accounting branch, no pl_transactions.
+   *
+   * Applied on read rather than written into `loans`, because the rows in that
+   * state are also what the inline editor PATCHes back, and normalising them in
+   * place would eventually save 716 over an "Affinity" nobody asked to change.
+   *
+   * The out-of-division branches 150 and 276 keep their own options: this
+   * module counts the file it was given, and quietly dropping four loans would
+   * put it at 375 against a source of 379.
+   */
+  const branchOf = (l: LoanOfficial) => resolveLoanBranchAlias(l.branch);
+
+  const branchOptions  = useMemo(() => [...new Set(loans.map(branchOf).filter(Boolean) as string[])].sort(), [loans]);
   const loOptions      = useMemo(() => [...new Set(loans.map(l => l.loan_officer).filter(Boolean) as string[])].sort(), [loans]);
   const channelOptions = useMemo(() => [...new Set(loans.map(l => l.loan_info_channel).filter(Boolean) as string[])].sort(), [loans]);
 
@@ -304,7 +321,7 @@ export default function LoanCountPage() {
     let out = loans;
     const lnSearch = filterLoanNumber.trim().toLowerCase();
     if (lnSearch) out = out.filter(l => l.loan_number?.toLowerCase().includes(lnSearch));
-    if (filterBranches.length)  out = out.filter(l => l.branch           && filterBranches.includes(l.branch));
+    if (filterBranches.length)  out = out.filter(l => { const b = branchOf(l); return !!b && filterBranches.includes(b); });
     if (filterLOs.length)       out = out.filter(l => l.loan_officer      && filterLOs.includes(l.loan_officer));
     if (filterChannels.length)  out = out.filter(l => l.loan_info_channel && filterChannels.includes(l.loan_info_channel));
     const applyBool = (arr: LoanOfficial[], f: BoolFilter, key: keyof LoanOfficial) =>
@@ -317,18 +334,35 @@ export default function LoanCountPage() {
     return out;
   }, [loans, filterLoanNumber, filterBranches, filterLOs, filterChannels, filterB2B, filterAffinity, filterProcessing, filterOnDemand, filterRecruit]);
 
-  // Dashboard metrics computed from the full loaded set (before column filters)
-  const metrics = useMemo(() => ({
-    total:            loans.length,
-    banked:           loans.filter(l => l.loan_info_channel === "Banked - Retail").length,
-    brokered:         loans.filter(l => l.loan_info_channel === "Brokered").length,
-    other:            loans.filter(l => l.loan_info_channel && l.loan_info_channel !== "Banked - Retail" && l.loan_info_channel !== "Brokered").length,
-    b2b:              loans.filter(l => l.b2b).length,
-    processing:       loans.filter(l => l.processing).length,
-    support_on_demand:loans.filter(l => l.support_on_demand).length,
-    affinity:         loans.filter(l => l.affinity).length,
-    recruitment:      loans.filter(l => l.recruitment).length,
-  }), [loans]);
+  /**
+   * The strip counts what is on screen.
+   *
+   * It used to count `loans`, the whole loaded set, while the table beside it
+   * showed the filtered rows — so filtering by branch changed the rows and left
+   * the count where it was. On a page whose entire subject IS the count, that
+   * reads as "the filter is broken".
+   *
+   * There was no reason recorded for it: the comment arrived with a bulk
+   * "añadir nuevos archivos" commit and says what the code does, not why.
+   *
+   * The loaded total is still worth having — it is the figure people quote for
+   * the month — so it is kept and shown beside the filtered one, labelled,
+   * whenever a column filter is on. Two numbers that say what they are beat one
+   * number that quietly answers a different question.
+   */
+  const countOf = (rows: LoanOfficial[]) => ({
+    total:            rows.length,
+    banked:           rows.filter(l => l.loan_info_channel === "Banked - Retail").length,
+    brokered:         rows.filter(l => l.loan_info_channel === "Brokered").length,
+    other:            rows.filter(l => l.loan_info_channel && l.loan_info_channel !== "Banked - Retail" && l.loan_info_channel !== "Brokered").length,
+    b2b:              rows.filter(l => l.b2b).length,
+    processing:       rows.filter(l => l.processing).length,
+    support_on_demand:rows.filter(l => l.support_on_demand).length,
+    affinity:         rows.filter(l => l.affinity).length,
+    recruitment:      rows.filter(l => l.recruitment).length,
+  });
+  const metrics    = useMemo(() => countOf(displayedLoans), [displayedLoans]);
+  const allMetrics = useMemo(() => countOf(loans), [loans]);
 
   function clearColumnFilters() {
     setFilterLoanNumber("");
@@ -338,7 +372,10 @@ export default function LoanCountPage() {
   }
 
   function handleExport() {
-    downloadCSV("loan_count.csv", displayedLoans as unknown as Record<string, unknown>[], CSV_COLUMNS);
+    // The branch as the screen shows it, so the export and the table cannot
+    // disagree about which branch a loan is on.
+    const rows = displayedLoans.map((l) => ({ ...l, branch: branchOf(l) }));
+    downloadCSV("loan_count.csv", rows as unknown as Record<string, unknown>[], CSV_COLUMNS);
   }
 
   async function handleReextract() {
@@ -516,20 +553,20 @@ export default function LoanCountPage() {
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Overview</div>
           <div className="flex items-center gap-6 min-w-max">
             <div className="flex items-end gap-4">
-              <MetricCard label="Total"    value={metrics.total}    accent="gray" />
-              <MetricCard label="Banked"   value={metrics.banked}   accent="blue" />
-              <MetricCard label="Brokered" value={metrics.brokered} accent="indigo" />
-              {metrics.other > 0 && <MetricCard label="Other" value={metrics.other} accent="orange" />}
+              <MetricCard label="Total"    value={metrics.total}    of={hasColumnFilters ? allMetrics.total : null}    accent="gray" />
+              <MetricCard label="Banked"   value={metrics.banked}   of={hasColumnFilters ? allMetrics.banked : null}   accent="blue" />
+              <MetricCard label="Brokered" value={metrics.brokered} of={hasColumnFilters ? allMetrics.brokered : null} accent="indigo" />
+              {allMetrics.other > 0 && <MetricCard label="Other" value={metrics.other} of={hasColumnFilters ? allMetrics.other : null} accent="orange" />}
             </div>
-            {(metrics.b2b + metrics.processing + metrics.support_on_demand + metrics.affinity + metrics.recruitment > 0) && (
+            {(allMetrics.b2b + allMetrics.processing + allMetrics.support_on_demand + allMetrics.affinity + allMetrics.recruitment > 0) && (
               <>
                 <div className="h-10 w-px self-stretch bg-gray-100" />
                 <div className="flex flex-wrap gap-1.5">
-                  {metrics.b2b > 0              && <TagPill label="B2B"         value={metrics.b2b} />}
-                  {metrics.processing > 0        && <TagPill label="Processing"  value={metrics.processing} />}
-                  {metrics.support_on_demand > 0 && <TagPill label="On Demand"   value={metrics.support_on_demand} />}
-                  {metrics.affinity > 0          && <TagPill label="Affinity"    value={metrics.affinity} />}
-                  {metrics.recruitment > 0       && <TagPill label="Recruitment" value={metrics.recruitment} />}
+                  {allMetrics.b2b > 0 && <TagPill label="B2B" value={metrics.b2b} of={hasColumnFilters ? allMetrics.b2b : null} />}
+                  {allMetrics.processing > 0 && <TagPill label="Processing" value={metrics.processing} of={hasColumnFilters ? allMetrics.processing : null} />}
+                  {allMetrics.support_on_demand > 0 && <TagPill label="On Demand" value={metrics.support_on_demand} of={hasColumnFilters ? allMetrics.support_on_demand : null} />}
+                  {allMetrics.affinity > 0 && <TagPill label="Affinity" value={metrics.affinity} of={hasColumnFilters ? allMetrics.affinity : null} />}
+                  {allMetrics.recruitment > 0 && <TagPill label="Recruitment" value={metrics.recruitment} of={hasColumnFilters ? allMetrics.recruitment : null} />}
                 </div>
               </>
             )}
@@ -592,6 +629,7 @@ export default function LoanCountPage() {
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Borrower Name</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Loan Officer</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Lead Source LO</th>
+                <th className="px-3 py-2.5 font-medium whitespace-nowrap">Loan Program</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Loan Info Channel</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Branch</th>
                 <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">Loan Amount</th>
@@ -627,11 +665,19 @@ export default function LoanCountPage() {
                       disabled={!!saving[loan.id] || isSavingAll}
                     />
                   </td>
+                  <td className="max-w-[150px] truncate px-3 py-2 text-gray-600" title={loan.loan_program ?? undefined}>
+                    {loan.loan_program ?? "—"}
+                  </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
                     {loan.loan_info_channel ?? "—"}
                   </td>
                   <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                    {loan.branch ?? "—"}
+                    {/* The resolved branch, so a row found by filtering 716
+                        does not then print "Affinity" and look like a mismatch.
+                        The value in the file stays one hover away. */}
+                    <span title={loan.branch && branchOf(loan) !== loan.branch ? `In the file: ${loan.branch}` : undefined}>
+                      {branchOf(loan) ?? "—"}
+                    </span>
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {fmt(loan.loan_amount)}
@@ -669,20 +715,35 @@ export default function LoanCountPage() {
   );
 }
 
-function MetricCard({ label, value, accent }: { label: string; value: number; accent: "gray" | "blue" | "indigo" | "orange" }) {
+function MetricCard({ label, value, of, accent }: {
+  label: string; value: number;
+  /** The loaded total, shown beside the filtered figure while a filter is on. */
+  of: number | null;
+  accent: "gray" | "blue" | "indigo" | "orange";
+}) {
   const colors = { gray: "text-gray-900", blue: "text-blue-700", indigo: "text-indigo-700", orange: "text-orange-700" };
   return (
     <div className="flex flex-col items-center min-w-[40px]">
-      <span className={`text-xl font-bold tabular-nums ${colors[accent]}`}>{value.toLocaleString()}</span>
+      <span className="flex items-baseline gap-1">
+        <span className={`text-xl font-bold tabular-nums ${colors[accent]}`}>{value.toLocaleString()}</span>
+        {/* Only while filtering, and only when it differs — an "of N" that
+            always equals the number beside it is noise. */}
+        {of != null && of !== value && (
+          <span className="text-[11px] tabular-nums text-gray-400">of {of.toLocaleString()}</span>
+        )}
+      </span>
       <span className="text-[10px] text-gray-400 mt-0.5">{label}</span>
     </div>
   );
 }
 
-function TagPill({ label, value }: { label: string; value: number }) {
+function TagPill({ label, value, of }: { label: string; value: number; of: number | null }) {
   return (
+    // Shown whenever the loaded set has any, even when the filter leaves none:
+    // a tag that vanishes is indistinguishable from a tag that never existed.
     <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-[11px]">
       <span className="font-semibold text-indigo-700">{value}</span>
+      {of != null && of !== value && <span className="text-indigo-400">of {of}</span>}
       <span className="text-indigo-500">{label}</span>
     </span>
   );

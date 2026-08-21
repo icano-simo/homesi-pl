@@ -28,6 +28,20 @@ export type ScopeKey =
   | PivotField
   | "month"
   | "year"
+  /**
+   * The branch the report was showing when the note was written.
+   *
+   * Not a pivot level — no hierarchy has it — but a constraint of the cell all
+   * the same: the same GL in the same month is a different figure in 700 than
+   * in 710, and until this existed a note written looking at one appeared on
+   * the other. Confirmed on all 6 notes in the table: none carried it.
+   *
+   * The visibility rule needs no special case. A note with branch=700 shows
+   * where the cell constrains branch to 700, and in the unfiltered view which
+   * constrains nothing; a note with no branch shows only in that unfiltered
+   * view, which is exactly what "no branch" should mean.
+   */
+  | "branch"
   | "transaction_id"
   // ── Per-entity log anchors ────────────────────────────────────────────────
   // Same table, different purpose: these identify an entity whose change
@@ -53,6 +67,9 @@ export interface PLNote {
   orphaned_at: string | null;
   note_text: string;
   author: string | null;
+  /** Figure of the cell when the note was written. Null for notes created
+   *  before the column existed — those show only the current amount. */
+  amount_at_creation?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -71,6 +88,7 @@ export const SCOPE_LABELS: Record<ScopeKey, string> = {
   loan_number:  "Loan Number",
   month:          "Month",
   year:           "Year",
+  branch:         "Branch",
   transaction_id: "Transaction",
   cost_center_id: "Cost Center",
   assign_type:    "Assignment Type",
@@ -147,7 +165,18 @@ export function scopeForTransaction(
   const scope: NoteScope = {};
   for (const f of fields) scope[f] = stableScopeValue(tx, f);
   if (tx.month) scope.month = tx.month;
-  if (year != null) scope.year = year;
+  // The year always belongs in the scope. It used to be added only when the
+  // report covered exactly one, so a two-year load produced scopes with no
+  // year at all — which changes the key, and with it which notes count as
+  // written-on-this-cell rather than inherited. Falling back to the
+  // transaction’s own year keeps the anchor stable no matter how many years
+  // happen to be loaded.
+  const resolvedYear = year ?? tx.year ?? null;
+  if (resolvedYear != null) scope.year = resolvedYear;
+  // The transaction's own branch. Without it a transaction note re-anchored
+  // here would come back branchless and stop matching the cells above it,
+  // which now carry the branch of the report.
+  if (tx.branch) scope.branch = tx.branch;
   scope.transaction_id = tx.id;
   return scope;
 }
@@ -168,7 +197,7 @@ export function scopeForTransaction(
  * than to a cell of the report.
  */
 const PIVOT_SCOPE_KEYS = new Set<string>([
-  ...ALL_FIELDS, "month", "year", "transaction_id",
+  ...ALL_FIELDS, "month", "year", "branch", "transaction_id",
 ]);
 
 /**
@@ -265,14 +294,25 @@ export function buildNoteIndex(
 
   const month = (note: PLNote) => note.scope.month as string | undefined;
 
-  /** Marks the month cell (when the note has a period) and the Total column. */
+  /**
+   * Marks the month cell (when the note has a period) and the Total column.
+   *
+   * "Direct" is decided per cell, not once for both. A note written on June is
+   * direct on June and inherited on the Total column — the Total column is a
+   * cell of its own, with no month in its scope, and a note can be written
+   * straight onto it. Deciding once made a June note claim the Total column as
+   * its own, so the two were indistinguishable there.
+   */
   const mark = (base: NoteScope, note: PLNote) => {
     const key = canonicalScopeKey(base);
     const m = month(note);
-    const isDirect = note.scope_key === canonicalScopeKey({ ...base, ...(m ? { month: m } : {}) });
-    for (const cell of [...(m ? [`${key}@${m}`] : []), `${key}@__total__`]) {
+    const cells: [string, NoteScope][] = [
+      ...(m ? ([[`${key}@${m}`, { ...base, month: m }]] as [string, NoteScope][]) : []),
+      [`${key}@__total__`, base],
+    ];
+    for (const [cell, cellScope] of cells) {
       any.add(cell);
-      if (isDirect) direct.add(cell);
+      if (note.scope_key === canonicalScopeKey(cellScope)) direct.add(cell);
     }
   };
 
@@ -369,4 +409,19 @@ export function scopeBreadcrumb(
   for (const k of order) push(k);
   for (const k of Object.keys(scope) as ScopeKey[]) push(k);
   return parts;
+}
+
+
+/**
+ * Label for a scope key/value pair, used when no resolver is supplied.
+ *
+ * Lives here rather than in a drawer component: it is the counterpart of
+ * scopeBreadcrumb, and every consumer of one wants the other.
+ */
+export function defaultScopeLabel(key: ScopeKey, value: string): string {
+  if (value === "__unassigned__") return "Unassigned";
+  if (value === "__conflict__")   return "Conflict";
+  if (value === "__no_loan__")    return "No Loan Number";
+  if (key === "year") return String(value);
+  return value || SCOPE_LABELS[key];
 }

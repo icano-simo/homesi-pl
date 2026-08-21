@@ -4,7 +4,7 @@ import { createServerClient } from "@/lib/supabase-server";
 export const dynamic = "force-dynamic";
 
 const SELECT =
-  "id,level,scope,scope_key,transaction_id,tx_fingerprint,orphaned_at,note_text,author,created_at,updated_at";
+  "id,level,scope,scope_key,transaction_id,tx_fingerprint,orphaned_at,amount_at_creation,note_text,author,created_at,updated_at";
 
 /** Edit a note's text. The anchor (level/scope) is immutable — a note that
  *  needs a different anchor is a different note. */

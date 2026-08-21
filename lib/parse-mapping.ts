@@ -128,7 +128,7 @@ const ORDER_PATTERN = /^order[\s_\-]*(\d+)$/;
 // ─── Main parser ──────────────────────────────────────────────────────────────
 
 export function parseMappingFile(buffer: Buffer): MappingParseResult {
-  const raw = readSheetRaw(
+  const { rows: raw } = readSheetRaw(
     buffer,
     (name) => name.toLowerCase() === MAPPING_SHEET_NAME
   );

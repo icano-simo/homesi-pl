@@ -40,7 +40,7 @@ function toNum(v: unknown): number {
 export function parseAddbacks(
   buffer: Buffer
 ): { rows: NormalizedRow[]; warnings: NormalizeWarning[] } {
-  const raw = readSheetRaw(buffer, () => true);
+  const { rows: raw } = readSheetRaw(buffer, () => true);
   const rows: NormalizedRow[] = [];
   const warnings: NormalizeWarning[] = [];
 

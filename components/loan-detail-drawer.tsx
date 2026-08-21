@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { X, ArrowUpDown, LayoutGrid, Rows3 } from "lucide-react";
+import { ReportFilter } from "@/components/report-filter";
 import {
   ALL_MARGIN_ACCOUNTS,
   NET_GROUPS,
@@ -36,6 +37,8 @@ interface LoanRow {
   net: number;
   net_bps: number | null;
   no_margin: boolean;
+  /** DM Margin + RM Margin only. See margin_net in the endpoint. */
+  margin_net: number;
 }
 
 interface Summary {
@@ -57,8 +60,9 @@ interface DetailData {
   loans: LoanRow[];
   summary: Summary;
   branch_filter: string[];
-  orphans: { loan_number: string; branch: string | null; concepts: Record<string, number>; total: number }[];
-  orphans_total: number;
+  missing:      StrayBucket;
+  other_period: StrayBucket;
+  out_of_scope: StrayBucket;
   unattributed_total: number;
   unattributed_rows: number;
   net_groups: string[];
@@ -117,6 +121,15 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
   const [error, setError]     = useState("");
   const [sortDesc, setSortDesc]   = useState(true);
   const [view, setView] = useState<"cards" | "table">("cards");
+  /**
+   * Branch filter inside the window, over the branch each loan was produced on.
+   *
+   * Its purpose is the question the window could not answer: what revenue do
+   * 716's loans leave in 700's books. It narrows the cards, the table, the
+   * columns and the totals row together — a filter that moved the rows and left
+   * the footer alone is the bug this branch has already fixed three times.
+   */
+  const [branchFilter, setBranchFilter] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -148,31 +161,77 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, key]);
 
-  const { expected, extra, otherConcepts } = useMemo(() => {
-    const loans = data?.loans ?? [];
-    const branchSet = new Set(loans.map((l) => l.branch));
-    const exp: string[] = [];
-    for (const b of branchSet) for (const a of expectedMarginAccounts(b)) if (!exp.includes(a)) exp.push(a);
-    const ext = ALL_MARGIN_ACCOUNTS.filter(
-      (a) => !exp.includes(a) && loans.some((l) => (l.concepts[a] ?? 0) !== 0),
+  const branchOptions = useMemo(
+    () => [...new Set((data?.loans ?? []).map((l) => l.branch))].sort(),
+    [data],
+  );
+
+  /** The loans in scope: what the filter leaves, and what everything else reads. */
+  const inScope = useMemo(
+    () => (branchFilter.length
+      ? (data?.loans ?? []).filter((l) => branchFilter.includes(l.branch))
+      : (data?.loans ?? [])),
+    [data, branchFilter],
+  );
+
+  /**
+   * Only the margin columns that carry a value in the active scope.
+   *
+   * It used to be a fixed list per branch — expectedMarginAccounts — plus the
+   * ones outside it that happened to be non-zero. So looking at 700 always drew
+   * Back-end, Front-end and Discount, which in most of its months are empty.
+   *
+   * Derived from the data instead, with no threshold: in 10 of the 700's 11
+   * months that leaves DM and RM alone, and in February 2026 it draws all five,
+   * because there really is 8.763,33 of Back-end there. Hiding it would be
+   * hiding money.
+   *
+   * The amber styling stays for accounts the branch is not expected to earn
+   * through — that is signal, not decoration.
+   */
+  const { marginCols, extra, otherConcepts } = useMemo(() => {
+    const branchSet = new Set(inScope.map((l) => l.branch));
+    const exp = new Set<string>();
+    for (const b of branchSet) for (const a of expectedMarginAccounts(b)) exp.add(a);
+    const present = ALL_MARGIN_ACCOUNTS.filter(
+      (a) => inScope.some((l) => (l.concepts[a] ?? 0) !== 0),
     );
-    const others = [...new Set(loans.flatMap((l) => Object.keys(l.concepts)))]
+    const others = [...new Set(inScope.flatMap((l) => Object.keys(l.concepts)))]
       .filter((c) => !ALL_MARGIN_ACCOUNTS.includes(c)).sort();
-    return { expected: exp, extra: ext, otherConcepts: others };
-  }, [data]);
+    return { marginCols: present, extra: present.filter((a) => !exp.has(a)), otherConcepts: others };
+  }, [inScope]);
+
+  /**
+   * Totals over the rows on screen, not over everything the server sent.
+   *
+   * The server's summary describes the unfiltered month, so with a branch filter
+   * on it would be answering a different question from the table above it.
+   */
+  const totals = useMemo(() => {
+    const volume = inScope.reduce((s, l) => s + l.loan_amount, 0);
+    const concepts: Record<string, number> = {};
+    for (const l of inScope) for (const [k, v] of Object.entries(l.concepts)) concepts[k] = (concepts[k] ?? 0) + v;
+    const net = inScope.reduce((s, l) => s + l.net, 0);
+    const marginNet = inScope.reduce((s, l) => s + l.margin_net, 0);
+    return {
+      loan_count: inScope.length,
+      without_margin: inScope.filter((l) => l.no_margin).length,
+      volume, concepts, net, marginNet,
+      net_bps:    volume ? (net / volume) * 10000 : null,
+      margin_bps: volume ? (marginNet / volume) * 10000 : null,
+    };
+  }, [inScope]);
 
   const sorted = useMemo(() => {
-    const rows = [...(data?.loans ?? [])];
+    const rows = [...inScope];
     rows.sort((a, b) => {
       const av = a.net_bps ?? -Infinity, bv = b.net_bps ?? -Infinity;
       return sortDesc ? bv - av : av - bv;
     });
     return rows;
-  }, [data, sortDesc]);
+  }, [inScope, sortDesc]);
 
   if (!open) return null;
-
-  const marginCols = [...expected, ...extra];
 
   return (
     <>
@@ -208,6 +267,15 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               <ViewTab active={view === "cards"} onClick={() => setView("cards")} icon={<LayoutGrid size={12} />} label="Mini P&L Cards" />
               <ViewTab active={view === "table"} onClick={() => setView("table")} icon={<Rows3 size={12} />} label="Table List" />
             </div>
+            {branchOptions.length > 1 && (
+              <ReportFilter label="Branch" options={branchOptions}
+                            selected={branchFilter} onChange={setBranchFilter} />
+            )}
+            {branchFilter.length > 0 && (
+              <span className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-900">
+                {totals.loan_count} of {data?.loans.length ?? 0} loans
+              </span>
+            )}
             <button onClick={() => setSortDesc((v) => !v)}
               className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-300">
               <ArrowUpDown size={11} />
@@ -244,13 +312,19 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
             <table className="w-full border-collapse text-xs">
               <thead className="sticky top-0 z-10 bg-slate-100/95">
                 <tr className="border-b-2 border-slate-200 text-left">
-                  <Th>Loan</Th><Th>Borrower</Th><Th className="text-center">Br</Th>
+                  <Th>Loan</Th><Th>Borrower</Th><Th>Program</Th><Th className="text-center">Br</Th>
                   <Th className="text-right">Amount</Th>
                   {marginCols.map((c) => (
                     <Th key={c} className={`text-right ${extra.includes(c) ? "bg-amber-50 text-amber-800" : ""}`}>{c}</Th>
                   ))}
-                  <Th className="text-right">Net</Th>
-                  <Th className="text-right">Net bps</Th>
+                  {/* Two different nets on one screen, so both say which they
+                      are. Margin net is DM + RM only; Revenue net is every
+                      revenue concept — measured across the table, 814.522,13
+                      against 4.414.688,43. */}
+                  <Th className="text-right bg-[#A6DEFF]/20">Margin net (DM+RM)</Th>
+                  <Th className="text-right bg-[#A6DEFF]/20">Margin bps</Th>
+                  <Th className="text-right">Revenue net</Th>
+                  <Th className="text-right">Revenue bps</Th>
                 </tr>
               </thead>
               <tbody>
@@ -261,12 +335,17 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                       {l.loan_number} <Signals l={l} />
                     </Td>
                     <Td className="max-w-[160px] truncate">{l.borrower_name ?? "—"}</Td>
+                    <Td className="max-w-[150px] truncate" title={l.loan_program ?? undefined}>{l.loan_program ?? "—"}</Td>
                     <Td className="text-center font-mono">{l.branch}</Td>
                     <Td className="text-right font-mono tabular-nums">{money(l.loan_amount)}</Td>
                     {marginCols.map((c) => (
                       <Amount key={c} v={l.concepts[c] ?? 0} amount={l.loan_amount}
                               flagged={l.unexpected_accounts.includes(c)} />
                     ))}
+                    <Amount v={l.margin_net} amount={l.loan_amount} bold />
+                    <Td className={`text-right font-mono tabular-nums font-bold ${num(l.margin_net)}`}>
+                      {fmtBps(l.loan_amount ? (l.margin_net / l.loan_amount) * 10000 : null)}
+                    </Td>
                     <Amount v={l.net} amount={l.loan_amount} bold />
                     <Td className={`text-right font-mono tabular-nums font-bold ${num(l.net)}`}>{fmtBps(l.net_bps)}</Td>
                   </tr>
@@ -278,48 +357,52 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               <tfoot className="sticky bottom-0 z-10">
                 <tr className="border-t-2 border-[#001A40]/20 bg-[#001A40]/5 font-bold">
                   <Td className="text-[#001A40]">
-                    {data.summary.loan_count} banked loan{data.summary.loan_count === 1 ? "" : "s"}
+                    {totals.loan_count} banked loan{totals.loan_count === 1 ? "" : "s"}
                   </Td>
                   <Td className="text-slate-500">
-                    {data.summary.without_margin > 0 && (
-                      <span className="text-rose-700">{data.summary.without_margin} with no margin</span>
+                    {totals.without_margin > 0 && (
+                      <span className="text-rose-700">{totals.without_margin} with no margin</span>
                     )}
                   </Td>
-                  <Td />
+                  <Td /><Td />
                   <Td className="text-right font-mono tabular-nums text-[#001A40]">
-                    {money(data.summary.volume)}
+                    {money(totals.volume)}
                   </Td>
                   {marginCols.map((c) => (
-                    <Amount key={c} v={data.summary.concepts[c] ?? 0} amount={data.summary.volume} bold />
+                    <Amount key={c} v={totals.concepts[c] ?? 0} amount={totals.volume} bold />
                   ))}
-                  <Amount v={data.summary.net} amount={data.summary.volume} bold />
-                  <Td className={`text-right font-mono font-bold tabular-nums ${num(data.summary.net)}`}>
-                    {fmtBps(data.summary.net_bps)}
+                  <Amount v={totals.marginNet} amount={totals.volume} bold />
+                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.marginNet)}`}>
+                    {fmtBps(totals.margin_bps)}
+                  </Td>
+                  <Amount v={totals.net} amount={totals.volume} bold />
+                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net)}`}>
+                    {fmtBps(totals.net_bps)}
                   </Td>
                 </tr>
               </tfoot>
             </table>
           )}
 
-          {data && !loading && data.orphans.length > 0 && (
-            <details className="m-5 rounded-xl border border-slate-200 bg-slate-50">
-              <summary className="cursor-pointer px-4 py-2.5 text-xs font-semibold text-slate-700">
-                Not in the master loan list — {data.orphans.length} loan{data.orphans.length > 1 ? "s" : ""} · {money(data.orphans_total)}
-              </summary>
-              <table className="w-full border-collapse text-xs">
-                <tbody>
-                  {data.orphans.map((o) => (
-                    <tr key={o.loan_number} className="border-t border-slate-200/60">
-                      <Td className="font-mono">{o.loan_number}</Td>
-                      <Td className="text-center font-mono">{o.branch ?? "—"}</Td>
-                      <Td className="text-right font-mono tabular-nums">{fmt(o.total)}</Td>
-                      <Td className="text-right text-slate-300">—</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </details>
-          )}
+          {/* Three different things, and only the first is a missing record.
+              The old label called all of them "not in the master loan list",
+              which was false for every case anyone reported: those loans were
+              in the master, they had simply originated in another month. */}
+          <StraySection
+            bucket={data && !loading ? data.missing : null}
+            title="Loan number not found in loan_officials"
+            note="No record of these numbers anywhere in the master list."
+          />
+          <StraySection
+            bucket={data && !loading ? data.other_period : null}
+            title="Margin on loans from another month"
+            note="These loans exist; they are not on this card because they originated in a different month. Revenue landing after origination, not a gap in the data."
+          />
+          <StraySection
+            bucket={data && !loading ? data.out_of_scope : null}
+            title="Margin on loans outside this card"
+            note="Originated this month, but on another branch or through a channel this card does not cover."
+          />
         </div>
 
         <div className="border-t border-slate-200 px-5 py-3 text-[11px] text-slate-500">
@@ -331,6 +414,80 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
         </div>
       </div>
     </>
+  );
+}
+
+/** One loan whose margin is in these books but not on one of this card's loans. */
+interface StrayLoan {
+  loan_number: string;
+  branch: string | null;
+  concepts: Record<string, number>;
+  total: number;
+  origin: {
+    branch: string | null; month: string | null; year: number | null;
+    channel: string | null; program: string | null; officer: string | null;
+  } | null;
+  /** Exact opposite of the same concept in another branch, same month. */
+  counterparts: { branch: string; concept: string; amount: number }[];
+}
+
+interface StrayBucket { rows: StrayLoan[]; total: number }
+
+/**
+ * Revenue in the books being read that does not belong to a loan on this card.
+ *
+ * Three sections rather than one, because the three causes are different and
+ * two of them are not errors. A loan that originated in April and earns in June
+ * is not missing from anything — saying so sent someone to check five loan
+ * numbers one by one against a master list they were already in.
+ */
+function StraySection({ bucket, title, note }: { bucket: StrayBucket | null; title: string; note: string }) {
+  if (!bucket || bucket.rows.length === 0) return null;
+  return (
+    <details className="m-5 rounded-xl border border-slate-200 bg-slate-50">
+      <summary className="cursor-pointer px-4 py-2.5 text-xs font-semibold text-slate-700">
+        {title} — {bucket.rows.length} loan{bucket.rows.length > 1 ? "s" : ""} · {money(bucket.total)}
+      </summary>
+      <p className="px-4 pb-2 text-[11px] text-slate-500">{note}</p>
+      <table className="w-full border-collapse text-xs">
+        <tbody>
+          {bucket.rows.map((o) => (
+            <tr key={`${o.loan_number}|${o.branch ?? ""}`} className="border-t border-slate-200/60 align-top">
+              <Td className="font-mono">
+                {o.loan_number}
+                {o.origin ? (
+                  <span className="ml-2 font-sans text-[10px] text-slate-500">
+                    loan on branch {o.origin.branch ?? "—"}
+                    {o.origin.month ? ` · ${o.origin.month} ${o.origin.year ?? ""}` : ""}
+                    {o.origin.channel ? ` · ${o.origin.channel}` : ""}
+                    {o.origin.program ? ` · ${o.origin.program}` : ""}
+                    {o.origin.officer ? ` · ${o.origin.officer}` : ""}
+                  </span>
+                ) : (
+                  // Not two dashes. loan_program and loan_officer live only in
+                  // loan_officials and pl_transactions carries neither, so for a
+                  // number with no master row there is nothing to show and no
+                  // way there could be. Saying that beats an empty column.
+                  <span className="ml-2 font-sans text-[10px] italic text-slate-400">
+                    no master row, so no program or officer exists for this number
+                  </span>
+                )}
+                {/* An equal and opposite entry in another branch is a transfer,
+                    not revenue arriving from nowhere — and read through a
+                    branch filter only one half of it is ever on screen. */}
+                {o.counterparts.length > 0 && (
+                  <span className="ml-2 inline-block rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-sans text-[10px] text-amber-800">
+                    transfer · offset in branch {[...new Set(o.counterparts.map((c) => c.branch))].join(", ")}
+                  </span>
+                )}
+              </Td>
+              <Td className="text-center font-mono">{o.branch ?? "—"}</Td>
+              <Td className="text-right font-mono tabular-nums">{fmt(o.total)}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 
@@ -482,7 +639,10 @@ function NetBanner({ net, netBps }: { net: number; netBps: number | null }) {
         loss ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"
       }`}
     >
-      <span>NET MARGIN</span>
+      {/* "NET MARGIN" was the wrong name for it: this is every revenue concept
+          netted, not the DM+RM margin the table now shows in its own column.
+          With both on screen the two names have to be different. */}
+      <span>REVENUE NET</span>
       <span>
         <span className={`font-mono font-bold tabular-nums ${loss ? "text-rose-700" : "text-emerald-300"}`}>
           {fmt(net)}
@@ -532,8 +692,10 @@ function Th({ children, className = "" }: { children: React.ReactNode; className
   return <th className={`whitespace-nowrap px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700 ${className}`}>{children}</th>;
 }
 
-function Td({ children = null, className = "" }: { children?: React.ReactNode; className?: string }) {
-  return <td className={`whitespace-nowrap px-2 py-1.5 text-slate-700 ${className}`}>{children}</td>;
+function Td({ children = null, className = "", title }: { children?: React.ReactNode; className?: string; title?: string }) {
+  // `title` so a truncated cell can still be read in full on hover — the same
+  // rule the hierarchy column of the P&L uses.
+  return <td title={title} className={`whitespace-nowrap px-2 py-1.5 text-slate-700 ${className}`}>{children}</td>;
 }
 
 function Signal({ label }: { label: string }) {

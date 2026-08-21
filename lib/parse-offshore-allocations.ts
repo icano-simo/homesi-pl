@@ -89,7 +89,7 @@ function toStr(v: unknown): string | null {
 export function parseOffshoreAllocations(
   buffer: Buffer
 ): { rows: OffshoreRow[]; warnings: NormalizeWarning[] } {
-  const raw = readSheetRaw(buffer, () => true);
+  const { rows: raw } = readSheetRaw(buffer, () => true);
   const rows: OffshoreRow[] = [];
   const warnings: NormalizeWarning[] = [];
 

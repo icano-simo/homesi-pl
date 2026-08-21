@@ -39,6 +39,29 @@ const BRANCH_ALIASES: Record<string, string> = {
   Affinity: "716",
 };
 
+/**
+ * Branches exempt from the B2B success fee.
+ *
+ * They do not pay it, so a b2b loan of theirs with no fee is correct and must
+ * not raise an alert — the validation exists to find branches that should have
+ * been charged and were not. Reported as "branch exempt, not charged" instead.
+ *
+ * Here, next to the aliases, because it is a fact about a branch and not about
+ * one report. Exempting the next one is a line in this list, not a condition
+ * copied into a component.
+ *
+ * Measured 2026-08-17: of the 106 loans with b2b = true, 34 are on these two
+ * (733: 32, 776: 2) and never alert; the other 72 sit on seven branches that
+ * are charged and do alert when the fee is missing.
+ */
+export const B2B_FEE_EXEMPT_BRANCHES: readonly string[] = ["733", "776"];
+
+/** True when this branch does not pay the B2B success fee. */
+export function isB2BFeeExempt(branch: string | null | undefined): boolean {
+  const b = resolveLoanBranchAlias(branch);
+  return b !== null && B2B_FEE_EXEMPT_BRANCHES.includes(b);
+}
+
 /** The corporate branch: centralized costs, division-wide loan volume. */
 export const CORPORATE_BRANCH = "700";
 
@@ -46,6 +69,29 @@ export const CORPORATE_BRANCH = "700";
  * Canonical branch for a loan_officials row.
  * Returns null when the loan is not part of this division (Rule 2).
  */
+/**
+ * Rule 1 alone: the same branch written two ways becomes one.
+ *
+ * Deliberately separate from normalizeLoanBranch, which also applies Rule 2 and
+ * drops everything outside the division. The two rules answer different
+ * questions and only one of them belongs to Loan Count.
+ *
+ *   Rule 1 is IDENTITY. "Affinity" and "716" are one branch under two labels,
+ *   so counting them apart splits 77 loans into 46 and 31 and neither figure is
+ *   the branch's.
+ *
+ *   Rule 2 is ACCOUNTING SCOPE — which branches belong to this division's P&L.
+ *   Loan Count is not about accounting; it counts the loans in the loan count
+ *   file. Applying it there would hide the 4 loans on branches 150 and 276 and
+ *   leave the module disagreeing with its own source file, 375 against 379,
+ *   for a reason nobody reading the screen could see.
+ */
+export function resolveLoanBranchAlias(raw: string | null | undefined): string | null {
+  const b = (raw ?? "").trim();
+  if (!b) return null;
+  return BRANCH_ALIASES[b] ?? b;
+}
+
 export function normalizeLoanBranch(raw: string | null | undefined): string | null {
   const b = (raw ?? "").trim();
   if (!b) return null;

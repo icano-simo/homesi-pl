@@ -7,21 +7,25 @@ import {
   FIELD_LABELS,
   buildDynamicPivot,
   expandForOpNonOp,
+  stableScopeValue,
   type ExpandedTx,
   type PivotField,
   type PivotNode,
   type TxLeaf,
 } from "@/lib/pivot-engine";
 import { fanOutBySplits, type SplitEntry } from "@/lib/apply-splits";
-import { NoteDrawer, defaultScopeLabel, type NoteDrawerCell } from "@/components/note-drawer";
+import { createPortal } from "react-dom";
 import {
   buildNoteIndex,
   cellKey,
+  notesForCell,
   resolveNotes,
+  type NoteLevel,
   type NoteScope,
   type PLNote,
-  type ScopeKey,
 } from "@/lib/note-scope";
+import type { CellRef } from "@/lib/cell-ref";
+import { describeLeaves } from "@/lib/cell-breakdown";
 import type { PLReportTx } from "@/types";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -111,6 +115,155 @@ const totalColSize: React.CSSProperties = { minWidth: 135 };
 
 // ─── Note indicators ──────────────────────────────────────────────────────────
 
+/** Enter delay and leave grace for the hover preview, in ms. */
+const HOVER_IN_MS  = 400;
+const HOVER_OUT_MS = 200;
+
+/**
+ * True only where hovering is a gesture of its own.
+ *
+ * A touch screen reports a hover on the tap that precedes the click, so without
+ * this the preview would open under the finger on the way to the figure and the
+ * tap would land on whatever it had just covered. On those devices the dot has
+ * no preview at all: a tap opens the notes window.
+ */
+function useFinePointer(): boolean {
+  const [fine, setFine] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(hover: hover) and (pointer: fine)");
+    const on = () => setFine(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return fine;
+}
+
+/**
+ * The note indicator: a real button, not a decorated span.
+ *
+ * It has a job of its own now — the figure beside it opens the movements, the
+ * dot opens the notes — so it has to be reachable and announced as a control.
+ * The mark stays 6px because the report is read as a column of figures and a
+ * bigger one would compete with them; the button around it is 20px and
+ * transparent, pulled back with negative margins so those extra pixels cost the
+ * row no height and the amounts stay exactly where they were.
+ */
+function NoteDot({
+  isDirect,
+  onOpen,
+  preview,
+}: {
+  isDirect: boolean;
+  onOpen: () => void;
+  /** Read lazily: resolving every cell's notes up front would cost a pass over
+   *  the whole note set per rendered figure, and almost none are ever hovered. */
+  preview: () => PLNote[];
+}) {
+  const fine  = useFinePointer();
+  const ref   = useRef<HTMLButtonElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pop, setPop] = useState<{ x: number; y: number; notes: PLNote[] } | null>(null);
+
+  const clear = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
+  useEffect(() => clear, []);
+
+  const enter = () => {
+    if (!fine) return;
+    clear();
+    // Long enough that a pointer crossing the cell on its way elsewhere never
+    // opens it; short enough that stopping on the dot feels like an answer.
+    timer.current = setTimeout(() => {
+      const r = ref.current?.getBoundingClientRect();
+      if (!r) return;
+      setPop({ x: r.left + r.width / 2, y: r.bottom, notes: preview() });
+    }, HOVER_IN_MS);
+  };
+
+  const leave = () => {
+    if (!fine) return;
+    clear();
+    // Grace on the way out, so the pointer can travel from the dot into the
+    // preview without it closing underneath.
+    timer.current = setTimeout(() => setPop(null), HOVER_OUT_MS);
+  };
+
+  const first = pop?.notes[0];
+  const POP_W = 300;
+
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        onClick={(e) => { e.stopPropagation(); clear(); setPop(null); onOpen(); }}
+        onMouseEnter={enter}
+        onMouseLeave={leave}
+        onFocus={enter}
+        onBlur={leave}
+        aria-label={isDirect ? "Read the note on this cell" : "Read notes from more detailed levels"}
+        // 20px of target around a 6px mark; the negative margins hand the 14px
+        // difference back to the layout so no row grows.
+        className="relative -mx-[7px] -my-2 inline-flex h-5 w-5 shrink-0 items-center justify-center align-middle"
+      >
+        <span
+          aria-hidden
+          className={
+            isDirect
+              ? "inline-block h-1.5 w-1.5 rounded-full bg-[#FF4040]"
+              : "inline-block h-1.5 w-1.5 rounded-full border border-[#001A40]/40"
+          }
+        />
+      </button>
+
+      {/* Portalled to the body on purpose. The cell it belongs to sits inside a
+          scroll container full of sticky columns, each of which is its own
+          stacking context — anchored there, the preview would be clipped by one
+          of them and painted underneath the others. */}
+      {pop && typeof document !== "undefined" && createPortal(
+        <div
+          onMouseEnter={clear}
+          onMouseLeave={leave}
+          style={{
+            position: "fixed",
+            width: POP_W,
+            top: pop.y + 8,
+            // Clamped to the viewport: the dot lands in the last month column as
+            // often as the first, and a preview half off-screen is no preview.
+            left: Math.min(Math.max(8, pop.x - POP_W / 2), Math.max(8, window.innerWidth - POP_W - 8)),
+            zIndex: 80,
+          }}
+          className="rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl"
+        >
+          {first ? (
+            <>
+              <p className="line-clamp-3 whitespace-pre-wrap text-[11px] text-slate-700">
+                {first.note_text}
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="truncate text-[10px] text-slate-400">
+                  {first.author ?? "—"}
+                  {pop.notes.length > 1 ? ` · +${pop.notes.length - 1} more` : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setPop(null); onOpen(); }}
+                  className="shrink-0 text-[10px] font-semibold text-[#FF4040] hover:underline"
+                >
+                  View note{pop.notes.length > 1 ? "s" : ""}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="text-[11px] italic text-slate-400">No note text.</p>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 /**
  * Wraps a numeric cell so it can be clicked to open its notes.
  *
@@ -122,6 +275,8 @@ function NoteCellContent({
   text,
   hasNote,
   isDirect,
+  onOpenNotes,
+  previewNotes,
   badgeClass = "",
   bps,
   reserveBpsSlot = false,
@@ -129,6 +284,9 @@ function NoteCellContent({
   text: string;
   hasNote: boolean;
   isDirect: boolean;
+  /** Opens the notes window for this cell. Absent on rows that carry none. */
+  onOpenNotes?: () => void;
+  previewNotes?: () => PLNote[];
   /** Negative-total badge in the HOMESÍ theme; empty elsewhere. */
   badgeClass?: string;
   /** Already-formatted basis points, rendered beside the figure. */
@@ -146,15 +304,8 @@ function NoteCellContent({
     // the compact density the whole grid is built around.
     <span className="flex w-full flex-row items-center justify-end gap-1.5 whitespace-nowrap">
       <span className={`inline-flex items-center justify-end gap-1 ${badgeClass}`}>
-        {hasNote && (
-          <span
-            aria-label={isDirect ? "Has a note" : "Has notes at a more detailed level"}
-            className={
-              isDirect
-                ? "inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF4040]"
-                : "inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-[#001A40]/40"
-            }
-          />
+        {hasNote && onOpenNotes && previewNotes && (
+          <NoteDot isDirect={isDirect} onOpen={onOpenNotes} preview={previewNotes} />
         )}
         {text}
       </span>
@@ -220,7 +371,10 @@ interface RenderCtx {
   notesOn: boolean;
   noteAny: Set<string>;
   noteDirect: Set<string>;
-  openCell: (cell: NoteDrawerCell) => void;
+  /** Opens the notes-only window for a cell. */
+  openNotes: (ref: CellRef) => void;
+  /** Notes visible on a cell, resolved on demand for the hover preview. */
+  notesAt: (scope: NoteScope) => PLNote[];
   baseScope: NoteScope;
   /** HOMESÍ 2025 styling: zebra striping, sky hover, typographic depth ramp. */
   homesi: boolean;
@@ -229,6 +383,87 @@ interface RenderCtx {
   /** Sum of the displayed months' bases, for the Total column — its denominator
    *  is not any single month but the whole span the column covers. */
   bpsBaseTotal: number;
+  /**
+   * Opens the detail window for a cell. When set, the tree stops materialising
+   * transaction rows: the breakdown happens in that window instead.
+   */
+  onDrillCell: ((ref: CellRef) => void) | null;
+}
+
+/**
+ * Turns a node and a period into the cell both windows are opened with.
+ *
+ * The breakdown comes from the node's own children, not from a second query.
+ * That is deliberate: the figures in the window are then the figures in the
+ * report by construction, rather than by two computations agreeing — and it is
+ * what makes a cost centre no more expensive to open than a GL, because neither
+ * one reaches past the level immediately below it.
+ */
+function buildCellRef(opts: {
+  scope: NoteScope;
+  trail: readonly string[];
+  month: string | null;
+  amount: number;
+  level: NoteLevel;
+  levelLabel: string;
+  valueLabel: string;
+  /** Children of the node. Empty or absent means the deepest level. */
+  children?: readonly PivotNode[];
+  /** Rows of the node, used only when it has no children. */
+  leaves?: readonly TxLeaf[];
+  /** The cell's own figure per month, for the heading under a month filter. */
+  byMonth?: Record<string, number>;
+}): CellRef {
+  const { scope, trail, month, amount, children, leaves } = opts;
+  const withMonth = (s: NoteScope): NoteScope => (month ? { ...s, month } : s);
+  const kids = children ?? [];
+
+  /**
+   * The level below the deepest cell, grouped from that cell's own rows.
+   *
+   * Those rows have already been prorated by the cost-centre split and
+   * expanded for op/non-op, so these figures add up to the heading above them.
+   * Asking the server instead would answer from the raw assignment, and the
+   * two do not reconcile — measured on CC01 in June, 7 of 18 GL cells.
+   */
+  // Extracted to lib/cell-breakdown.ts rather than written here: it is data
+  // logic, not rendering, and inside a .tsx component it can only be exercised
+  // by mounting React. The one bug on this branch that no verification caught —
+  // the view switch that changed nothing — was exactly of that kind.
+  const descriptions = !kids.length && leaves?.length
+    ? describeLeaves(leaves, scope, month)
+    : null;
+  return {
+    scope:      withMonth(scope),
+    breadcrumb: month ? [...trail, month] : [...trail],
+    title:      trail[trail.length - 1] ?? "Total Income",
+    month,
+    amount,
+    byMonth: opts.byMonth ?? {},
+    self: {
+      level:      opts.level,
+      levelLabel: opts.levelLabel,
+      valueLabel: opts.valueLabel,
+      scope:      withMonth(scope),
+      amount,
+    },
+    children: kids.length
+      ? kids.map((c) => ({
+          level:      c.field as NoteLevel,
+          levelLabel: FIELD_LABELS[c.field as PivotField] ?? c.field,
+          valueLabel: c.label,
+          scope:      withMonth({ ...scope, ...c.scope }),
+          amount:     month ? (c.byMonth[month] ?? 0) : c.total,
+        }))
+      : null,
+    childLevelLabel: kids.length
+      ? FIELD_LABELS[kids[0].field as PivotField] ?? kids[0].field
+      : null,
+    // Calendar order, and only the months this cell has — the columns of the
+    // trend matrix.
+    months: MONTH_ORDER.filter((m) => leaves?.some((l) => l.month === m)),
+    descriptions,
+  };
 }
 
 /**
@@ -345,10 +580,30 @@ export interface PivotTableDynamicProps {
   /** Reports transaction-level notes whose transaction no longer exists, so the
    *  page can show them instead of letting them disappear. */
   onOrphansChange?: (orphans: PLNote[]) => void;
+  /**
+   * The notes as this table resolved them, handed back so the windows the page
+   * owns read the same set the indicators were drawn from.
+   *
+   * Not a nicety: a transaction note is stored as {transaction_id} alone, which
+   * satisfies no cell's containment test. Only the re-anchoring done here makes
+   * it roll up, so a window given the raw notes would show every aggregate note
+   * and silently omit every transaction one.
+   */
+  onResolvedNotes?: (notes: PLNote[]) => void;
   /** The single year the report covers, when unambiguous. Omitted for
    *  multi-year loads, where a month column merges several years and the cell
    *  genuinely has no single period. */
   scopeYear?: number;
+  /**
+   * The single branch the report is scoped to, or null when it covers several
+   * (or none). Goes into every cell's scope, so a note written here is anchored
+   * to it and cannot surface under a different branch.
+   *
+   * Null on a multi-branch view on purpose: a scope value is one value, and
+   * there is no single branch to name. Notes written then carry no branch, and
+   * the composer says so before anything is saved.
+   */
+  scopeBranch?: string | null;
   /**
    * Loan volume by month for the selected bps base, already resolved by the
    * page. Passing resolved numbers rather than raw metrics keeps the corporate
@@ -359,6 +614,31 @@ export interface PivotTableDynamicProps {
   /** Name of the chosen base, printed in the table header so a screenshot of
    *  the grid alone still says what the bps were computed against. */
   bpsBaseLabel?: string | null;
+  /**
+   * Cost centres to keep, as the stable values stableScopeValue produces —
+   * a cost_center_id, or "__unassigned__" / "__conflict__".
+   *
+   * Filtering here rather than in the caller is what keeps a single data
+   * path. The page used to pre-fan its rows and then withhold splitsMap so
+   * they would not be fanned twice; that left the notes code reading
+   * already-duplicated transactions through a branch nothing had exercised.
+   * Now the table always receives raw txs plus splitsMap, fans them itself,
+   * and drops what the filter excludes — so the rows notes are resolved
+   * against are the same rows in every mode.
+   */
+  costCenterFilter?: readonly string[] | null;
+  /**
+   * Opens the detail window for a figure — its movements, and the composer
+   * where a note's anchor level is chosen explicitly.
+   *
+   * Supplying it also ends the tree at the last hierarchy level: the transaction
+   * rows below it are not drawn, because which description makes them readable
+   * depends on the account and no fixed level can answer that. The window asks
+   * instead.
+   */
+  onDrillCell?: (ref: CellRef) => void;
+  /** Opens the notes-only window. Reached from the dot, never from a figure. */
+  onOpenNotes?: (ref: CellRef) => void;
 }
 
 // ─── Recursive renderer (mutates `rows` for performance) ─────────────────────
@@ -390,20 +670,17 @@ function renderPivotNodes(
   const leafCells = (t: TxLeaf, nodeScope: NoteScope, trail: string[]) => {
     // Key scope, month excluded — cellKey adds the period as its suffix.
     const leafScope: NoteScope = { ...nodeScope, transaction_id: t.txId };
-    const scopeOf = (month: string | null): NoteScope => ({
-      ...leafScope,
-      ...(month ? { month } : {}),
-    });
-    const open = (month: string | null, amount: number) =>
-      ctx.openCell({
-        scope: scopeOf(month),
-        breadcrumb: [...trail, t.desc ?? t.vendor ?? "—", ...(month ? [month] : [])],
-        amount,
-        month,
-        transactions: [t],
-        transactionId: t.txId,
-        level: "transaction",
+    const label = t.desc ?? t.vendor ?? "—";
+    // A transaction has nothing below it, so its window is the figure and the
+    // notes on it — there is no next level to break down.
+    const refFor = (month: string | null, amount: number) =>
+      buildCellRef({
+        scope: leafScope, trail: [...trail, label], month, amount,
+        level: "transaction", levelLabel: "Transaction", valueLabel: label,
+        byMonth: { [t.month]: t.mvmt },
       });
+    const open      = (m: string | null, a: number) => ctx.onDrillCell?.(refFor(m, a));
+    const openNotes = (m: string | null, a: number) => ctx.openNotes(refFor(m, a));
 
     return (
       <>
@@ -424,6 +701,8 @@ function renderPivotNodes(
                   text={fmtM(t.mvmt)}
                   hasNote={ctx.notesOn && ctx.noteAny.has(key)}
                   isDirect={ctx.noteDirect.has(key)}
+                  onOpenNotes={() => openNotes(m, t.mvmt)}
+                  previewNotes={() => ctx.notesAt({ ...leafScope, month: m })}
                   bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBase[m]) ?? "—" : null}
                 />
               )}
@@ -439,6 +718,8 @@ function renderPivotNodes(
             text={fmtM(t.mvmt)}
             hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(leafScope, null))}
             isDirect={ctx.noteDirect.has(cellKey(leafScope, null))}
+            onOpenNotes={() => openNotes(null, t.mvmt)}
+            previewNotes={() => ctx.notesAt(leafScope)}
             bps={ctx.bpsBase ? fmtBps(t.mvmt, ctx.bpsBaseTotal) ?? "—" : null}
           />
         </td>
@@ -452,7 +733,12 @@ function renderPivotNodes(
     const isOpNonOp  = node.field === "op_nonop";
     const isOp       = isOpNonOp && node.key === "Operational";
     const isNonOp    = isOpNonOp && node.key === "Non-Operational";
-    const hasContent = node.children.length > 0 || node.txLeaves.length > 0;
+    // With the modal wired, a node whose only content is transactions has
+    // nothing to open — offering a chevron that reveals nothing is worse than
+    // no chevron.
+    const hasContent = node.children.length > 0 ||
+      (node.txLeaves.length > 0 && !ctx.onDrillCell);
+    const isDrillable = !!ctx.onDrillCell;
     const canToggle  = hasContent || isOpNonOp;
 
     // Flat (no-level) case: render leaf rows directly without a group header
@@ -513,17 +799,20 @@ function renderPivotNodes(
 
     const nodeScope: NoteScope = { ...ctx.baseScope, ...node.scope };
     const nodeTrail = [...labelPath, node.label];
-    const openNodeCell = (month: string | null, amount: number) =>
-      ctx.openCell({
-        scope: month ? { ...nodeScope, month } : nodeScope,
-        breadcrumb: month ? [...nodeTrail, month] : nodeTrail,
-        amount,
-        month,
-        // Only a leaf group has its transactions materialized; an aggregate row
-        // keeps them in its children, so the drawer asks the user to expand.
-        transactions: node.txLeaves,
-        level: node.field,
+    const refFor = (month: string | null, amount: number) =>
+      buildCellRef({
+        scope: nodeScope, trail: nodeTrail, month, amount,
+        level:      node.field as NoteLevel,
+        levelLabel: FIELD_LABELS[node.field as PivotField] ?? node.field,
+        valueLabel: node.label,
+        children:   node.children,
+        leaves:     node.txLeaves,
+        byMonth:    node.byMonth,
       });
+    const openDetail = (month: string | null, amount: number) =>
+      ctx.onDrillCell?.(refFor(month, amount));
+    const openNodeNotes = (month: string | null, amount: number) =>
+      ctx.openNotes(refFor(month, amount));
 
     // Depth-2+ HOMESÍ rows sit on the zebra stripe; depth 0/1 keep the tinted
     // band from the ramp so the top of the hierarchy still reads as a header.
@@ -533,9 +822,15 @@ function renderPivotNodes(
     rows.push(
       <tr
         key={nodeKey}
-        className={`group border-b ${borderClass} ${canToggle ? "cursor-pointer" : ""} ${homesi ? rowHover : ""}`}
+        className={`group border-b ${borderClass} ${canToggle || isDrillable ? "cursor-pointer" : ""} ${homesi ? rowHover : ""}`}
         style={{ backgroundColor: effectiveBg }}
-        onClick={() => { if (canToggle) toggle(nodeKey); }}
+        // A GL row has nothing left to expand, so its row click is free for the
+        // breakdown of the whole row. Every figure in it opens the same window
+        // for its own month, which is the gesture that actually gets used.
+        onClick={() => {
+          if (canToggle) toggle(nodeKey);
+          else if (isDrillable) openDetail(null, node.total);
+        }}
       >
         <td
           title={node.label}
@@ -557,8 +852,12 @@ function renderPivotNodes(
           return (
             <td
               key={m}
-              onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(m, v ?? 0); } : undefined}
-              className={`${numCell} ${homesi ? colRule : ""} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+              // One gesture, one meaning: the figure opens what is behind it.
+              // It used to open the notes instead, which left the movements
+              // with nowhere to go and made the anchor level of a new note a
+              // consequence of which row the reader happened to click.
+              onClick={isDrillable ? (e) => { e.stopPropagation(); openDetail(m, v ?? 0); } : undefined}
+              className={`${numCell} ${homesi ? colRule : ""} ${fontClass} ${homesi ? homesiValueCls(v) : mvCls(v)} ${isDrillable ? "cursor-pointer" : ""}`}
             >
               {/* No badge on hierarchy rows. Colour carries the sign; the pill
                   is reserved for the Net Income closing lines. */}
@@ -566,20 +865,24 @@ function renderPivotNodes(
                 text={fmtM(v)}
                 hasNote={ctx.notesOn && ctx.noteAny.has(key)}
                 isDirect={ctx.noteDirect.has(key)}
+                onOpenNotes={() => openNodeNotes(m, v ?? 0)}
+                previewNotes={() => ctx.notesAt({ ...nodeScope, month: m })}
                 bps={ctx.bpsBase ? fmtBps(v, ctx.bpsBase[m]) ?? "—" : null}
               />
             </td>
           );
         })}
         <td
-          onClick={ctx.notesOn ? (e) => { e.stopPropagation(); openNodeCell(null, node.total); } : undefined}
+          onClick={isDrillable ? (e) => { e.stopPropagation(); openDetail(null, node.total); } : undefined}
           style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: effectiveBg }}
-          className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+          className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${isDrillable ? "cursor-pointer" : ""}`}
         >
           <NoteCellContent
             text={fmtM(node.total)}
             hasNote={ctx.notesOn && ctx.noteAny.has(cellKey(nodeScope, null))}
             isDirect={ctx.noteDirect.has(cellKey(nodeScope, null))}
+            onOpenNotes={() => openNodeNotes(null, node.total)}
+            previewNotes={() => ctx.notesAt(nodeScope)}
             bps={ctx.bpsBase ? fmtBps(node.total, ctx.bpsBaseTotal) ?? "—" : null}
           />
         </td>
@@ -593,8 +896,9 @@ function renderPivotNodes(
       renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx);
     }
 
-    // Leaf transaction rows
-    if (node.txLeaves.length > 0) {
+    // Leaf transaction rows. Suppressed when a drill-down modal is wired:
+    // the tree ends at GL and the breakdown happens there instead.
+    if (node.txLeaves.length > 0 && !ctx.onDrillCell) {
       const leafPl = (depth + 1) * 16 + 8;
       const sortedLeaves = descSort
         ? [...node.txLeaves].sort((a, b) => {
@@ -724,17 +1028,39 @@ export function PivotTableDynamic({
   notes,
   onNotesChanged,
   onOrphansChange,
+  onResolvedNotes,
   scopeYear,
+  scopeBranch,
   bpsBaseByMonth,
   bpsBaseLabel,
+  costCenterFilter,
+  onDrillCell,
+  onOpenNotes,
 }: PivotTableDynamicProps) {
-  const [activeLevels, setActiveLevels] = useState<PivotField[]>(() =>
+  /**
+   * The hierarchy this table is actually drawing.
+   *
+   * Only the reorderable pivot owns it. With `lockHierarchy` the prop is the
+   * truth and is read straight through — it is not copied into state, because
+   * that copy is exactly what broke: the initialiser below is lazy, so it ran
+   * once on mount and every later change to `defaultLevels` was ignored.
+   * Switching to the Cost Center view rebuilt the tree, correctly, out of the
+   * levels the page had been mounted with. Run Report did not help: it changes
+   * the transactions, not the levels, so the memo re-ran and produced the same
+   * shape again.
+   *
+   * Derived rather than synced with an effect on purpose. An effect would make
+   * the two agree one render later; deriving makes it impossible for them to
+   * disagree at all.
+   */
+  const [ownLevels, setOwnLevels] = useState<PivotField[]>(() =>
     storageKey ? readStorage(storageKey, defaultLevels) : defaultLevels
   );
+  const activeLevels  = lockHierarchy ? defaultLevels : ownLevels;
+  const setActiveLevels = setOwnLevels;
   const [addOpen, setAddOpen] = useState(false);
   const [exp, setExp] = useState<Set<string>>(new Set());
   const [descSort, setDescSort] = useState<"asc" | "desc" | null>(null);
-  const [openCell, setOpenCell] = useState<NoteDrawerCell | null>(null);
   const addRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -750,9 +1076,18 @@ export function PivotTableDynamic({
 
   // Persist hierarchy to localStorage whenever it changes
   useEffect(() => {
-    if (!storageKey) return;
+    if (!storageKey || lockHierarchy) return;
     try { localStorage.setItem(storageKey, JSON.stringify(activeLevels)); } catch { /* ignore */ }
-  }, [storageKey, activeLevels]);
+  }, [storageKey, lockHierarchy, activeLevels]);
+
+  /**
+   * A different hierarchy is a different set of rows, so nothing that was open
+   * in the old one means anything in the new one. Keyed on the levels rather
+   * than the array so a re-render with an equal-but-new array does not collapse
+   * the report under the reader.
+   */
+  const levelsKey = activeLevels.join("|");
+  useEffect(() => { setExp(new Set()); }, [levelsKey]);
 
   function toggle(key: string) {
     setExp(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s; });
@@ -812,19 +1147,30 @@ export function PivotTableDynamic({
     // carries its prorated movement and its own cost_center_id (same as CC Report).
     // Only applied when a splitsMap is provided — callers that pre-fan their data
     // (P&L All CC mode, Cost Center Report) omit splitsMap to avoid double-fanning.
-    const base: PLReportTx[] =
-      activeLevels.includes("cost_center") && splitsMap
-        ? fanOutBySplits(txs, splitsMap)
-        : txs;
-    return activeLevels.includes("op_nonop") ? expandForOpNonOp(base) : base as ExpandedTx[];
-  }, [txs, activeLevels, splitsMap]);
+    // Fanned when Cost Centre is a level OR when a cost-centre filter is on:
+    // a transaction split 60/40 has to contribute its prorated share to the
+    // selected centre, not all of itself or none.
+    const needsFan = splitsMap && (activeLevels.includes("cost_center") || !!costCenterFilter);
+    const fanned: PLReportTx[] = needsFan ? fanOutBySplits(txs, splitsMap!) : txs;
+
+    // Filtered AFTER the fan-out, so each virtual row is judged by the centre
+    // it was allocated to rather than by the transaction it came from.
+    const kept = costCenterFilter
+      ? fanned.filter((tx) => costCenterFilter.includes(stableScopeValue(tx as ExpandedTx, "cost_center")))
+      : fanned;
+
+    return activeLevels.includes("op_nonop") ? expandForOpNonOp(kept) : kept as ExpandedTx[];
+  }, [txs, activeLevels, splitsMap, costCenterFilter]);
 
   // Scope shared by every cell of the report. The grand total row sits at this
   // level, so wrapping the tree in a synthetic root makes the note walk below
   // cover it with the same code path as any other row.
   const baseScope = useMemo<NoteScope>(
-    () => (scopeYear != null ? { year: scopeYear } : {}),
-    [scopeYear],
+    () => ({
+      ...(scopeYear != null ? { year: scopeYear } : {}),
+      ...(scopeBranch ? { branch: scopeBranch } : {}),
+    }),
+    [scopeYear, scopeBranch],
   );
 
   // Seed the tree with baseScope so every node carries the period. Building it
@@ -854,6 +1200,7 @@ export function PivotTableDynamic({
   // Surfaced to the page so it can render the orphan panel — the component
   // owns the resolution, but the panel lives outside the table.
   useEffect(() => { onOrphansChange?.(resolved.orphaned); }, [resolved.orphaned, onOrphansChange]);
+  useEffect(() => { onResolvedNotes?.(resolved.placed); }, [resolved.placed, onResolvedNotes]);
 
   const noteIndex = useMemo(
     () => (enableNotes
@@ -862,26 +1209,19 @@ export function PivotTableDynamic({
     [enableNotes, resolvedNotes, tree, baseScope],
   );
 
-  const scopeOrder = useMemo<ScopeKey[]>(
-    () => [...activeLevels, "month", "year"] as ScopeKey[],
-    [activeLevels],
-  );
-
-  /** Stable ids stored in a scope are not display text — resolve them back. */
-  const labelFor = useMemo(() => {
-    const glNames = new Map<string, string>();
-    const ccNames = new Map<string, string>();
-    for (const tx of workingTxs) {
-      if (tx.gl_code) glNames.set(tx.gl_code, tx.gl_name ? `${tx.gl_code} — ${tx.gl_name}` : tx.gl_code);
-      if (tx.cost_center_id && tx.cost_centers?.name) ccNames.set(tx.cost_center_id, tx.cost_centers.name);
-    }
-    return (key: ScopeKey, value: string): string => {
-      if (key === "gl")          return glNames.get(value) ?? value;
-      if (key === "cost_center") return ccNames.get(value) ?? defaultScopeLabel(key, value);
-      if (key === "transaction_id") return "";
-      return defaultScopeLabel(key, value);
+  /**
+   * Notes on one cell, resolved when asked rather than for every figure drawn.
+   *
+   * The hover preview is the only caller, and it fires for the handful of cells
+   * a reader actually stops on — precomputing it would be a pass over the whole
+   * note set per rendered figure, thousands of times per report.
+   */
+  const notesAt = useMemo(() => {
+    return (scope: NoteScope): PLNote[] => {
+      const { direct, rolledUp } = notesForCell(resolvedNotes, scope);
+      return [...direct, ...rolledUp];
     };
-  }, [workingTxs]);
+  }, [resolvedNotes]);
 
   if (loading) {
     return (
@@ -920,6 +1260,24 @@ export function PivotTableDynamic({
     ? months.reduce((s, m) => s + (bpsBaseByMonth[m] ?? 0), 0)
     : 0;
 
+  /**
+   * The report's own total, as a cell.
+   *
+   * It has no hierarchy above it, so its only anchor is grand_total — supplied
+   * explicitly here rather than derived, because there is no node to derive it
+   * from. Its Total column is the one figure with no bounded movement list:
+   * everything loaded is behind it.
+   */
+  const grandRef = (month: string | null, amount: number): CellRef =>
+    buildCellRef({
+      scope: baseScope, trail: ["Total Income"], month, amount,
+      level: "grand_total", levelLabel: "Grand Total", valueLabel: "Total Income",
+      // Its next level is the top of the hierarchy — the same rows the report
+      // opens with, so even the report total costs one level and no more.
+      children: tree,
+      byMonth: grandByMonth,
+    });
+
   // Total Income sticky row (always visible, based on raw txs)
   rows.push(
     <tr key="__grand__">
@@ -937,21 +1295,16 @@ export function PivotTableDynamic({
           <td
             key={m}
             style={gtStyle}
-            onClick={enableNotes ? () => setOpenCell({
-              scope: { ...baseScope, month: m },
-              breadcrumb: ["Total Income", m],
-              amount: grandByMonth[m] ?? 0,
-              month: m,
-              transactions: [],
-              level: "grand_total",
-            }) : undefined}
-            className={`${numCell} ${homesiTheme ? `${colRule} font-bold text-[#001A40]` : `font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])}`} ${enableNotes ? "cursor-pointer" : ""}`}
+            onClick={onDrillCell ? () => onDrillCell(grandRef(m, grandByMonth[m] ?? 0)) : undefined}
+            className={`${numCell} ${homesiTheme ? `${colRule} font-bold text-[#001A40]` : `font-extrabold text-[12px] ${mvClsLight(grandByMonth[m])}`} ${onDrillCell ? "cursor-pointer" : ""}`}
           >
             {enableNotes ? (
               <NoteCellContent
                 text={fmtM(grandByMonth[m])}
                 hasNote={noteIndex.any.has(key)}
                 isDirect={noteIndex.direct.has(key)}
+                onOpenNotes={() => onOpenNotes?.(grandRef(m, grandByMonth[m] ?? 0))}
+                previewNotes={() => notesAt({ ...baseScope, month: m })}
                 badgeClass={homesiTheme ? grandTotalBadge(grandByMonth[m]) : ""}
                 bps={bpsBaseByMonth ? fmtBps(grandByMonth[m], bpsBaseByMonth[m]) ?? "—" : null}
               />
@@ -965,21 +1318,19 @@ export function PivotTableDynamic({
       })}
       <td
         style={{ ...gtStyle, ...totalColStyle, ...totalColSize, top: 30, zIndex: 21, borderLeft: homesiTheme ? "1px solid #cbd5e1" : "1px solid rgba(255,255,255,0.15)" }}
-        onClick={enableNotes ? () => setOpenCell({
-          scope: baseScope,
-          breadcrumb: ["Total Income"],
-          amount: grandTotal,
-          month: null,
-          transactions: [],
-          level: "grand_total",
-        }) : undefined}
-        className={`${numCell} ${homesiTheme ? "font-bold text-[#001A40]" : `font-extrabold text-[12px] ${mvClsLight(grandTotal)}`} ${enableNotes ? "cursor-pointer" : ""}`}
+        // Bounded by nothing — every loaded row is behind this figure — so it
+        // opens the window without a movement list rather than asking the
+        // server for the whole table.
+        onClick={onDrillCell ? () => onDrillCell(grandRef(null, grandTotal)) : undefined}
+        className={`${numCell} ${homesiTheme ? "font-bold text-[#001A40]" : `font-extrabold text-[12px] ${mvClsLight(grandTotal)}`} ${onDrillCell ? "cursor-pointer" : ""}`}
       >
         {enableNotes ? (
           <NoteCellContent
             text={fmtM(grandTotal)}
             hasNote={noteIndex.any.has(cellKey(baseScope, null))}
             isDirect={noteIndex.direct.has(cellKey(baseScope, null))}
+            onOpenNotes={() => onOpenNotes?.(grandRef(null, grandTotal))}
+            previewNotes={() => notesAt(baseScope)}
             badgeClass={homesiTheme ? grandTotalBadge(grandTotal) : ""}
             bps={bpsBaseByMonth ? fmtBps(grandTotal, bpsBaseTotal) ?? "—" : null}
           />
@@ -1001,11 +1352,13 @@ export function PivotTableDynamic({
     notesOn: enableNotes,
     noteAny: noteIndex.any,
     noteDirect: noteIndex.direct,
-    openCell: setOpenCell,
+    openNotes: (ref) => onOpenNotes?.(ref),
+    notesAt,
     baseScope,
     homesi: homesiTheme,
     bpsBase: bpsBaseByMonth ?? null,
     bpsBaseTotal,
+    onDrillCell: onDrillCell ?? null,
   });
 
   return (
@@ -1162,16 +1515,6 @@ export function PivotTableDynamic({
         </table>
       </div>
 
-      {enableNotes && (
-        <NoteDrawer
-          cell={openCell}
-          notes={resolvedNotes}
-          scopeOrder={scopeOrder}
-          labelFor={labelFor}
-          onClose={() => setOpenCell(null)}
-          onChanged={() => onNotesChanged?.()}
-        />
-      )}
     </div>
   );
 }

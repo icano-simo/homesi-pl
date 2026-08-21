@@ -36,11 +36,50 @@ export async function POST(req: NextRequest) {
 
     // ── 2. Normalize the Excel (needed for dupe check) ────────────────────
     const buffer = Buffer.from(await file.arrayBuffer());
-    const { rows, warnings } = normalizePL(buffer);
+    const { rows, warnings, sheet, headers, missingColumns } = normalizePL(buffer);
 
     if (rows.length === 0) {
-      await supabase.from("pl_uploads").update({ status: "error", error_message: "No data rows found after normalization" }).eq("id", uploadId ?? "");
       return apiError("No data rows found after normalization", 422);
+    }
+
+    /**
+     * Refuse a file whose columns were never recognised.
+     *
+     * This is the failure that produced 13.848 rows of nothing on 27 July and
+     * did it again this month: with no matching sheet and the wrong headers,
+     * every column reads as undefined, every row still counts, and the upload
+     * reported "completed" having imported not one value.
+     *
+     * Two tests, and the first is exact. The header row either carries the
+     * expected names or it does not — no threshold to argue about. The second
+     * is a backstop for a file whose headers sit somewhere other than the first
+     * row: measured across every upload in this database, a real one has 0,0%
+     * of its rows without a GL code, without a branch and without a period,
+     * while the broken one has 100,0% of all three. Half is nowhere near either.
+     *
+     * It runs before the pl_uploads record is created, so a refusal leaves
+     * nothing behind — no row to clean up, and no "completed" to disbelieve.
+     */
+    const blank = (n: number) => n / rows.length;
+    const noGl     = blank(rows.filter((r) => !String(r.gl_code ?? "").trim()).length);
+    const noBranch = blank(rows.filter((r) => !String(r.branch ?? "").trim()).length);
+    const noPeriod = blank(rows.filter((r) => r.year == null || !r.month).length);
+    const UNMAPPED_LIMIT = 0.5;
+
+    if (missingColumns.length > 0 ||
+        noGl > UNMAPPED_LIMIT || noBranch > UNMAPPED_LIMIT || noPeriod > UNMAPPED_LIMIT) {
+      const pct = (v: number) => `${Math.round(v * 100)}%`;
+      const detail = missingColumns.length > 0
+        ? `Columns not found: ${missingColumns.join(", ")}.`
+        : `${pct(noGl)} of rows have no GL code, ${pct(noBranch)} no branch, ${pct(noPeriod)} no period.`;
+      return apiError(
+        `The columns of this file were not recognised, so nothing was imported. ` +
+        `A GL Detail Report sheet is expected, with its headers on the first row. ` +
+        `Read sheet "${sheet.name}"${sheet.matched ? "" : " (no sheet named “GL Detail” was found, so the first one was used)"}. ` +
+        `${detail} ` +
+        `Headers seen: ${headers.filter(Boolean).slice(0, 12).join(", ") || "(none)"}.`,
+        422,
+      );
     }
 
     // ── 3. Duplicate check (skip if force or replace) ─────────────────────

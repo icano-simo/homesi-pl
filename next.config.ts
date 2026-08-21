@@ -14,6 +14,21 @@ const nextConfig: NextConfig = {
         source: "/cost-center-report",
         destination: "/pl-all",
         permanent: true,
+      },
+      {
+        // P&L All and P&L Notes became one page. They were split because a
+        // reorderable hierarchy moved notes onto differently-shaped rows;
+        // with four named hierarchies there is nothing to reorder, so the
+        // reason is gone. Both URLs are in bookmarks and shared links, so
+        // they redirect rather than 404.
+        source: "/pl-all",
+        destination: "/pl",
+        permanent: true,
+      },
+      {
+        source: "/pl-notes",
+        destination: "/pl",
+        permanent: true,
       },
     ];
   },

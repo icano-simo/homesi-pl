@@ -11,22 +11,29 @@ import * as XLSX from "xlsx";
 export function readSheetRaw(
   buffer: Buffer,
   sheetMatcher: (name: string) => boolean
-): unknown[][] {
+): { rows: unknown[][]; sheet: { name: string; matched: boolean } } {
   const workbook = XLSX.read(buffer, {
     type: "buffer",
     cellDates: false,
     raw: true,
   });
 
-  const sheetName =
-    workbook.SheetNames.find(sheetMatcher) ?? workbook.SheetNames[0];
+  // The fallback to the first sheet is deliberate — plenty of exports name the
+  // sheet differently — but the caller has to be told, because a file with no
+  // matching sheet and the wrong headers parses into rows where every column is
+  // undefined and nothing says so.
+  const matched = workbook.SheetNames.find(sheetMatcher);
+  const sheetName = matched ?? workbook.SheetNames[0];
 
   const sheet = workbook.Sheets[sheetName];
-  if (!sheet) return [];
+  if (!sheet) return { rows: [], sheet: { name: sheetName ?? "", matched: false } };
 
-  return XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: null,
-    raw: true,
-  }) as unknown[][];
+  return {
+    rows: XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: null,
+      raw: true,
+    }) as unknown[][],
+    sheet: { name: sheetName, matched: matched !== undefined },
+  };
 }

@@ -5,8 +5,18 @@ import { txFingerprint, FINGERPRINT_SELECT, type FingerprintableTx } from "@/lib
 
 export const dynamic = "force-dynamic";
 
+/**
+ * REQUIRES supabase/migrations/20260816_pl_notes_amount_at_creation.sql.
+ *
+ * Verified by running it: with the column absent PostgREST answers "column
+ * pl_notes.amount_at_creation does not exist" and this endpoint returns
+ * nothing, so the migration has to be applied before this branch is deployed.
+ * Stated here rather than guarded around, because a fallback that quietly
+ * dropped the column would leave every note reading "current amount" for
+ * reasons nobody could see.
+ */
 const SELECT =
-  "id,level,scope,scope_key,transaction_id,tx_fingerprint,orphaned_at,note_text,author,created_at,updated_at";
+  "id,level,scope,scope_key,transaction_id,tx_fingerprint,orphaned_at,amount_at_creation,note_text,author,created_at,updated_at";
 
 /**
  * All notes for a report. Deliberately a separate endpoint from /api/pl-all:
@@ -67,6 +77,9 @@ export async function POST(req: NextRequest) {
     transaction_id?: string | null;
     note_text?: string;
     author?: string | null;
+    /** The cell’s figure as the writer saw it. Absent means unknown, which
+     *  is different from zero and is rendered as such. */
+    amount_at_creation?: number | null;
   };
   try {
     body = await req.json();
@@ -106,6 +119,12 @@ export async function POST(req: NextRequest) {
       tx_fingerprint: fingerprintValue,
       note_text:      noteText,
       author:         body.author?.trim() || null,
+      // Stored, never derived. A figure recomputed later is a different
+      // number, and the point of keeping this one is to be able to say so.
+      amount_at_creation:
+        typeof body.amount_at_creation === "number" && Number.isFinite(body.amount_at_creation)
+          ? body.amount_at_creation
+          : null,
     })
     .select(SELECT)
     .single();
