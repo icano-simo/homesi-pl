@@ -17,19 +17,45 @@ type Row = {
 
 export async function GET(req: NextRequest) {
   const supabase = createServerClient();
-  const branches = new URL(req.url).searchParams.getAll("branch");
+  const sp = new URL(req.url).searchParams;
+  const branches = sp.getAll("branch");
+  const months = sp.getAll("month");
+  const years = sp.getAll("year").map(Number).filter((n) => !isNaN(n));
+  /** Just the number, for the roadmap. Same predicate, no payload. */
+  const countOnly = sp.get("count") === "1";
+
+  /**
+   * What counts as unassigned, in one place.
+   *
+   * Both modes go through this, so the number on the roadmap cannot drift from
+   * the list on this screen — they are not two definitions that happen to
+   * agree, they are one definition read twice.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scoped = (q: any) => {
+    q = q.or("cost_center_status.eq.unassigned,cost_center_status.is.null");
+    if (branches.length > 0) q = q.in("branch", branches);
+    if (months.length > 0)   q = q.in("month", months);
+    if (years.length > 0)    q = q.in("year", years);
+    return q;
+  };
+
+  if (countOnly) {
+    const { count, error } = await scoped(
+      supabase.from("pl_transactions").select("id", { count: "exact", head: true }),
+    );
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ count: count ?? 0 });
+  }
+
   const rows: Row[] = [];
   let offset = 0;
 
   while (true) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = supabase
-      .from("pl_transactions")
-      .select(SELECT)
-      .or("cost_center_status.eq.unassigned,cost_center_status.is.null")
-      .order("id", { ascending: true })
-      .range(offset, offset + 999);
-    if (branches.length > 0) q = q.in("branch", branches);
+    const q: any = scoped(
+      supabase.from("pl_transactions").select(SELECT),
+    ).order("id", { ascending: true }).range(offset, offset + 999);
     const { data, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;

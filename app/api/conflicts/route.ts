@@ -6,18 +6,39 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const supabase = createServerClient();
-  const branches = new URL(req.url).searchParams.getAll("branch");
+  const sp = new URL(req.url).searchParams;
+  const branches = sp.getAll("branch");
+  const months = sp.getAll("month");
+  const years = sp.getAll("year").map(Number).filter((n) => !isNaN(n));
+  /** Just the number, for the roadmap. Same predicate, no payload. */
+  const countOnly = sp.get("count") === "1";
+
+  /** What counts as a conflict, in one place — see the note in
+   *  cost-center-assignment/unassigned: one definition, read twice. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scoped = (q: any) => {
+    q = q.eq("cost_center_status", "conflict");
+    if (branches.length > 0) q = q.in("branch", branches);
+    if (months.length > 0)   q = q.in("month", months);
+    if (years.length > 0)    q = q.in("year", years);
+    return q;
+  };
+
+  if (countOnly) {
+    const { count, error } = await scoped(
+      supabase.from("pl_transactions").select("id", { count: "exact", head: true }),
+    );
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ count: count ?? 0 });
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let q: any = supabase
-    .from("pl_transactions")
-    .select(
+  const q: any = scoped(
+    supabase.from("pl_transactions").select(
       "id,gl_code,gl_name,month,year,branch,check_description,check_description_2," +
       "check_description_3,vendor,debit,credit,movement,cost_center_conflicts,conflict_type"
-    )
-    .eq("cost_center_status", "conflict")
-    .order("gl_code", { nullsFirst: false });
-  if (branches.length > 0) q = q.in("branch", branches);
+    ),
+  ).order("gl_code", { nullsFirst: false });
 
   const { data: txs, error: txErr } = await q;
   if (txErr) return NextResponse.json({ error: txErr.message }, { status: 500 });
