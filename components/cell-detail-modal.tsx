@@ -45,12 +45,15 @@ function Dot({ state }: { state: "direct" | "below" | null }) {
 export function CellDetailModal({
   cell,
   notes,
+  activeBranches,
   onClose,
   onNoteSaved,
 }: {
   cell: CellRef | null;
   /** Resolved notes, for the indicators on the breakdown rows. */
   notes: readonly PLNote[];
+  /** Branches the report is scoped to, for the warning on the composer. */
+  activeBranches: readonly string[];
   onClose: () => void;
   onNoteSaved: () => void;
 }) {
@@ -505,6 +508,17 @@ export function CellDetailModal({
 
         {/* ── Composer ────────────────────────────────────────────────────── */}
         <div className="border-t border-slate-200 bg-slate-50 px-5 py-3">
+          {/* A note written here is anchored to the branch the report is
+              scoped to. With none, or several, it is anchored to no branch and
+              will only show while no branch is filtered — which has to be said
+              before it is written, not discovered afterwards. */}
+          {cell.self.scope.branch === undefined && (
+            <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+              {activeBranches.length > 1
+                ? `${activeBranches.length} branches active (${activeBranches.join(", ")}) — a note written now is not tied to any one of them.`
+                : "No branch filter — a note written now is not tied to a branch."}
+            </p>
+          )}
           <label className="mb-1.5 block text-[11px] font-semibold text-slate-600" htmlFor="note-anchor">
             Write a note about
           </label>

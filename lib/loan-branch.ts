@@ -39,6 +39,29 @@ const BRANCH_ALIASES: Record<string, string> = {
   Affinity: "716",
 };
 
+/**
+ * Branches exempt from the B2B success fee.
+ *
+ * They do not pay it, so a b2b loan of theirs with no fee is correct and must
+ * not raise an alert — the validation exists to find branches that should have
+ * been charged and were not. Reported as "branch exempt, not charged" instead.
+ *
+ * Here, next to the aliases, because it is a fact about a branch and not about
+ * one report. Exempting the next one is a line in this list, not a condition
+ * copied into a component.
+ *
+ * Measured 2026-08-17: of the 106 loans with b2b = true, 34 are on these two
+ * (733: 32, 776: 2) and never alert; the other 72 sit on seven branches that
+ * are charged and do alert when the fee is missing.
+ */
+export const B2B_FEE_EXEMPT_BRANCHES: readonly string[] = ["733", "776"];
+
+/** True when this branch does not pay the B2B success fee. */
+export function isB2BFeeExempt(branch: string | null | undefined): boolean {
+  const b = resolveLoanBranchAlias(branch);
+  return b !== null && B2B_FEE_EXEMPT_BRANCHES.includes(b);
+}
+
 /** The corporate branch: centralized costs, division-wide loan volume. */
 export const CORPORATE_BRANCH = "700";
 

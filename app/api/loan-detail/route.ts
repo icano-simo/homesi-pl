@@ -3,6 +3,7 @@ import { createServerClient } from "@/lib/supabase-server";
 import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
 import {
   ALL_MARGIN_ACCOUNTS,
+  CORPORATE_MARGIN_ACCOUNTS,
   MARGIN_FOR_PERIOD,
   NET_GROUPS,
   expectedMarginAccounts,
@@ -253,6 +254,16 @@ export async function GET(req: NextRequest) {
         loan_number: l.loan_number,
         borrower_name: l.borrower_name,
         loan_officer: l.loan_officer,
+        /**
+         * The margin net: DM Margin + RM Margin and nothing else.
+         *
+         * A different number from the revenue net beside it, and deliberately
+         * so — Processing Income, Fee Income and the rest are revenue but they
+         * are not margin. Measured across the table the two are 814.522,13 and
+         * 4.414.688,43, so they cannot be confused by accident; they are
+         * labelled apart all the same.
+         */
+        margin_net: CORPORATE_MARGIN_ACCOUNTS.reduce((sum: number, acc: string) => sum + (a.concepts[acc] ?? 0), 0),
         branch: l.branch!,
         loan_program: l.loan_program,
         loan_info_channel: l.loan_info_channel,
@@ -380,7 +391,7 @@ export async function GET(req: NextRequest) {
       ? await page(() =>
           supabase
             .from("loan_officials")
-            .select("loan_number,branch,month,year,loan_info_channel")
+            .select("loan_number,branch,month,year,loan_info_channel,loan_program,loan_officer")
             .in("loan_number", strayNumbers),
         )
       : [];
@@ -439,6 +450,8 @@ export async function GET(req: NextRequest) {
               month:   origin.month as string | null,
               year:    origin.year as number | null,
               channel: origin.loan_info_channel as string | null,
+              program: origin.loan_program as string | null,
+              officer: origin.loan_officer as string | null,
             }
           : null,
         counterparts,

@@ -7,6 +7,7 @@ import {
   defaultScopeLabel,
   notesForCell,
   scopeBreadcrumb,
+  type NoteScope,
   type PLNote,
   type ScopeKey,
 } from "@/lib/note-scope";
@@ -22,12 +23,41 @@ const when = (iso: string) => {
     : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
 
+/**
+ * The branch a note was written under, first and always.
+ *
+ * It is the one thing that tells a reader at a glance whether branches are
+ * being mixed, and until the branch entered the anchor a note written looking
+ * at 700 turned up under 710. Amber when absent, because "no branch" is a real
+ * state with a real consequence — the note only shows while no branch is
+ * filtered — and not a missing value to gloss over.
+ */
+function BranchChip({ branch }: { branch: string | null }) {
+  return branch ? (
+    <span className="rounded-full border border-sky-300 bg-sky-100 px-2 py-0.5 text-[10px] font-bold tracking-wide text-sky-900">
+      BRANCH {branch}
+    </span>
+  ) : (
+    <span
+      title="Written before notes carried a branch, or with several branches active. It shows only while no branch is filtered."
+      className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-bold tracking-wide text-amber-800"
+    >
+      NO BRANCH
+    </span>
+  );
+}
+
+const branchOf = (s: NoteScope): string | null =>
+  s.branch === undefined || s.branch === null ? null : String(s.branch);
+
 interface Props {
   cell: CellRef | null;
   notes: readonly PLNote[];
   scopeOrder: readonly ScopeKey[];
-  /** Resolves stable ids back to display names (41309 → "41309 — DM Margin"). */
+  /** Resolves stable ids back to display names (41309 to "41309 — DM Margin"). */
   labelFor?: (key: ScopeKey, value: string) => string;
+  /** Branches the report is scoped to, for the warning on the composer. */
+  activeBranches: readonly string[];
   onClose: () => void;
   /** Opens the detail window for the same cell — the level below it. */
   onOpenDetail: () => void;
@@ -38,20 +68,18 @@ interface Props {
 /**
  * The notes on one cell: read, edit, add.
  *
- * Deliberately separate from the detail window. Someone who already knows a
- * note is there wants to read it, not wait for a breakdown to load; and every
- * note written here is about this cell and nothing else, so there is no anchor
- * to choose. The detail window is where a note can be pointed at a row one
- * level down instead — that is the only difference between them, and it is why
- * both exist.
+ * Laid out in bands rather than one run of text. It used to put the trail, the
+ * "from a more detailed level" tag, both amounts, the author and the date into a
+ * single paragraph and nothing could be found in it. Now each note reads
+ * top-down: which branch and period, what it is anchored to, what it says, and
+ * only then the bookkeeping.
  */
 export function NoteWindow({
-  cell, notes, scopeOrder, labelFor, onClose, onOpenDetail, onChanged,
+  cell, notes, scopeOrder, labelFor, activeBranches, onClose, onOpenDetail, onChanged,
 }: Props) {
   const [error, setError]   = useState("");
   const [draft, setDraft]   = useState("");
   const [saving, setSaving] = useState(false);
-  /** Note being edited, and the text as it stands in the box. */
   const [editId, setEditId]     = useState<string | null>(null);
   const [editText, setEditText] = useState("");
 
@@ -119,6 +147,7 @@ export function NoteWindow({
 
   const { direct, rolledUp } = notesForCell(notes, cell.scope);
   const all = [...direct, ...rolledUp];
+  const cellBranch = branchOf(cell.scope);
 
   return (
     <>
@@ -128,30 +157,28 @@ export function NoteWindow({
         aria-label="Notes"
         className="fixed left-1/2 top-1/2 z-[71] flex max-h-[80vh] w-full max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl"
       >
-        {/* ── The cell these notes are about ──────────────────────────────── */}
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
-          <div className="min-w-0">
-            <p className="flex flex-wrap items-center gap-1 text-[11px] font-medium text-slate-500">
-              {cell.breadcrumb.map((part, i) => (
-                <span key={`${part}-${i}`} className="inline-flex items-center gap-1">
-                  {i > 0 && <span className="text-slate-300">›</span>}
-                  <span className={i === cell.breadcrumb.length - 1 ? "text-[#001A40]" : ""}>{part}</span>
+        {/* The cell these notes are about */}
+        <div className="border-b border-slate-200 px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <BranchChip branch={cellBranch} />
+                <span className="text-[11px] font-semibold text-slate-600">
+                  {cell.month ?? "all months shown"}
                 </span>
-              ))}
-            </p>
-            <p className="mt-1 flex items-baseline gap-2">
-              <span className={`font-mono text-xl font-bold tabular-nums ${cell.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
+              </div>
+              <p className="mt-1.5 truncate text-[11px] text-slate-500" title={cell.breadcrumb.join(" > ")}>
+                {cell.breadcrumb.join(" › ")}
+              </p>
+              <p className={`mt-1 font-mono text-xl font-bold tabular-nums ${cell.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
                 {fmt(cell.amount)}
-              </span>
-              <span className="text-[10px] text-slate-400">
-                {cell.month ?? "all months shown"} · as it stands now
-              </span>
-            </p>
+              </p>
+            </div>
+            <button onClick={onClose} aria-label="Close"
+              className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+              <X size={16} />
+            </button>
           </div>
-          <button onClick={onClose} aria-label="Close"
-            className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
-            <X size={16} />
-          </button>
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-3">
@@ -164,92 +191,30 @@ export function NoteWindow({
 
           {all.map((n) => {
             const isDirect = n.scope_key === cellKey;
-            const trail = scopeBreadcrumb(n.scope, scopeOrder, labelFor ?? defaultScopeLabel);
+            // The branch has its own chip above; repeating it inside the trail
+            // is the kind of duplication that made this window unreadable.
+            const noteBranch = branchOf(n.scope);
+            const trail = scopeBreadcrumb(n.scope, scopeOrder, labelFor ?? defaultScopeLabel)
+              .filter((p) => p !== noteBranch);
             const period = [n.scope.month, n.scope.year].filter(Boolean).join(" ");
             const then = n.amount_at_creation;
-            // A difference is only worth showing when it is real: a cent of
-            // rounding is noise, and on a month still open the figure was always
-            // going to move.
             const moved = then != null && Math.abs(then - cell.amount) > 0.005;
 
             return (
               <div key={n.id} className="border-b border-slate-200/70 py-3 last:border-0">
-                {/* What it is anchored to, in words. The raw scope_key answers
-                    the same question and nobody can read it. */}
-                <p className="flex flex-wrap items-center gap-1 text-[11px] font-medium text-slate-500">
-                  {trail.map((part, i) => (
-                    <span key={`${part}-${i}`} className="inline-flex items-center gap-1">
-                      {i > 0 && <span className="text-slate-300">›</span>}
-                      <span className={i === trail.length - 1 ? "text-[#001A40]" : ""}>{part}</span>
-                    </span>
-                  ))}
-                  {!isDirect && (
-                    <span className="ml-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
-                      from a more detailed level
-                    </span>
-                  )}
-                </p>
-
-                <div className="mt-1 flex flex-wrap items-baseline gap-2">
-                  {period && <span className="text-[11px] font-semibold text-slate-600">{period}</span>}
-                  {/* The figure belongs only to the notes written on the cell
-                      that was opened. A note rolled up from a deeper level is
-                      about a different, smaller figure, and subtracting this one
-                      from what was stored would call the gap between two
-                      different numbers a change. */}
-                  {isDirect ? (
-                    then == null ? (
-                      <span className="text-[10px] text-slate-400">no figure recorded when written</span>
-                    ) : moved ? (
-                      <span className="text-[10px] text-amber-700">
-                        was <span className="font-mono line-through">{fmt(then)}</span>{" "}
-                        · {fmt(cell.amount - then)} since it was written
+                {/* Band 1 — where and when. Always, and always first. */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <BranchChip branch={noteBranch} />
+                    {period && <span className="text-[11px] font-semibold text-slate-600">{period}</span>}
+                    {!isDirect && (
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
+                        from a deeper level
                       </span>
-                    ) : (
-                      <span className="text-[10px] text-slate-400">unchanged since it was written</span>
-                    )
-                  ) : then != null ? (
-                    <span className="text-[10px] text-slate-500">
-                      <span className="font-mono">{fmt(then)}</span> when it was written
-                    </span>
-                  ) : null}
-                </div>
-
-                {editId === n.id ? (
-                  <div className="mt-1.5">
-                    <textarea
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      rows={3}
-                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] text-slate-800 focus:border-[#001A40] focus:outline-none"
-                    />
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <button
-                        onClick={() => saveEdit(n.id)}
-                        disabled={editText.trim().length === 0}
-                        className="rounded-full bg-[#001A40] px-3 py-1 text-[11px] font-bold text-white disabled:opacity-40"
-                      >
-                        Save
-                      </button>
-                      <button
-                        onClick={() => setEditId(null)}
-                        className="text-[11px] text-slate-500 hover:text-slate-700"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-1.5 whitespace-pre-wrap text-sm text-slate-700">{n.note_text}</p>
-                )}
-
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-[10px] text-slate-400">
-                    {n.author ?? "—"} · {when(n.created_at)}
-                    {n.updated_at !== n.created_at && <> · edited {when(n.updated_at)}</>}
+                    )}
                   </span>
                   {editId !== n.id && (
-                    <span className="flex items-center gap-0.5">
+                    <span className="flex shrink-0 items-center gap-0.5">
                       <button
                         onClick={() => { setEditId(n.id); setEditText(n.note_text); }}
                         aria-label="Edit note"
@@ -267,13 +232,69 @@ export function NoteWindow({
                     </span>
                   )}
                 </div>
+
+                {/* Band 2 — what it is anchored to, one line. */}
+                <p className="mt-1 truncate text-[11px] text-slate-400" title={trail.join(" > ")}>
+                  {trail.join(" › ") || "the whole report"}
+                </p>
+
+                {/* Band 3 — the note. The reason the window exists, so it gets
+                    the room and the only full-size type here. */}
+                {editId === n.id ? (
+                  <div className="mt-2">
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      rows={3}
+                      className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-800 focus:border-[#001A40] focus:outline-none"
+                    />
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <button
+                        onClick={() => saveEdit(n.id)}
+                        disabled={editText.trim().length === 0}
+                        className="rounded-full bg-[#001A40] px-3 py-1 text-[11px] font-bold text-white disabled:opacity-40"
+                      >
+                        Save
+                      </button>
+                      <button onClick={() => setEditId(null)} className="text-[11px] text-slate-500 hover:text-slate-700">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800">{n.note_text}</p>
+                )}
+
+                {/* Band 4 — bookkeeping, deliberately quiet. */}
+                <p className="mt-2 text-[10px] text-slate-400">
+                  {n.author ?? "—"} · {when(n.created_at)}
+                  {n.updated_at !== n.created_at && <> · edited {when(n.updated_at)}</>}
+                  {isDirect
+                    ? then == null
+                      ? <> · no figure recorded when written</>
+                      : moved
+                        ? <> · was <span className="font-mono text-amber-700">{fmt(then)}</span>, {fmt(cell.amount - then)} since</>
+                        : <> · unchanged since written</>
+                    : then != null
+                      ? <> · <span className="font-mono">{fmt(then)}</span> when written</>
+                      : null}
+                </p>
               </div>
             );
           })}
         </div>
 
-        {/* ── Add, always on this cell ────────────────────────────────────── */}
+        {/* Add, always on this cell */}
         <div className="border-t border-slate-200 bg-slate-50 px-5 py-3">
+          {/* Without this, someone writes a note believing it belongs to one
+              branch when it belongs to none. */}
+          {!cellBranch && (
+            <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+              {activeBranches.length > 1
+                ? `${activeBranches.length} branches active (${activeBranches.join(", ")}) — a note written now is not tied to any one of them, and will only show while no branch is filtered.`
+                : "No branch filter — a note written now is not tied to a branch, and will only show while no branch is filtered."}
+            </p>
+          )}
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

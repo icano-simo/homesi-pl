@@ -595,6 +595,16 @@ export interface PivotTableDynamicProps {
    *  genuinely has no single period. */
   scopeYear?: number;
   /**
+   * The single branch the report is scoped to, or null when it covers several
+   * (or none). Goes into every cell's scope, so a note written here is anchored
+   * to it and cannot surface under a different branch.
+   *
+   * Null on a multi-branch view on purpose: a scope value is one value, and
+   * there is no single branch to name. Notes written then carry no branch, and
+   * the composer says so before anything is saved.
+   */
+  scopeBranch?: string | null;
+  /**
    * Loan volume by month for the selected bps base, already resolved by the
    * page. Passing resolved numbers rather than raw metrics keeps the corporate
    * branch rule (700) in one place — the endpoint decides, this component only
@@ -1020,6 +1030,7 @@ export function PivotTableDynamic({
   onOrphansChange,
   onResolvedNotes,
   scopeYear,
+  scopeBranch,
   bpsBaseByMonth,
   bpsBaseLabel,
   costCenterFilter,
@@ -1155,8 +1166,11 @@ export function PivotTableDynamic({
   // level, so wrapping the tree in a synthetic root makes the note walk below
   // cover it with the same code path as any other row.
   const baseScope = useMemo<NoteScope>(
-    () => (scopeYear != null ? { year: scopeYear } : {}),
-    [scopeYear],
+    () => ({
+      ...(scopeYear != null ? { year: scopeYear } : {}),
+      ...(scopeBranch ? { branch: scopeBranch } : {}),
+    }),
+    [scopeYear, scopeBranch],
   );
 
   // Seed the tree with baseScope so every node carries the period. Building it

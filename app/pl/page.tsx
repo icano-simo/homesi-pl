@@ -29,7 +29,7 @@ const MONTH_ORDER = [
 
 /** Every dimension a note can be anchored by here, for orphan breadcrumbs. */
 const SCOPE_ORDER: ScopeKey[] = [
-  "cost_center", "op_nonop", "category_6", "category_7", "gl", "month", "year",
+  "branch", "cost_center", "op_nonop", "category_6", "category_7", "gl", "month", "year",
 ];
 
 const CSV_COLUMNS = [
@@ -250,6 +250,18 @@ export default function PLPage() {
   /** Anchor notes to a year only when the report covers exactly one. With
    *  several loaded a month column merges them, so the cell spans periods and
    *  has none to point at. */
+  /**
+   * The one branch the report is scoped to, or null.
+   *
+   * Notes are anchored to it, so it has to be a single value: with several
+   * branches loaded there is no one branch the reader was looking at, and the
+   * composer says so rather than picking one.
+   */
+  const scopeBranch = useMemo(
+    () => (loadedBranches.length === 1 ? loadedBranches[0] : null),
+    [loadedBranches],
+  );
+
   const scopeYear = useMemo(() => {
     const ys = new Set(rawTxs.map(t => t.year).filter((y): y is number => y != null));
     return ys.size === 1 ? [...ys][0] : undefined;
@@ -487,6 +499,7 @@ export default function PLPage() {
           onOrphansChange={setOrphans}
           onResolvedNotes={setPlacedNotes}
           scopeYear={scopeYear}
+          scopeBranch={scopeBranch}
           loading={loading}
           emptyMessage="No transactions found for the selected filters."
         />
@@ -494,6 +507,7 @@ export default function PLPage() {
         <CellDetailModal
           cell={panel?.kind === "cell" ? panel.ref : null}
           notes={placedNotes}
+          activeBranches={loadedBranches}
           onClose={() => setPanel(null)}
           onNoteSaved={() => refreshNotes(loadedYears)}
         />
@@ -503,6 +517,7 @@ export default function PLPage() {
           notes={placedNotes}
           scopeOrder={SCOPE_ORDER}
           labelFor={labelFor}
+          activeBranches={loadedBranches}
           onClose={() => setPanel(null)}
           onChanged={() => refreshNotes(loadedYears)}
           // The short path out of the short window: same cell, full detail,

@@ -28,6 +28,20 @@ export type ScopeKey =
   | PivotField
   | "month"
   | "year"
+  /**
+   * The branch the report was showing when the note was written.
+   *
+   * Not a pivot level — no hierarchy has it — but a constraint of the cell all
+   * the same: the same GL in the same month is a different figure in 700 than
+   * in 710, and until this existed a note written looking at one appeared on
+   * the other. Confirmed on all 6 notes in the table: none carried it.
+   *
+   * The visibility rule needs no special case. A note with branch=700 shows
+   * where the cell constrains branch to 700, and in the unfiltered view which
+   * constrains nothing; a note with no branch shows only in that unfiltered
+   * view, which is exactly what "no branch" should mean.
+   */
+  | "branch"
   | "transaction_id"
   // ── Per-entity log anchors ────────────────────────────────────────────────
   // Same table, different purpose: these identify an entity whose change
@@ -74,6 +88,7 @@ export const SCOPE_LABELS: Record<ScopeKey, string> = {
   loan_number:  "Loan Number",
   month:          "Month",
   year:           "Year",
+  branch:         "Branch",
   transaction_id: "Transaction",
   cost_center_id: "Cost Center",
   assign_type:    "Assignment Type",
@@ -158,6 +173,10 @@ export function scopeForTransaction(
   // happen to be loaded.
   const resolvedYear = year ?? tx.year ?? null;
   if (resolvedYear != null) scope.year = resolvedYear;
+  // The transaction's own branch. Without it a transaction note re-anchored
+  // here would come back branchless and stop matching the cells above it,
+  // which now carry the branch of the report.
+  if (tx.branch) scope.branch = tx.branch;
   scope.transaction_id = tx.id;
   return scope;
 }
@@ -178,7 +197,7 @@ export function scopeForTransaction(
  * than to a cell of the report.
  */
 const PIVOT_SCOPE_KEYS = new Set<string>([
-  ...ALL_FIELDS, "month", "year", "transaction_id",
+  ...ALL_FIELDS, "month", "year", "branch", "transaction_id",
 ]);
 
 /**

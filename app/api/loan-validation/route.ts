@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { isB2BFeeExempt } from "@/lib/loan-branch";
 
 export const dynamic = "force-dynamic";
 
-type ValType = "b2b" | "on_demand" | "processing" | "all_loans";
+// On Demand and Processing were retired from the UI; the type keeps only what
+// is reachable.
+type ValType = "b2b" | "all_loans";
 
 export interface ValidationRow {
   loan_number: string;
@@ -15,7 +18,7 @@ export interface ValidationRow {
   loan_amount: number | null;
   accounting_total: number;
   bps: number | null;
-  status: "match" | "missing";
+  status: "match" | "missing" | "exempt";
   tx_description: string | null;
   tx_movement: number | null;
 }
@@ -41,6 +44,8 @@ export interface ValidationResult {
   summary: {
     match_count: number;
     missing_count: number;
+    /** Fee absent on a branch that does not pay it. Not a finding. */
+    exempt_count: number;
     surplus_count: number;
   };
 }
@@ -67,9 +72,12 @@ export async function GET(req: NextRequest) {
   // is always the full universe; branch only restricts the accounting-side transactions.
 
   if (type === "b2b") loQuery = loQuery.eq("b2b", true);
-  else if (type === "on_demand") loQuery = loQuery.eq("support_on_demand", true);
-  else if (type === "processing") loQuery = loQuery.eq("processing", true);
-  // all_loans: no flag filter
+  // all_loans: no flag filter.
+  //
+  // Brokered loans are dropped from it: they do not earn margin the way banked
+  // loans do, so listing them as "missing in accounting" reports an absence
+  // that was never going to be there. Measured 2026-08-17: 48 brokered of 436.
+  if (type === "all_loans") loQuery = loQuery.eq("loan_info_channel", "Banked - Retail");
 
   const { data: loanOfficials, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
@@ -78,10 +86,7 @@ export async function GET(req: NextRequest) {
   // B2B, On Demand, Processing: match by check_description text regardless of GL code.
   // Recruitment and all_loans: match by GL code 41309 (description text TBD for recruitment).
   const glCode: string | null = type === "all_loans" ? "41309" : null;
-  const descFilter: string | null =
-    type === "b2b"        ? "B2B SUCCESS FEE" :
-    type === "on_demand"  ? "LOA ON DEMAND FEE" :
-    type === "processing" ? "PROCESSING FEE ON FILE" : null;
+  const descFilter: string | null = type === "b2b" ? "B2B SUCCESS FEE" : null;
 
   // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
   // Paginate to avoid Supabase's default 1000-row cap.
@@ -163,7 +168,19 @@ export async function GET(req: NextRequest) {
       loan_amount,
       accounting_total,
       bps,
-      status: total !== undefined ? "match" : "missing",
+      /**
+       * Exempt is not a third kind of absence — it is the same absence, on a
+       * branch that does not pay the fee. 733 and 776 do not owe the B2B
+       * success fee, so no fee found there is correct and must not read as a
+       * finding; the validation exists to catch the branches that are charged
+       * and came back empty.
+       *
+       * Nothing about the detection changes. The check that already ran is the
+       * one that ran; this only decides how its answer is presented.
+       */
+      status: total !== undefined
+        ? "match"
+        : (type === "b2b" && isB2BFeeExempt(lo.branch as string | null)) ? "exempt" : "missing",
       tx_description: b700?.description ?? null,
       tx_movement: b700 != null ? b700.movement : null,
     };
@@ -248,6 +265,7 @@ export async function GET(req: NextRequest) {
     summary: {
       match_count: rows.filter((r) => r.status === "match").length,
       missing_count: rows.filter((r) => r.status === "missing").length,
+      exempt_count: rows.filter((r) => r.status === "exempt").length,
       surplus_count: surplus.length,
     },
   } satisfies ValidationResult);
