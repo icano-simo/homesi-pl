@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
-import { isB2BFeeExempt } from "@/lib/loan-branch";
+import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
 
 export const dynamic = "force-dynamic";
 
@@ -69,8 +69,19 @@ export async function GET(req: NextRequest) {
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
   if (years.length > 0) loQuery = loQuery.in("year", years);
-  // branch filter intentionally NOT applied to loan_officials — the master loan list
-  // is always the full universe; branch only restricts the accounting-side transactions.
+  /**
+   * The branch filter narrows the MASTER LIST — the branch that produced the
+   * loan — and no longer the accounting side. Applied in JS just below, not
+   * here, because the value has to pass through resolveLoanBranchAlias first:
+   * "Affinity" and 716 are one branch, and a SQL `in` on the raw column would
+   * answer for only half of it.
+   *
+   * It used to be the other way round, and that made the screen useless the
+   * moment a branch was picked. The margin of nearly every loan is booked in
+   * the corporate branch 700, so restricting the ACCOUNTING side by branch left
+   * five of eight branches with zero rows against the whole master, and every
+   * loan read as "missing in accounting".
+   */
 
   if (type === "b2b") loQuery = loQuery.eq("b2b", true);
   // all_loans: no flag filter.
@@ -80,8 +91,20 @@ export async function GET(req: NextRequest) {
   // that was never going to be there. Measured 2026-08-17: 48 brokered of 436.
   if (type === "all_loans") loQuery = loQuery.eq("loan_info_channel", "Banked - Retail");
 
-  const { data: loanOfficials, error: loError } = await loQuery;
+  const { data: loanOfficialsAll, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
+
+  /**
+   * The loans this screen is about: the master list of the period, narrowed to
+   * the branches that PRODUCED them, with "Affinity" resolved to 716 by the one
+   * function that owns that rule.
+   */
+  const loanOfficials = branches.length > 0
+    ? (loanOfficialsAll ?? []).filter((lo: Record<string, unknown>) => {
+        const b = resolveLoanBranchAlias(lo.branch as string | null);
+        return b !== null && branches.includes(b);
+      })
+    : (loanOfficialsAll ?? []);
 
   // ── 2. Determine transaction filter strategy ───────────────────────────────
   // B2B, On Demand, Processing: match by check_description text regardless of GL code.
@@ -101,7 +124,10 @@ export async function GET(req: NextRequest) {
     if (descFilter)      q = q.ilike("check_description", `%${descFilter}%`);
     if (months.length  > 0) q = q.in("month",  months);
     if (years.length   > 0) q = q.in("year",   years);
-    if (branches.length > 0) q = q.in("branch", branches);
+    // No branch filter. A loan's fee is matched by loan_number wherever it was
+    // booked — which is the whole point of the change above, and the same rule
+    // /api/loan-detail already follows: the branch of the LOAN and the branch
+    // of the TRANSACTION are different questions.
     return q;
   };
 
@@ -142,9 +168,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Set of loan_numbers from the filtered loan_officials
+  /**
+   * Surplus is judged against the WHOLE master of the period, not against the
+   * branch-filtered list.
+   *
+   * "A fee that belongs to no loan we know of" is the useful signal. "A fee that
+   * belongs to a loan of another branch" is not — with a branch picked, judging
+   * against the narrowed list would turn every other branch's fee into a
+   * finding and bury the real ones.
+   */
   const loSet = new Set<string>(
-    (loanOfficials ?? []).map((lo: Record<string, unknown>) => lo.loan_number as string)
+    (loanOfficialsAll ?? []).map((lo: Record<string, unknown>) => lo.loan_number as string)
   );
 
   // ── 5. Build validation rows (one per loan in loan_officials) ───────────────
@@ -163,7 +197,9 @@ export async function GET(req: NextRequest) {
       loan_number: loanNum,
       borrower_name: lo.borrower_name as string | null,
       loan_officer: lo.loan_officer as string | null,
-      branch: lo.branch as string | null,
+      // Resolved, so this screen and Loan Count name the same branch the same
+      // way. The value in the file stays available in loan_officials.
+      branch: resolveLoanBranchAlias(lo.branch as string | null),
       loan_program: lo.loan_program as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,

@@ -1212,19 +1212,6 @@ export function LoanValidationTab({
           placeholder="Loan # search…"
           className="h-7 w-40 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
         />
-        {selBranches.length > 0 && (
-          // Which side it narrows, said next to it. The filter restricts the
-          // accounting rows by the branch the TRANSACTION was booked in; the
-          // master list is compared whole. Measured on 41309: 332 of its rows
-          // sit in the corporate branch 700, so picking almost any other branch
-          // leaves 0 accounting rows against all 379 loans and every one of
-          // them reads as missing. Stated rather than silently changed —
-          // scoping by the LOAN's branch instead is a change to what this tool
-          // validates, and that is not a decision to make in passing.
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-800">
-            branch narrows the accounting side only — the master list is compared whole
-          </span>
-        )}
         {hasFilters && (
           <button
             onClick={() => { setSelMonths([]); setSelYears([]); setSelBranches([]); setFilterLoanNumber(""); }}
