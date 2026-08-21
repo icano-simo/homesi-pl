@@ -59,6 +59,8 @@ export async function GET(req: NextRequest) {
   const months = searchParams.getAll("month");
   const years = searchParams.getAll("year").map(Number).filter((n) => !isNaN(n));
   const branches = searchParams.getAll("branch");
+  /** Only the tallies, for the roadmap — see the early return at the end. */
+  const summaryOnly = searchParams.get("summary") === "1";
 
   // ── 1. Fetch loan_officials with the appropriate flag filter ────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -297,14 +299,18 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({
-    rows,
-    surplus,
-    summary: {
-      match_count: rows.filter((r) => r.status === "match").length,
-      missing_count: rows.filter((r) => r.status === "missing").length,
-      exempt_count: rows.filter((r) => r.status === "exempt").length,
-      surplus_count: surplus.length,
-    },
-  } satisfies ValidationResult);
+  const summary = {
+    match_count: rows.filter((r) => r.status === "match").length,
+    missing_count: rows.filter((r) => r.status === "missing").length,
+    exempt_count: rows.filter((r) => r.status === "exempt").length,
+    surplus_count: surplus.length,
+  };
+
+  // The same tallies this endpoint already computes, without the rows and the
+  // surplus list that make the response heavy. A landing page needs the number
+  // and nothing else — and it has to be THIS number, not a second count of the
+  // same thing.
+  if (summaryOnly) return NextResponse.json({ rows: [], surplus: [], summary } satisfies ValidationResult);
+
+  return NextResponse.json({ rows, surplus, summary } satisfies ValidationResult);
 }

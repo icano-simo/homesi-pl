@@ -17,6 +17,7 @@ import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-p
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
 import { defaultScopeLabel, isPivotScope } from "@/lib/note-scope";
+import { closePeriod } from "@/lib/close-period";
 import type { CellRef } from "@/lib/cell-ref";
 import type { PLNote, ScopeKey } from "@/lib/note-scope";
 import type { PivotField } from "@/lib/pivot-engine";
@@ -179,9 +180,20 @@ export default function PLPage() {
       setOpts(filterOpts);
       setAllSplits(splits);
       setCostCenters(ccs);
-      const defaultYear = filterOpts.year.length > 0
-        ? [filterOpts.year[filterOpts.year.length - 1]]
-        : [];
+      /**
+       * The year of the month just closed — the same rule as /start, from the
+       * one function that owns it.
+       *
+       * It used to be "the last year in the options", which is the same answer
+       * most of the time and the wrong one every January: on the 2nd of January
+       * the close is December, and the newest year loaded is already the new one.
+       *
+       * The MONTH is deliberately left unselected. This report is read across
+       * months — a column per month is its whole shape — so preselecting one
+       * would collapse the grid to a single column. /start is where a single
+       * period is the subject; here the period is the axis.
+       */
+      const defaultYear = [String(closePeriod().year)];
       setYears(defaultYear);
       if (!autoLoaded.current && defaultYear.length > 0) {
         autoLoaded.current = true;
@@ -405,7 +417,7 @@ export default function PLPage() {
           </span>
         </div>
         <p className="mt-0.5 text-sm text-slate-500">
-          Click a figure to open it one level down — a cost centre into
+          Click a figure to open it one level down — a cost center into
           categories, a category into accounts, an account into descriptions —
           and to write a note about that cell or any row beneath it. Click the
           dot beside a figure to read, edit and add notes on that same cell.

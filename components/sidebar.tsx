@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
+  Home,
   Table2,
   BarChart3,
   TrendingUp,
@@ -31,6 +32,9 @@ type NavGroup = { label: string; icon?: LucideIcon; children: NavLeaf[] };
 type NavItem = NavLeaf | NavGroup;
 
 const NAV_ITEMS: NavItem[] = [
+  // First, because it is the answer to "what do I do now" and the only screen
+  // that says what order the rest go in.
+  { label: "Where to start", href: "/start", icon: Home },
   { label: "Transaction Review", href: "/transactions", icon: Table2 },
   { label: "P&L", href: "/pl", icon: TrendingUp },
   { label: "Vendors", href: "/vendors", icon: Store },
