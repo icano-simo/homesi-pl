@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { useActiveBranches } from "@/components/branch-filter-provider";
+import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
 
 /**
  * The month-close roadmap.
@@ -81,11 +82,6 @@ const STEPS: Step[] = [
     line: "Regular and by cost centre, and leave your notes." },
 ];
 
-const MONTHS = [
-  "January","February","March","April","May","June",
-  "July","August","September","October","November","December",
-];
-
 type Counts = {
   conflicts: number | null;
   unassigned: number | null;
@@ -103,27 +99,50 @@ export default function StartPage() {
 
   const [counts, setCounts] = useState<Counts>({ conflicts: null, unassigned: null, noMargin: null, b2b: null });
   const [loading, setLoading] = useState(true);
+  /** Rows in the selected period. Null while unknown. */
+  const [periodRows, setPeriodRows] = useState<number | null>(null);
 
   /**
-   * The period defaults to the most recent one with data — the one being closed.
-   * Not hardcoded and not remembered: the newest period is the answer that stays
-   * right by itself as months are loaded.
+   * The period defaults to the month just ended — see lib/close-period.ts.
+   *
+   * Chosen before the options are known, and NOT reconciled against them: if
+   * that month has nothing loaded the screen says so and stays on it. Falling
+   * back to another month would put a period on screen that nobody asked for,
+   * and reading July's figures believing they are August is the expensive
+   * mistake this is guarding.
    */
   useEffect(() => {
+    const p = closePeriod();
+    setMonths([p.month]);
+    setYears([String(p.year)]);
+
     fetch("/api/transactions/filter-options")
       .then((r) => r.json())
       .then((d: { month?: string[]; year?: (string | number)[] }) => {
-        const ms = MONTHS.filter((m) => (d.month ?? []).includes(m));
-        const ys = [...(d.year ?? [])].map(String).sort();
-        setMonthOpts(ms);
-        setYearOpts(ys);
-        const y = ys[ys.length - 1];
-        if (y) setYears([y]);
-        // Newest month present in the newest year.
-        if (ms.length) setMonths([ms[ms.length - 1]]);
+        setMonthOpts(MONTH_NAMES_IN_ORDER.filter((m) => (d.month ?? []).includes(m)));
+        setYearOpts([...(d.year ?? [])].map(String).sort());
       })
       .catch(console.error);
   }, []);
+
+  /**
+   * Whether the selected period has any transactions at all.
+   *
+   * Read from /api/transactions, which already answers this: it takes month and
+   * year and returns the count of the same predicate Transaction Review lists.
+   * page=1 brings one page of rows along with it, which is the price of not
+   * writing a second definition of "rows in this period".
+   */
+  useEffect(() => {
+    if (months.length !== 1 || years.length !== 1) { setPeriodRows(null); return; }
+    let cancelled = false;
+    const p = new URLSearchParams({ month: months[0], year: years[0], page: "1" });
+    fetch(`/api/transactions?${p}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { count?: number } | null) => { if (!cancelled) setPeriodRows(d?.count ?? null); })
+      .catch(() => { if (!cancelled) setPeriodRows(null); });
+    return () => { cancelled = true; };
+  }, [months, years]);
 
   const scope = useMemo(() => {
     const p = new URLSearchParams();
@@ -228,6 +247,12 @@ export default function StartPage() {
           {partial && (
             <span className="text-[11px] text-amber-700">
               Without a period and a branch these are whole-table totals, not a to-do list.
+            </span>
+          )}
+          {/* Said out loud rather than fixed by moving to another month. */}
+          {periodRows === 0 && months.length === 1 && years.length === 1 && (
+            <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800">
+              {months[0]} {years[0]} has no transactions loaded
             </span>
           )}
         </div>
