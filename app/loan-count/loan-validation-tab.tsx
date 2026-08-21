@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
 import { ChevronDown, ChevronRight, Download, AlertTriangle, CheckCircle, TrendingUp } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import * as XLSX from "xlsx";
-import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
+import { useActiveBranches } from "@/components/branch-filter-provider";
 import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan-validation/route";
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
@@ -1192,7 +1192,26 @@ export function LoanValidationTab({
   const [selBranches, setSelBranches] = useState<string[]>([]);
   const [filterLoanNumber, setFilterLoanNumber] = useState("");
 
-  const effectiveBranches = mergeWithGlobal(activeBranches, selBranches);
+  /**
+   * The Branch filter of this tab, and only this tab.
+   *
+   * It used to be mergeWithGlobal(activeBranches, selBranches), which returns
+   * the GLOBAL list whenever the local one is empty — so with every dropdown
+   * here clear, a global branch filter was still reaching the endpoint. That was
+   * harmless while `branch` narrowed the accounting side; it stopped being
+   * harmless the moment it started narrowing the master list, because the
+   * global filter names ACCOUNTING branches and loan_officials has none of them
+   * in common with the usual choice: its branches are 150 276 701 702 703 707
+   * 710 716 718 724 728 733 741 747 760 770 771 776 and Affinity — there is no
+   * 700. Filtering the master by 700 returns nothing, which is exactly the
+   * empty screen this produced.
+   *
+   * So the global accounting filter no longer feeds this screen at all. It has
+   * nothing to act on here either: the transactions are matched by loan number
+   * regardless of where they are booked.
+   */
+  const loanBranches = selBranches;
+  const globalBranchIgnored = activeBranches.length > 0;
 
   const yearOptions = allYears.map(String);
   const hasFilters = selMonths.length > 0 || selYears.length > 0 || selBranches.length > 0 || filterLoanNumber !== "";
@@ -1212,6 +1231,14 @@ export function LoanValidationTab({
           placeholder="Loan # search…"
           className="h-7 w-40 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-300"
         />
+        {globalBranchIgnored && (
+          <span
+            title="This screen filters by the branch that produced the loan; the global filter names accounting branches."
+            className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] text-slate-600"
+          >
+            global branch filter ({activeBranches.join(", ")}) does not apply here
+          </span>
+        )}
         {hasFilters && (
           <button
             onClick={() => { setSelMonths([]); setSelYears([]); setSelBranches([]); setFilterLoanNumber(""); }}
@@ -1245,7 +1272,7 @@ export function LoanValidationTab({
         <AllLoansSection
           months={selMonths}
           years={selYears}
-          branches={effectiveBranches}
+          branches={loanBranches}
           filterLoanNumber={filterLoanNumber}
         />
       ) : (
@@ -1256,7 +1283,7 @@ export function LoanValidationTab({
             glLabel={t.glLabel}
             months={selMonths}
             years={selYears}
-            branches={effectiveBranches}
+            branches={loanBranches}
             filterLoanNumber={filterLoanNumber}
           />
         ))
