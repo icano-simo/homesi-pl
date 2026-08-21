@@ -16,7 +16,7 @@ import { hierarchyLabel, hierarchyLevels, SHAPE_LABELS, type HierarchyShape } fr
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
-import { defaultScopeLabel } from "@/lib/note-scope";
+import { defaultScopeLabel, isPivotScope } from "@/lib/note-scope";
 import type { CellRef } from "@/lib/cell-ref";
 import type { PLNote, ScopeKey } from "@/lib/note-scope";
 import type { PivotField } from "@/lib/pivot-engine";
@@ -291,6 +291,25 @@ export default function PLPage() {
     };
   }, [rawTxs]);
 
+  /**
+   * Notes a branch filter is hiding right now.
+   *
+   * A note with no branch in its scope only shows where no branch is
+   * constrained — that is the rule and it is the one we wanted. But a note that
+   * vanishes without a word reads as a note that was lost: someone went looking
+   * for the two June notes and thought they had been deleted. So when a branch
+   * filter is on and there are branchless notes it is hiding, the page says how
+   * many.
+   *
+   * Counted from the notes for this year that belong to the report at all —
+   * NotesLog entries anchored to a cost centre or an employee are not part of
+   * the pivot and were never going to show here.
+   */
+  const hiddenByBranch = useMemo(() => {
+    if (!scopeBranch) return 0;
+    return notes.filter((n) => isPivotScope(n.scope) && n.scope.branch === undefined).length;
+  }, [notes, scopeBranch]);
+
   const loadedChips: { label: string; value: string }[] = [];
   if (loadedYears.length > 0)
     loadedChips.push({ label: "Year", value: loadedYears.length === 1 ? loadedYears[0] : `${loadedYears.length} years` });
@@ -392,6 +411,17 @@ export default function PLPage() {
           dot beside a figure to read, edit and add notes on that same cell.
         </p>
       </div>
+
+      {hiddenByBranch > 0 && (
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[11px] text-amber-800">
+          <span className="font-semibold">
+            {hiddenByBranch} note{hiddenByBranch === 1 ? "" : "s"} with no branch {hiddenByBranch === 1 ? "is" : "are"} not shown with this filter.
+          </span>{" "}
+          They were written before notes carried a branch, or with several branches active, so they
+          only appear while no branch is filtered. Clear the Branch filter to read them — nothing has
+          been deleted.
+        </p>
+      )}
 
       {/* Indicator legend — the two dot styles are not self-evident. */}
       <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-xs">

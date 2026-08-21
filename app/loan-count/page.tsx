@@ -23,6 +23,7 @@ const CSV_COLUMNS = [
   { key: "borrower_name",     label: "Borrower Name" },
   { key: "loan_officer",      label: "Loan Officer" },
   { key: "lead_source_lo",    label: "Lead Source LO" },
+  { key: "loan_program",      label: "Loan Program" },
   { key: "loan_info_channel", label: "Loan Info Channel" },
   { key: "branch",            label: "Branch" },
   { key: "loan_amount",       label: "Loan Amount" },
@@ -628,6 +629,7 @@ export default function LoanCountPage() {
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Borrower Name</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Loan Officer</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Lead Source LO</th>
+                <th className="px-3 py-2.5 font-medium whitespace-nowrap">Loan Program</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Loan Info Channel</th>
                 <th className="px-3 py-2.5 font-medium whitespace-nowrap">Branch</th>
                 <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">Loan Amount</th>
@@ -662,6 +664,9 @@ export default function LoanCountPage() {
                       onSave={(v) => handleUpdate(loan, "lead_source_lo", v)}
                       disabled={!!saving[loan.id] || isSavingAll}
                     />
+                  </td>
+                  <td className="max-w-[150px] truncate px-3 py-2 text-gray-600" title={loan.loan_program ?? undefined}>
+                    {loan.loan_program ?? "—"}
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
                     {loan.loan_info_channel ?? "—"}

@@ -312,7 +312,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
             <table className="w-full border-collapse text-xs">
               <thead className="sticky top-0 z-10 bg-slate-100/95">
                 <tr className="border-b-2 border-slate-200 text-left">
-                  <Th>Loan</Th><Th>Borrower</Th><Th className="text-center">Br</Th>
+                  <Th>Loan</Th><Th>Borrower</Th><Th>Program</Th><Th className="text-center">Br</Th>
                   <Th className="text-right">Amount</Th>
                   {marginCols.map((c) => (
                     <Th key={c} className={`text-right ${extra.includes(c) ? "bg-amber-50 text-amber-800" : ""}`}>{c}</Th>
@@ -335,6 +335,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                       {l.loan_number} <Signals l={l} />
                     </Td>
                     <Td className="max-w-[160px] truncate">{l.borrower_name ?? "—"}</Td>
+                    <Td className="max-w-[150px] truncate" title={l.loan_program ?? undefined}>{l.loan_program ?? "—"}</Td>
                     <Td className="text-center font-mono">{l.branch}</Td>
                     <Td className="text-right font-mono tabular-nums">{money(l.loan_amount)}</Td>
                     {marginCols.map((c) => (
@@ -363,7 +364,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                       <span className="text-rose-700">{totals.without_margin} with no margin</span>
                     )}
                   </Td>
-                  <Td />
+                  <Td /><Td />
                   <Td className="text-right font-mono tabular-nums text-[#001A40]">
                     {money(totals.volume)}
                   </Td>
@@ -691,8 +692,10 @@ function Th({ children, className = "" }: { children: React.ReactNode; className
   return <th className={`whitespace-nowrap px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-700 ${className}`}>{children}</th>;
 }
 
-function Td({ children = null, className = "" }: { children?: React.ReactNode; className?: string }) {
-  return <td className={`whitespace-nowrap px-2 py-1.5 text-slate-700 ${className}`}>{children}</td>;
+function Td({ children = null, className = "", title }: { children?: React.ReactNode; className?: string; title?: string }) {
+  // `title` so a truncated cell can still be read in full on hover — the same
+  // rule the hierarchy column of the P&L uses.
+  return <td title={title} className={`whitespace-nowrap px-2 py-1.5 text-slate-700 ${className}`}>{children}</td>;
 }
 
 function Signal({ label }: { label: string }) {

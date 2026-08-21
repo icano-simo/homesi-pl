@@ -376,6 +376,7 @@ function ValidationTable({
             <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Number</th>
             <th className="px-3 py-2 font-medium">Borrower Name</th>
             {showLoanOfficer && <th className="px-3 py-2 font-medium">Loan Officer</th>}
+            <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Program</th>
             <th className="px-3 py-2 font-medium">Branch</th>
             <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
             {showLoanAmount && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>}
@@ -422,6 +423,7 @@ function ValidationTable({
                     {row.loan_officer ?? "—"}
                   </td>
                 )}
+                <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.loan_program ?? undefined}>{row.loan_program ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.month ?? "—"}</td>
                 {showLoanAmount && (
@@ -892,6 +894,7 @@ function DetailView({
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Number</th>
             {filterHeader("borrower_name", "Borrower Name")}
             {filterHeader("loan_officer", "Loan Officer")}
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Program</th>
             <th className="px-3 py-2 font-medium text-left">Branch</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month / Year</th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
@@ -921,6 +924,7 @@ function DetailView({
                 <td className="px-3 py-1.5 font-mono text-gray-800 whitespace-nowrap">{row.loan_number}</td>
                 <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.borrower_name ?? ""}>{row.borrower_name ?? "—"}</td>
                 <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.loan_officer ?? ""}>{row.loan_officer ?? "—"}</td>
+                <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.loan_program ?? undefined}>{row.loan_program ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">
                   {row.month ?? "—"}{row.year ? ` ${row.year}` : ""}
