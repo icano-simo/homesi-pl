@@ -417,7 +417,7 @@ export default function PLPage() {
           </span>
         </div>
         <p className="mt-0.5 text-sm text-slate-500">
-          Click a figure to open it one level down — a cost centre into
+          Click a figure to open it one level down — a cost center into
           categories, a category into accounts, an account into descriptions —
           and to write a note about that cell or any row beneath it. Click the
           dot beside a figure to read, edit and add notes on that same cell.

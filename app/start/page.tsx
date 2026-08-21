@@ -79,7 +79,7 @@ const STEPS: Step[] = [
     warn: "If it does not match, stop here." },
   { n: 8, band: "close", icon: TrendingUp, href: "/pl",
     title: "Review the variances",
-    line: "Regular and by cost centre, and leave your notes." },
+    line: "Regular and by cost center, and leave your notes." },
 ];
 
 type Counts = {
