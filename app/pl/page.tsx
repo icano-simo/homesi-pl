@@ -16,7 +16,7 @@ import { hierarchyLabel, hierarchyLevels, SHAPE_LABELS, type HierarchyShape } fr
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
-import { defaultScopeLabel, isPivotScope } from "@/lib/note-scope";
+import { defaultScopeLabel, isPivotScope, reportBaseScope, scopeContains } from "@/lib/note-scope";
 import { closePeriod } from "@/lib/close-period";
 import type { CellRef } from "@/lib/cell-ref";
 import type { PLNote, ScopeKey } from "@/lib/note-scope";
@@ -274,6 +274,18 @@ export default function PLPage() {
     [loadedBranches],
   );
 
+  /**
+   * The one cost centre the report is scoped to, or null.
+   *
+   * Same rule as the branch: a single value or nothing. The filter holds display
+   * names, so it is resolved back to the stable value the pivot groups by —
+   * a cost_center_id, or the "__unassigned__" / "__conflict__" sentinels.
+   */
+  const scopeCostCenter = useMemo(
+    () => (costCenterFilter && costCenterFilter.length === 1 ? costCenterFilter[0] : null),
+    [costCenterFilter],
+  );
+
   const scopeYear = useMemo(() => {
     const ys = new Set(rawTxs.map(t => t.year).filter((y): y is number => y != null));
     return ys.size === 1 ? [...ys][0] : undefined;
@@ -317,10 +329,35 @@ export default function PLPage() {
    * NotesLog entries anchored to a cost centre or an employee are not part of
    * the pivot and were never going to show here.
    */
-  const hiddenByBranch = useMemo(() => {
-    if (!scopeBranch) return 0;
-    return notes.filter((n) => isPivotScope(n.scope) && n.scope.branch === undefined).length;
-  }, [notes, scopeBranch]);
+  /**
+   * The notes the active filters are hiding, and why — one list, not one per
+   * dimension.
+   *
+   * Tested with the same scopeContains the report uses against the same
+   * reportBaseScope the pivot seeds its tree with, so this cannot disagree with
+   * what is actually on screen. A note is hidden when it does not carry every
+   * constraint the cells now carry: no branch while a branch is filtered, no
+   * cost centre — or a different one — while a cost centre is.
+   *
+   * One message covering both. Two banners in the same bar is noise, and the
+   * reader does not care which dimension did it until they open it.
+   */
+  const hidden = useMemo(() => {
+    const base = reportBaseScope({ year: scopeYear, branch: scopeBranch, costCenter: scopeCostCenter });
+    if (!scopeBranch && !scopeCostCenter) return [];
+    const ccName = (v: unknown) =>
+      costCenters.find((c) => c.id === String(v))?.name ?? String(v);
+    return notes
+      .filter((n) => isPivotScope(n.scope) && !scopeContains(n.scope, base))
+      .map((n) => {
+        const why: string[] = [];
+        if (scopeBranch && n.scope.branch === undefined) why.push("no branch");
+        else if (scopeBranch && String(n.scope.branch) !== scopeBranch) why.push(`branch ${n.scope.branch}`);
+        if (scopeCostCenter && n.scope.cost_center === undefined) why.push("no cost center");
+        else if (scopeCostCenter && String(n.scope.cost_center) !== scopeCostCenter) why.push(ccName(n.scope.cost_center));
+        return { note: n, why: why.join(" · ") || "outside the active filters" };
+      });
+  }, [notes, scopeYear, scopeBranch, scopeCostCenter, costCenters]);
 
   const loadedChips: { label: string; value: string }[] = [];
   if (loadedYears.length > 0)
@@ -424,15 +461,27 @@ export default function PLPage() {
         </p>
       </div>
 
-      {hiddenByBranch > 0 && (
-        <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[11px] text-amber-800">
-          <span className="font-semibold">
-            {hiddenByBranch} note{hiddenByBranch === 1 ? "" : "s"} with no branch {hiddenByBranch === 1 ? "is" : "are"} not shown with this filter.
-          </span>{" "}
-          They were written before notes carried a branch, or with several branches active, so they
-          only appear while no branch is filtered. Clear the Branch filter to read them — nothing has
-          been deleted.
-        </p>
+      {hidden.length > 0 && (
+        <details className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[11px] text-amber-800">
+          <summary className="cursor-pointer font-semibold">
+            {hidden.length} note{hidden.length === 1 ? "" : "s"} not shown with the active filters —
+            nothing has been deleted
+          </summary>
+          <p className="mt-1.5">
+            A note only appears where the report carries every constraint the note does. Clear the
+            filter it names to read it.
+          </p>
+          <ul className="mt-1.5 flex flex-col gap-1">
+            {hidden.map(({ note, why }) => (
+              <li key={note.id} className="flex flex-wrap items-baseline gap-1.5">
+                <span className="rounded-full border border-amber-300 bg-amber-100/60 px-1.5 py-0.5 text-[10px] font-semibold">
+                  {why}
+                </span>
+                <span className="truncate">{note.note_text}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {/* Indicator legend — the two dot styles are not self-evident. */}
@@ -452,6 +501,15 @@ export default function PLPage() {
         <span className="text-[11px] text-slate-400">
           Click a dot to read, edit and add · click the figure to open one level down
         </span>
+        {/* Correct behaviour that reads as a fault, so it gets said. In Regular
+            no cell constrains a cost center, so a note anchored to one can only
+            ever appear as inherited — never as its own. */}
+        {shape === "regular" && (
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] text-slate-500">
+            Regular has no cost center level, so notes anchored to a cost center show as inherited
+            here. Switch to Cost Center to see them on their own row.
+          </span>
+        )}
       </div>
 
       {/* Per-month loan metrics — the same panel P&L All shows, from the same
@@ -542,6 +600,7 @@ export default function PLPage() {
           onResolvedNotes={setPlacedNotes}
           scopeYear={scopeYear}
           scopeBranch={scopeBranch}
+          scopeCostCenter={scopeCostCenter}
           loading={loading}
           emptyMessage="No transactions found for the selected filters."
         />
@@ -552,6 +611,7 @@ export default function PLPage() {
           activeBranches={loadedBranches}
           onClose={() => setPanel(null)}
           onNoteSaved={() => refreshNotes(loadedYears)}
+          onOpenNotes={() => setPanel(panel?.kind === "cell" ? { kind: "notes", ref: panel.ref } : null)}
         />
 
         <NoteWindow
