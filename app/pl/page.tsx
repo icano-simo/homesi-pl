@@ -9,6 +9,7 @@ import { useLoanMetrics } from "@/lib/use-loan-metrics";
 import { LoanDetailDrawer } from "@/components/loan-detail-drawer";
 import { CellDetailModal } from "@/components/cell-detail-modal";
 import { NoteWindow } from "@/components/note-window";
+import { HiddenNotesBadge, HiddenNotesModal, type HiddenNote } from "@/components/hidden-notes";
 import { NotesLog } from "@/components/notes-log";
 import { buildSplitsMap } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
@@ -69,6 +70,7 @@ type Panel =
   | { kind: "loans"; month: string }
   | { kind: "cell";  ref: CellRef }
   | { kind: "notes"; ref: CellRef }
+  | { kind: "hidden" }
   | null;
 
 function FilterChip({ label, value }: { label: string; value: string }) {
@@ -349,13 +351,18 @@ export default function PLPage() {
       costCenters.find((c) => c.id === String(v))?.name ?? String(v);
     return notes
       .filter((n) => isPivotScope(n.scope) && !scopeContains(n.scope, base))
-      .map((n) => {
-        const why: string[] = [];
-        if (scopeBranch && n.scope.branch === undefined) why.push("no branch");
-        else if (scopeBranch && String(n.scope.branch) !== scopeBranch) why.push(`branch ${n.scope.branch}`);
-        if (scopeCostCenter && n.scope.cost_center === undefined) why.push("no cost center");
-        else if (scopeCostCenter && String(n.scope.cost_center) !== scopeCostCenter) why.push(ccName(n.scope.cost_center));
-        return { note: n, why: why.join(" · ") || "outside the active filters" };
+      .map<HiddenNote>((n) => {
+        // Which dimension actually puts it out of scope. Both are shown either
+        // way; this is what the modal paints amber.
+        const reasons: string[] = [];
+        if (scopeCostCenter && String(n.scope.cost_center ?? "") !== scopeCostCenter) reasons.push("cost_center");
+        if (scopeBranch && String(n.scope.branch ?? "") !== scopeBranch) reasons.push("branch");
+        return {
+          note: n,
+          costCenter: n.scope.cost_center != null ? ccName(n.scope.cost_center) : null,
+          branch: n.scope.branch != null ? String(n.scope.branch) : null,
+          reasons,
+        };
       });
   }, [notes, scopeYear, scopeBranch, scopeCostCenter, costCenters]);
 
@@ -461,29 +468,6 @@ export default function PLPage() {
         </p>
       </div>
 
-      {hidden.length > 0 && (
-        <details className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[11px] text-amber-800">
-          <summary className="cursor-pointer font-semibold">
-            {hidden.length} note{hidden.length === 1 ? "" : "s"} not shown with the active filters —
-            nothing has been deleted
-          </summary>
-          <p className="mt-1.5">
-            A note only appears where the report carries every constraint the note does. Clear the
-            filter it names to read it.
-          </p>
-          <ul className="mt-1.5 flex flex-col gap-1">
-            {hidden.map(({ note, why }) => (
-              <li key={note.id} className="flex flex-wrap items-baseline gap-1.5">
-                <span className="rounded-full border border-amber-300 bg-amber-100/60 px-1.5 py-0.5 text-[10px] font-semibold">
-                  {why}
-                </span>
-                <span className="truncate">{note.note_text}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
       {/* Indicator legend — the two dot styles are not self-evident. */}
       <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-xs">
         <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-600">
@@ -501,15 +485,19 @@ export default function PLPage() {
         <span className="text-[11px] text-slate-400">
           Click a dot to read, edit and add · click the figure to open one level down
         </span>
-        {/* Correct behaviour that reads as a fault, so it gets said. In Regular
-            no cell constrains a cost center, so a note anchored to one can only
-            ever appear as inherited — never as its own. */}
+        {/* Correct behaviour that reads as a fault, so it still gets said — but
+            in a chip with the explanation on hover, not a paragraph. The wording
+            is unchanged; the space it takes is not. */}
         {shape === "regular" && (
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] text-slate-500">
-            Regular has no cost center level, so notes anchored to a cost center show as inherited
-            here. Switch to Cost Center to see them on their own row.
+          <span
+            title="Regular has no cost center level, so notes anchored to a cost center show as inherited here. Switch to Cost Center to see them on their own row."
+            className="cursor-help rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500"
+          >
+            cost center notes show as inherited here
           </span>
         )}
+        {/* A warning, so it is absent when there is nothing to warn about. */}
+        <HiddenNotesBadge count={hidden.length} onOpen={() => setPanel({ kind: "hidden" })} />
       </div>
 
       {/* Per-month loan metrics — the same panel P&L All shows, from the same
@@ -625,6 +613,12 @@ export default function PLPage() {
           // The short path out of the short window: same cell, full detail,
           // and the only place a note is written.
           onOpenDetail={() => setPanel(panel?.kind === "notes" ? { kind: "cell", ref: panel.ref } : null)}
+        />
+
+        <HiddenNotesModal
+          open={panel?.kind === "hidden"}
+          notes={hidden}
+          onClose={() => setPanel(null)}
         />
 
         <LoanDetailDrawer
