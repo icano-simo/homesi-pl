@@ -9,6 +9,7 @@ import { useLoanMetrics } from "@/lib/use-loan-metrics";
 import { LoanDetailDrawer } from "@/components/loan-detail-drawer";
 import { CellDetailModal } from "@/components/cell-detail-modal";
 import { NoteWindow } from "@/components/note-window";
+import { HiddenNotesBadge, HiddenNotesModal, type HiddenNote } from "@/components/hidden-notes";
 import { NotesLog } from "@/components/notes-log";
 import { buildSplitsMap } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
@@ -16,7 +17,7 @@ import { hierarchyLabel, hierarchyLevels, SHAPE_LABELS, type HierarchyShape } fr
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
-import { defaultScopeLabel, isPivotScope } from "@/lib/note-scope";
+import { defaultScopeLabel, isPivotScope, reportBaseScope, scopeContains } from "@/lib/note-scope";
 import { closePeriod } from "@/lib/close-period";
 import type { CellRef } from "@/lib/cell-ref";
 import type { PLNote, ScopeKey } from "@/lib/note-scope";
@@ -69,6 +70,7 @@ type Panel =
   | { kind: "loans"; month: string }
   | { kind: "cell";  ref: CellRef }
   | { kind: "notes"; ref: CellRef }
+  | { kind: "hidden" }
   | null;
 
 function FilterChip({ label, value }: { label: string; value: string }) {
@@ -274,6 +276,18 @@ export default function PLPage() {
     [loadedBranches],
   );
 
+  /**
+   * The one cost centre the report is scoped to, or null.
+   *
+   * Same rule as the branch: a single value or nothing. The filter holds display
+   * names, so it is resolved back to the stable value the pivot groups by —
+   * a cost_center_id, or the "__unassigned__" / "__conflict__" sentinels.
+   */
+  const scopeCostCenter = useMemo(
+    () => (costCenterFilter && costCenterFilter.length === 1 ? costCenterFilter[0] : null),
+    [costCenterFilter],
+  );
+
   const scopeYear = useMemo(() => {
     const ys = new Set(rawTxs.map(t => t.year).filter((y): y is number => y != null));
     return ys.size === 1 ? [...ys][0] : undefined;
@@ -317,10 +331,40 @@ export default function PLPage() {
    * NotesLog entries anchored to a cost centre or an employee are not part of
    * the pivot and were never going to show here.
    */
-  const hiddenByBranch = useMemo(() => {
-    if (!scopeBranch) return 0;
-    return notes.filter((n) => isPivotScope(n.scope) && n.scope.branch === undefined).length;
-  }, [notes, scopeBranch]);
+  /**
+   * The notes the active filters are hiding, and why — one list, not one per
+   * dimension.
+   *
+   * Tested with the same scopeContains the report uses against the same
+   * reportBaseScope the pivot seeds its tree with, so this cannot disagree with
+   * what is actually on screen. A note is hidden when it does not carry every
+   * constraint the cells now carry: no branch while a branch is filtered, no
+   * cost centre — or a different one — while a cost centre is.
+   *
+   * One message covering both. Two banners in the same bar is noise, and the
+   * reader does not care which dimension did it until they open it.
+   */
+  const hidden = useMemo(() => {
+    const base = reportBaseScope({ year: scopeYear, branch: scopeBranch, costCenter: scopeCostCenter });
+    if (!scopeBranch && !scopeCostCenter) return [];
+    const ccName = (v: unknown) =>
+      costCenters.find((c) => c.id === String(v))?.name ?? String(v);
+    return notes
+      .filter((n) => isPivotScope(n.scope) && !scopeContains(n.scope, base))
+      .map<HiddenNote>((n) => {
+        // Which dimension actually puts it out of scope. Both are shown either
+        // way; this is what the modal paints amber.
+        const reasons: string[] = [];
+        if (scopeCostCenter && String(n.scope.cost_center ?? "") !== scopeCostCenter) reasons.push("cost_center");
+        if (scopeBranch && String(n.scope.branch ?? "") !== scopeBranch) reasons.push("branch");
+        return {
+          note: n,
+          costCenter: n.scope.cost_center != null ? ccName(n.scope.cost_center) : null,
+          branch: n.scope.branch != null ? String(n.scope.branch) : null,
+          reasons,
+        };
+      });
+  }, [notes, scopeYear, scopeBranch, scopeCostCenter, costCenters]);
 
   const loadedChips: { label: string; value: string }[] = [];
   if (loadedYears.length > 0)
@@ -424,17 +468,6 @@ export default function PLPage() {
         </p>
       </div>
 
-      {hiddenByBranch > 0 && (
-        <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[11px] text-amber-800">
-          <span className="font-semibold">
-            {hiddenByBranch} note{hiddenByBranch === 1 ? "" : "s"} with no branch {hiddenByBranch === 1 ? "is" : "are"} not shown with this filter.
-          </span>{" "}
-          They were written before notes carried a branch, or with several branches active, so they
-          only appear while no branch is filtered. Clear the Branch filter to read them — nothing has
-          been deleted.
-        </p>
-      )}
-
       {/* Indicator legend — the two dot styles are not self-evident. */}
       <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-xs">
         <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-600">
@@ -452,6 +485,19 @@ export default function PLPage() {
         <span className="text-[11px] text-slate-400">
           Click a dot to read, edit and add · click the figure to open one level down
         </span>
+        {/* Correct behaviour that reads as a fault, so it still gets said — but
+            in a chip with the explanation on hover, not a paragraph. The wording
+            is unchanged; the space it takes is not. */}
+        {shape === "regular" && (
+          <span
+            title="Regular has no cost center level, so notes anchored to a cost center show as inherited here. Switch to Cost Center to see them on their own row."
+            className="cursor-help rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500"
+          >
+            cost center notes show as inherited here
+          </span>
+        )}
+        {/* A warning, so it is absent when there is nothing to warn about. */}
+        <HiddenNotesBadge count={hidden.length} onOpen={() => setPanel({ kind: "hidden" })} />
       </div>
 
       {/* Per-month loan metrics — the same panel P&L All shows, from the same
@@ -542,6 +588,7 @@ export default function PLPage() {
           onResolvedNotes={setPlacedNotes}
           scopeYear={scopeYear}
           scopeBranch={scopeBranch}
+          scopeCostCenter={scopeCostCenter}
           loading={loading}
           emptyMessage="No transactions found for the selected filters."
         />
@@ -552,6 +599,7 @@ export default function PLPage() {
           activeBranches={loadedBranches}
           onClose={() => setPanel(null)}
           onNoteSaved={() => refreshNotes(loadedYears)}
+          onOpenNotes={() => setPanel(panel?.kind === "cell" ? { kind: "notes", ref: panel.ref } : null)}
         />
 
         <NoteWindow
@@ -565,6 +613,12 @@ export default function PLPage() {
           // The short path out of the short window: same cell, full detail,
           // and the only place a note is written.
           onOpenDetail={() => setPanel(panel?.kind === "notes" ? { kind: "cell", ref: panel.ref } : null)}
+        />
+
+        <HiddenNotesModal
+          open={panel?.kind === "hidden"}
+          notes={hidden}
+          onClose={() => setPanel(null)}
         />
 
         <LoanDetailDrawer

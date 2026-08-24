@@ -48,8 +48,11 @@ export function CellDetailModal({
   activeBranches,
   onClose,
   onNoteSaved,
+  onOpenNotes,
 }: {
   cell: CellRef | null;
+  /** Opens the notes window on this same cell — every note inside its scope. */
+  onOpenNotes: () => void;
   /** Resolved notes, for the indicators on the breakdown rows. */
   notes: readonly PLNote[];
   /** Branches the report is scoped to, for the warning on the composer. */
@@ -58,9 +61,14 @@ export function CellDetailModal({
   onNoteSaved: () => void;
 }) {
   /**
-   * Which description to group by, as an index into `cell.descriptions`. Null
-   * until the reader picks: preselecting would hide that the right choice is
-   * account-dependent, which is the whole reason the choice exists.
+   * Which description to group by, as an index into `cell.descriptions`.
+   *
+   * Preselected to whichever has the most rows IN THIS CELL — the data picks it,
+   * not a fixed default. What was rejected earlier was a fixed one: Office
+   * Expense keeps its content in Description 2 and 3, so defaulting to
+   * Description 1 there produced a blank list that read as a broken page. A
+   * choice made by the counts can never land on an empty one, and the counts
+   * stay on screen so it is visible and one click to change.
    */
   const [descIdx, setDescIdx] = useState<number | null>(null);
   /** Null until a description is picked, then seeded from its suggestion. */
@@ -87,8 +95,16 @@ export function CellDetailModal({
   // A new cell is a new set of choices.
   const cellKey = cell ? JSON.stringify(cell.scope) : "";
   useEffect(() => {
-    setDescIdx(null); setMode(null); setMonthFilter(null);
+    const ds = cell?.descriptions ?? null;
+    // The best-populated one, and only when something is populated at all.
+    const best = ds && ds.some((d) => d.populated > 0)
+      ? ds.reduce((a, b, i) => (b.populated > ds[a].populated ? i : a), 0)
+      : null;
+    setDescIdx(best);
+    setMode(best != null ? ds![best].suggestedMode : null);
+    setMonthFilter(null);
     setPicked(null); setGrain(""); setDraft(""); setSaveError("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cellKey]);
 
   const desc = cell && descIdx != null ? cell.descriptions?.[descIdx] ?? null : null;
@@ -161,6 +177,17 @@ export function CellDetailModal({
   }, [cell, picked, mode, rowByKey, cellByKey]);
 
   const anchor = anchors.find((o) => o.id === grain)?.a ?? null;
+
+  /**
+   * Every note that falls inside this cell, at this level or any below it.
+   *
+   * The same containment the report uses, so the number cannot disagree with
+   * what the notes window then lists.
+   */
+  const notesInScope = useMemo(
+    () => (cell ? notes.filter((n) => scopeContains(n.scope, cell.scope)).length : 0),
+    [cell, notes],
+  );
 
   if (!cell) return null;
 
@@ -263,10 +290,23 @@ export function CellDetailModal({
               </span>
             </p>
           </div>
-          <button onClick={onClose} aria-label="Close"
-            className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
-            <X size={16} />
-          </button>
+          <span className="flex shrink-0 items-center gap-2">
+            {/* Every note in this scope, from any level below — not only the ones
+                anchored to this exact cell. Reaching them used to mean finding
+                the right dot in the grid and knowing which one it was. */}
+            {notesInScope > 0 && (
+              <button
+                onClick={onOpenNotes}
+                className="rounded-full border border-[#FF4040]/30 bg-[#FF4040]/5 px-2.5 py-1 text-[11px] font-semibold text-[#FF4040] hover:bg-[#FF4040]/10"
+              >
+                {notesInScope} note{notesInScope === 1 ? "" : "s"} in this scope
+              </button>
+            )}
+            <button onClick={onClose} aria-label="Close"
+              className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+              <X size={16} />
+            </button>
+          </span>
         </div>
 
         {/* ── Which description, and how to read it ───────────────────────── */}

@@ -18,6 +18,7 @@ import { createPortal } from "react-dom";
 import {
   buildNoteIndex,
   cellKey,
+  reportBaseScope,
   notesForCell,
   resolveNotes,
   type NoteLevel,
@@ -639,6 +640,19 @@ export interface PivotTableDynamicProps {
   onDrillCell?: (ref: CellRef) => void;
   /** Opens the notes-only window. Reached from the dot, never from a figure. */
   onOpenNotes?: (ref: CellRef) => void;
+  /**
+   * The single cost centre the report is filtered to, or null.
+   *
+   * Goes into every cell's scope, for the same reason the branch does: without
+   * it the cell constrains no centre, so a note that carries one has MORE
+   * constraints than the cell and sails through the superset test. Measured with
+   * CC03-B2B selected, the two notes anchored to CC01-Margin Override were
+   * visible in both hierarchies.
+   *
+   * Null when several are selected: a scope value is one value, and there is no
+   * single centre to name.
+   */
+  scopeCostCenter?: string | null;
 }
 
 // ─── Recursive renderer (mutates `rows` for performance) ─────────────────────
@@ -1031,6 +1045,7 @@ export function PivotTableDynamic({
   onResolvedNotes,
   scopeYear,
   scopeBranch,
+  scopeCostCenter,
   bpsBaseByMonth,
   bpsBaseLabel,
   costCenterFilter,
@@ -1130,16 +1145,6 @@ export function PivotTableDynamic({
     return MONTH_ORDER.filter(m => s.has(m));
   }, [txs]);
 
-  const grandTotal = useMemo(() => txs.reduce((s, t) => s + (t.movement ?? 0), 0), [txs]);
-  const grandByMonth = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const tx of txs) {
-      const month = tx.month ?? "Unknown";
-      m[month] = (m[month] ?? 0) + (tx.movement ?? 0);
-    }
-    return m;
-  }, [txs]);
-
   const hasNonOp = useMemo(() => txs.some(t => (t.operational_pct ?? 100) < 100), [txs]);
 
   const workingTxs = useMemo(() => {
@@ -1162,15 +1167,39 @@ export function PivotTableDynamic({
     return activeLevels.includes("op_nonop") ? expandForOpNonOp(kept) : kept as ExpandedTx[];
   }, [txs, activeLevels, splitsMap, costCenterFilter]);
 
+  /**
+   * The Total Income row, over the rows the report is actually showing.
+   *
+   * It used to sum `txs` — the prop, before the cost-centre filter and before
+   * the split fan-out — while the tree below it summed `workingTxs`. So filtering
+   * to a cost centre moved every row and left the headline figure alone.
+   * Measured on 2026: 146.269,92 unfiltered, and it stayed at 146.269,92 with
+   * CC01 selected when it should read 109.343,40, or 41.786,80 for CC03-B2B.
+   *
+   * The month columns still come from `txs` on purpose: they are the axis of the
+   * report, and letting a filter drop a column would change the shape of the
+   * grid rather than its contents. A month the chosen centre has nothing in now
+   * reads as a dash, which is the true answer.
+   */
+  const grandTotal = useMemo(
+    () => workingTxs.reduce((s, t) => s + (t.movement ?? 0), 0),
+    [workingTxs],
+  );
+  const grandByMonth = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const tx of workingTxs) {
+      const month = tx.month ?? "Unknown";
+      m[month] = (m[month] ?? 0) + (tx.movement ?? 0);
+    }
+    return m;
+  }, [workingTxs]);
+
   // Scope shared by every cell of the report. The grand total row sits at this
   // level, so wrapping the tree in a synthetic root makes the note walk below
   // cover it with the same code path as any other row.
   const baseScope = useMemo<NoteScope>(
-    () => ({
-      ...(scopeYear != null ? { year: scopeYear } : {}),
-      ...(scopeBranch ? { branch: scopeBranch } : {}),
-    }),
-    [scopeYear, scopeBranch],
+    () => reportBaseScope({ year: scopeYear, branch: scopeBranch, costCenter: scopeCostCenter }),
+    [scopeYear, scopeBranch, scopeCostCenter],
   );
 
   // Seed the tree with baseScope so every node carries the period. Building it

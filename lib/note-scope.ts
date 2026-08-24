@@ -130,6 +130,31 @@ export function scopeContains(outer: NoteScope, inner: NoteScope): boolean {
   return true;
 }
 
+/**
+ * The constraints every cell of a report carries, whatever its hierarchy.
+ *
+ * One definition, because two things depend on it and they must not drift: the
+ * pivot seeds its tree with this, and the page uses it to work out which notes
+ * the active filters are hiding. Written twice, a note could be hidden by one
+ * and shown by the other.
+ *
+ * A dimension enters only when there is a single value to name. With several
+ * branches or several cost centres selected there is no one value, so the report
+ * constrains neither and every note stays visible — which is the honest answer
+ * rather than picking one of them.
+ */
+export function reportBaseScope(a: {
+  year?: number | null;
+  branch?: string | null;
+  costCenter?: string | null;
+}): NoteScope {
+  return {
+    ...(a.year != null ? { year: a.year } : {}),
+    ...(a.branch ? { branch: a.branch } : {}),
+    ...(a.costCenter ? { cost_center: a.costCenter } : {}),
+  };
+}
+
 /** A note belongs to exactly this cell (not merely rolled up from below). */
 export function isDirectNote(note: PLNote, cellScope: NoteScope): boolean {
   return note.scope_key === canonicalScopeKey(cellScope);
