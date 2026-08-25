@@ -600,6 +600,9 @@ export default function PLPage() {
           onClose={() => setPanel(null)}
           onNoteSaved={() => refreshNotes(loadedYears)}
           onOpenNotes={() => setPanel(panel?.kind === "cell" ? { kind: "notes", ref: panel.ref } : null)}
+          // Replaces the open cell in place. Still one panel: navigating is not
+          // opening a second window, it is the same window on another cell.
+          onNavigate={(to) => setPanel({ kind: "cell", ref: to })}
         />
 
         <NoteWindow

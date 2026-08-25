@@ -96,6 +96,8 @@ export interface TxLeaf {
   /** The real pl_transactions UUID. Use this, never `id`, to anchor a note. */
   txId: string;
   month: string;
+  /** Posting date, for telling apart the movements behind one description. */
+  date: string | null;
   mvmt: number;
   desc: string | null;
   /** The other two descriptions, carried so the level below a GL cell can be
@@ -283,6 +285,7 @@ function toLeaf(tx: ExpandedTx): TxLeaf {
     id: tx._opGroup ? `${base}::${tx._opGroup[0]}` : base,
     txId: tx.id,
     month: tx.month ?? "Unknown",
+    date: tx.journal_post_date ?? null,
     mvmt: tx.movement ?? 0,
     desc: tx.check_description,
     desc2: tx.check_description_2 ?? null,

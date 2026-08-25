@@ -412,6 +412,8 @@ function buildCellRef(opts: {
   children?: readonly PivotNode[];
   /** Rows of the node, used only when it has no children. */
   leaves?: readonly TxLeaf[];
+  /** The cells above this one, outermost first, already built for this month. */
+  ancestors?: CellRef[];
   /** The cell's own figure per month, for the heading under a month filter. */
   byMonth?: Record<string, number>;
 }): CellRef {
@@ -436,6 +438,7 @@ function buildCellRef(opts: {
     : null;
   return {
     scope:      withMonth(scope),
+    ancestors:  opts.ancestors ?? [],
     breadcrumb: month ? [...trail, month] : [...trail],
     title:      trail[trail.length - 1] ?? "Total Income",
     month,
@@ -664,6 +667,13 @@ function renderPivotNodes(
   pathPrefix: string,
   labelPath: string[],
   ctx: RenderCtx,
+  /**
+   * The nodes above these, with their trails. Kept as NODES rather than as
+   * built refs because a ref is tied to a month, and the month is only known
+   * when a figure is clicked — the Total column and December are different
+   * cells of the same ancestor.
+   */
+  chain: { node: PivotNode; trail: string[] }[] = [],
 ) {
   const { months, exp, toggle, descSort, homesi } = ctx;
   const ramp = homesi ? HOMESI_DEPTH_STYLES : DEPTH_STYLES;
@@ -813,6 +823,21 @@ function renderPivotNodes(
 
     const nodeScope: NoteScope = { ...ctx.baseScope, ...node.scope };
     const nodeTrail = [...labelPath, node.label];
+    /** The path above this cell, for the same month. */
+    const ancestorsFor = (month: string | null): CellRef[] =>
+      chain.map(({ node: a, trail: t }) =>
+        buildCellRef({
+          scope: { ...ctx.baseScope, ...a.scope }, trail: t, month,
+          amount:     month ? (a.byMonth[month] ?? 0) : a.total,
+          level:      a.field as NoteLevel,
+          levelLabel: FIELD_LABELS[a.field as PivotField] ?? a.field,
+          valueLabel: a.label,
+          children:   a.children,
+          leaves:     a.txLeaves,
+          byMonth:    a.byMonth,
+        }),
+      );
+
     const refFor = (month: string | null, amount: number) =>
       buildCellRef({
         scope: nodeScope, trail: nodeTrail, month, amount,
@@ -822,6 +847,7 @@ function renderPivotNodes(
         children:   node.children,
         leaves:     node.txLeaves,
         byMonth:    node.byMonth,
+        ancestors:  ancestorsFor(month),
       });
     const openDetail = (month: string | null, amount: number) =>
       ctx.onDrillCell?.(refFor(month, amount));
@@ -907,7 +933,8 @@ function renderPivotNodes(
 
     // Recurse into children
     if (node.children.length > 0) {
-      renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx);
+      renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx,
+        [...chain, { node, trail: nodeTrail }]);
     }
 
     // Leaf transaction rows. Suppressed when a drill-down modal is wired:

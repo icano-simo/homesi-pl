@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { X, MessageSquarePlus } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { X, MessageSquarePlus, ArrowLeft, ChevronRight, ChevronDown } from "lucide-react";
 import type { AnchorOption, BreakdownMode, BreakdownRow, CellRef } from "@/lib/cell-ref";
 import { canonicalScopeKey, scopeContains, type NoteScope, type PLNote } from "@/lib/note-scope";
 
@@ -49,7 +49,10 @@ export function CellDetailModal({
   onClose,
   onNoteSaved,
   onOpenNotes,
+  onNavigate,
 }: {
+  /** Opens another cell in place — a crumb, or the back arrow. */
+  onNavigate: (to: CellRef) => void;
   cell: CellRef | null;
   /** Opens the notes window on this same cell — every note inside its scope. */
   onOpenNotes: () => void;
@@ -78,6 +81,12 @@ export function CellDetailModal({
 
   /** Which description row was clicked, and on which month if any. */
   const [picked, setPicked] = useState<{ key: string; month: string | null } | null>(null);
+  /**
+   * Description rows unfolded to show their movements. To look at, and nothing
+   * else — the deepest anchor is still the description, so nothing here reaches
+   * the note composer.
+   */
+  const [openTxs, setOpenTxs] = useState<Set<string>>(new Set());
   /** Grain of the anchor: the cell itself, the description, or one of its months. */
   const [grain, setGrain] = useState<"" | "self" | "row" | "cell">("");
 
@@ -104,6 +113,7 @@ export function CellDetailModal({
     setMode(best != null ? ds![best].suggestedMode : null);
     setMonthFilter(null);
     setPicked(null); setGrain(""); setDraft(""); setSaveError("");
+    setOpenTxs(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cellKey]);
 
@@ -270,14 +280,38 @@ export function CellDetailModal({
         {/* ── The cell itself ─────────────────────────────────────────────── */}
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div className="min-w-0">
-            <h2 className="truncate text-base font-bold text-[#001A40]">{cell.title}</h2>
+            <span className="flex items-center gap-2">
+              {/* Going up used to mean closing this and finding the row again in
+                  the grid. Every time. */}
+              {cell.ancestors.length > 0 && (
+                <button
+                  onClick={() => onNavigate(cell.ancestors[cell.ancestors.length - 1])}
+                  aria-label={`Back to ${cell.ancestors[cell.ancestors.length - 1].title}`}
+                  title={`Back to ${cell.ancestors[cell.ancestors.length - 1].title}`}
+                  className="shrink-0 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-[#001A40]"
+                >
+                  <ArrowLeft size={15} />
+                </button>
+              )}
+              <h2 className="truncate text-base font-bold text-[#001A40]">{cell.title}</h2>
+            </span>
+            {/* Each crumb is the cell it names, so any level above is one click
+                away without closing anything. The last one is where we are. */}
             <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
-              {cell.breadcrumb.map((part, i) => (
-                <span key={`${part}-${i}`} className="inline-flex items-center gap-1">
+              {cell.ancestors.map((a, i) => (
+                <span key={`${a.title}-${i}`} className="inline-flex items-center gap-1">
                   {i > 0 && <span className="text-slate-300">›</span>}
-                  {part}
+                  <button
+                    onClick={() => onNavigate(a)}
+                    className="rounded px-0.5 hover:bg-slate-100 hover:text-[#001A40] hover:underline"
+                  >
+                    {a.title}
+                  </button>
                 </span>
               ))}
+              {cell.ancestors.length > 0 && <span className="text-slate-300">›</span>}
+              <span className="font-semibold text-[#001A40]">{cell.title}</span>
+              {cell.month && <><span className="text-slate-300">·</span><span>{cell.month}</span></>}
             </p>
             <p className="mt-1 flex items-baseline gap-2">
               <span className={`font-mono text-2xl font-bold tabular-nums ${readAmount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
@@ -521,24 +555,64 @@ export function CellDetailModal({
               <tbody>
                 {listRows.map((row, i) => {
                   const on = picked?.key === row.key && picked?.month === (row.month ?? null);
+                  const rowId = `${row.key}|${row.month ?? ""}`;
+                  const unfolded = openTxs.has(rowId);
+                  const cols = isTotalColumn ? 4 : 3;
                   return (
-                    <tr
-                      key={`${row.key}|${row.month ?? ""}`}
-                      onClick={() => pick(row.key!, row.month ?? null, "cell")}
-                      className={`cursor-pointer border-b border-slate-200/60 ${on ? "bg-sky-50" : "hover:bg-slate-50"}`}
-                      style={{ backgroundColor: on ? undefined : i % 2 ? "#fcfdfe" : "#ffffff" }}
-                    >
-                      <td className="max-w-[420px] truncate px-3 py-1.5 text-slate-700" title={row.valueLabel}>
-                        <Dot state={noteAt(row.scope)} />{row.valueLabel}
-                      </td>
-                      {isTotalColumn && (
-                        <td className="whitespace-nowrap px-3 py-1.5 text-slate-500">{row.month}</td>
-                      )}
-                      <td className="px-3 py-1.5 text-right font-mono tabular-nums text-slate-500">{row.count}</td>
-                      <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${row.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
-                        {fmt(row.amount)}
-                      </td>
-                    </tr>
+                    <Fragment key={rowId}>
+                      <tr
+                        onClick={() => pick(row.key!, row.month ?? null, "cell")}
+                        className={`cursor-pointer border-b border-slate-200/60 ${on ? "bg-sky-50" : "hover:bg-slate-50"}`}
+                        style={{ backgroundColor: on ? undefined : i % 2 ? "#fcfdfe" : "#ffffff" }}
+                      >
+                        <td className="max-w-[420px] truncate px-3 py-1.5 text-slate-700" title={row.valueLabel}>
+                          {/* Its own control, so unfolding never selects the
+                              anchor and selecting never unfolds. Absent when the
+                              description has one movement: nothing to open. */}
+                          {row.txs ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenTxs((prev) => {
+                                  const next = new Set(prev);
+                                  next.has(rowId) ? next.delete(rowId) : next.add(rowId);
+                                  return next;
+                                });
+                              }}
+                              aria-label={unfolded ? "Hide movements" : `Show the ${row.txs.length} movements`}
+                              className="mr-1 rounded p-0.5 align-middle text-slate-400 hover:bg-slate-200 hover:text-[#001A40]"
+                            >
+                              {unfolded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                            </button>
+                          ) : (
+                            <span aria-hidden className="mr-1 inline-block w-[16px]" />
+                          )}
+                          <Dot state={noteAt(row.scope)} />{row.valueLabel}
+                        </td>
+                        {isTotalColumn && (
+                          <td className="whitespace-nowrap px-3 py-1.5 text-slate-500">{row.month}</td>
+                        )}
+                        <td className="px-3 py-1.5 text-right font-mono tabular-nums text-slate-500">{row.count}</td>
+                        <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${row.amount < 0 ? "text-rose-600" : "text-[#001A40]"}`}>
+                          {fmt(row.amount)}
+                        </td>
+                      </tr>
+                      {unfolded && row.txs?.map((t) => (
+                        // No onClick, no dot, no anchor: this level is for
+                        // reading. The deepest a note can be anchored to is the
+                        // description above.
+                        <tr key={t.id} className="border-b border-slate-200/40 bg-slate-50/60 text-[11px]">
+                          <td colSpan={cols - 1} className="max-w-[520px] truncate py-1 pl-10 pr-3 text-slate-500">
+                            <span className="font-mono text-slate-400">{t.date ?? t.month}</span>
+                            {t.vendor && <> · {t.vendor}</>}
+                            {t.detail && <> · {t.detail}</>}
+                          </td>
+                          <td className={`whitespace-nowrap px-3 py-1 text-right font-mono tabular-nums ${t.amount < 0 ? "text-rose-500" : "text-slate-600"}`}>
+                            {fmt(t.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
                   );
                 })}
               </tbody>
