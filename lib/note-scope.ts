@@ -1,4 +1,10 @@
-import { ALL_FIELDS, stableScopeValue, type ExpandedTx, type PivotField } from "@/lib/pivot-engine";
+import {
+  ALL_FIELDS,
+  isViewOnlyField,
+  stableScopeValue,
+  type ExpandedTx,
+  type PivotField,
+} from "@/lib/pivot-engine";
 import type { PLReportTx } from "@/types";
 
 /**
@@ -188,7 +194,10 @@ export function scopeForTransaction(
   year?: number,
 ): NoteScope {
   const scope: NoteScope = {};
-  for (const f of fields) scope[f] = stableScopeValue(tx, f);
+  // Lenses are skipped here for the same reason the tree skips them: see
+  // VIEW_ONLY_FIELDS. A transaction note re-anchored with op_nonop in it would
+  // stop matching its own cell the moment the switch moved.
+  for (const f of fields) if (!isViewOnlyField(f)) scope[f] = stableScopeValue(tx, f);
   if (tx.month) scope.month = tx.month;
   // The year always belongs in the scope. It used to be added only when the
   // report covered exactly one, so a two-year load produced scopes with no

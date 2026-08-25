@@ -2,6 +2,35 @@ import type { PLReportTx } from "@/types";
 
 // ─── Field definitions ────────────────────────────────────────────────────────
 
+/**
+ * Levels that are a LENS, not a subject — excluded from every note anchor.
+ *
+ * A note is anchored to what identifies the figure it is about: the account,
+ * the category, the cost centre, the description. op/non-op is none of those.
+ * It is a way of looking at the same report: flip the switch and the same money
+ * is still there, split by operational share. The note "revenue is at 190.8 bps"
+ * is about Revenue whichever way you are looking at it.
+ *
+ * Left in the scope it did the damage you would expect: a note written with the
+ * switch off carried no op_nonop, so the moment it went on the cell demanded one
+ * the note did not have, the note stopped matching and rolled up to Total
+ * Income. It happened in production — someone wrote the same note twice, once in
+ * each view, because the first one seemed to vanish.
+ *
+ * It is the only field in this list of its kind, and the reason is structural:
+ * every other one comes off a column of the row, while op_nonop is manufactured
+ * by expandForOpNonOp, which splits one transaction into two virtual rows.
+ * cost_center is the near miss — fanOutBySplits also manufactures rows — but a
+ * split says whose money this is, which is a fact about the money; op/non-op
+ * says look at the same money another way.
+ */
+export const VIEW_ONLY_FIELDS: readonly string[] = ["op_nonop"];
+
+/** True when this level must not enter a note's anchor. */
+export function isViewOnlyField(f: string): boolean {
+  return VIEW_ONLY_FIELDS.includes(f);
+}
+
 export type PivotField =
   | "op_nonop"
   | "category_2"
@@ -361,7 +390,12 @@ export function buildDynamicPivot(
   const nodes: PivotNode[] = [];
   for (const slot of slotMap.values()) {
     const { byMonth, total } = computeTotals(slot.txs);
-    const scope: NodeScope = { ...parentScope, [field]: slot.scopeValue };
+    // A lens does not enter the cell's identity, so Operational > Revenue and
+    // Non-Operational > Revenue carry the same scope — which is the point: a
+    // note on Revenue belongs to both, and to Revenue with the switch off.
+    const scope: NodeScope = isViewOnlyField(field)
+      ? { ...parentScope }
+      : { ...parentScope, [field]: slot.scopeValue };
     // Resolved per slot, so the node knows whether its own rows still need a
     // deeper level or should carry the transactions themselves. Without this the
     // skipped level would come back as a nested "__flat__" child, which the
