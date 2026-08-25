@@ -823,20 +823,36 @@ function renderPivotNodes(
 
     const nodeScope: NoteScope = { ...ctx.baseScope, ...node.scope };
     const nodeTrail = [...labelPath, node.label];
-    /** The path above this cell, for the same month. */
-    const ancestorsFor = (month: string | null): CellRef[] =>
-      chain.map(({ node: a, trail: t }) =>
-        buildCellRef({
-          scope: { ...ctx.baseScope, ...a.scope }, trail: t, month,
-          amount:     month ? (a.byMonth[month] ?? 0) : a.total,
-          level:      a.field as NoteLevel,
-          levelLabel: FIELD_LABELS[a.field as PivotField] ?? a.field,
-          valueLabel: a.label,
-          children:   a.children,
-          leaves:     a.txLeaves,
-          byMonth:    a.byMonth,
-        }),
-      );
+    /**
+     * The path above this cell, for the same month.
+     *
+     * Each ancestor carries the ancestors above it, so the trail survives the
+     * jump: land on the category and its own crumb still reaches the top. Built
+     * without that, going up worked once and then the header collapsed to a
+     * single crumb with no arrow — a fix that holds for one step and gives way
+     * on the second is worse than none, because you cannot tell which you have.
+     */
+    const ancestorsFor = (month: string | null): CellRef[] => {
+      const above: CellRef[] = [];
+      for (const { node: a, trail: t } of chain) {
+        above.push(
+          buildCellRef({
+            scope: { ...ctx.baseScope, ...a.scope }, trail: t, month,
+            amount:     month ? (a.byMonth[month] ?? 0) : a.total,
+            level:      a.field as NoteLevel,
+            levelLabel: FIELD_LABELS[a.field as PivotField] ?? a.field,
+            valueLabel: a.label,
+            children:   a.children,
+            leaves:     a.txLeaves,
+            byMonth:    a.byMonth,
+            // Copied: what is above this one is fixed now, and the next turn of
+            // the loop must not reach back and add itself to it.
+            ancestors:  [...above],
+          }),
+        );
+      }
+      return above;
+    };
 
     const refFor = (month: string | null, amount: number) =>
       buildCellRef({

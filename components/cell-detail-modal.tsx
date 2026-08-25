@@ -327,15 +327,26 @@ export function CellDetailModal({
           <span className="flex shrink-0 items-center gap-2">
             {/* Every note in this scope, from any level below — not only the ones
                 anchored to this exact cell. Reaching them used to mean finding
-                the right dot in the grid and knowing which one it was. */}
-            {notesInScope > 0 && (
-              <button
-                onClick={onOpenNotes}
-                className="rounded-full border border-[#FF4040]/30 bg-[#FF4040]/5 px-2.5 py-1 text-[11px] font-semibold text-[#FF4040] hover:bg-[#FF4040]/10"
-              >
-                {notesInScope} note{notesInScope === 1 ? "" : "s"} in this scope
-              </button>
-            )}
+                the right dot in the grid and knowing which one it was.
+
+                Always here, zero included: this is a state counter, and on one
+                the zero says something — looked, and there are none. A button
+                that vanishes says nothing at all, and it also breaks the promise
+                that the gesture is the same at every level. (The hidden-notes
+                circle is a warning, not a counter, and that one is right to
+                disappear at zero.) */}
+            <button
+              onClick={onOpenNotes}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                notesInScope > 0
+                  ? "border-[#FF4040]/30 bg-[#FF4040]/5 text-[#FF4040] hover:bg-[#FF4040]/10"
+                  : "border-slate-200 bg-white text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+              }`}
+            >
+              {notesInScope > 0
+                ? `${notesInScope} note${notesInScope === 1 ? "" : "s"} in this scope`
+                : "No notes here"}
+            </button>
             <button onClick={onClose} aria-label="Close"
               className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
               <X size={16} />
