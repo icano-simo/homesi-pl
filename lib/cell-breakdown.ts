@@ -3,6 +3,7 @@ import {
   TREND_COMPRESSION_MIN,
   type BreakdownRow,
   type DescriptionBreakdown,
+  type TxRow,
 } from "@/lib/cell-ref";
 import type { NoteLevel, NoteScope } from "@/lib/note-scope";
 
@@ -41,6 +42,7 @@ export function describeLeaves(
     type Agg = {
       key: string; label: string; total: number; count: number;
       byMonth: Record<string, number>; counts: Record<string, number>;
+      leaves: TxLeaf[];
     };
     const g = new Map<string, Agg>();
     let populated = 0;
@@ -52,7 +54,8 @@ export function describeLeaves(
         populatedByMonth[leaf.month] = (populatedByMonth[leaf.month] ?? 0) + 1;
       }
       let e = g.get(key);
-      if (!e) { e = { key, label, total: 0, count: 0, byMonth: {}, counts: {} }; g.set(key, e); }
+      if (!e) { e = { key, label, total: 0, count: 0, byMonth: {}, counts: {}, leaves: [] }; g.set(key, e); }
+      e.leaves.push(leaf);
       e.total += leaf.mvmt;
       e.count++;
       e.byMonth[leaf.month] = (e.byMonth[leaf.month] ?? 0) + leaf.mvmt;
@@ -61,6 +64,18 @@ export function describeLeaves(
     // Largest first: with hundreds of descriptions the reader should meet the
     // ones that move the figure without scrolling for them.
     const aggs = [...g.values()].sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+
+    /**
+     * What tells two movements of the same description apart: the other two
+     * descriptions, when they say something this one does not.
+     */
+    const detailOf = (l: TxLeaf): string | null => {
+      const others = [l.desc, l.desc2, l.desc3]
+        .filter((x, i) => i !== DESC_DIMENSIONS.findIndex((d) => d.field === dim.field))
+        .map((x) => x?.trim())
+        .filter((x): x is string => !!x);
+      return others.length ? [...new Set(others)].join(" · ") : null;
+    };
 
     /** Anchored to the description across every month — no month in scope. */
     const rows: BreakdownRow[] = aggs.map((r) => ({
@@ -72,6 +87,16 @@ export function describeLeaves(
       amount:     r.total,
       count:      r.count,
       byMonth:    r.byMonth,
+      // Only when there is more than one, because a description with a single
+      // movement has nothing to unfold. To look at, never to anchor to.
+      txs: r.leaves.length > 1
+        ? r.leaves
+            .map<TxRow>((l) => ({
+              id: l.id, date: l.date, month: l.month,
+              vendor: l.vendor, detail: detailOf(l), amount: l.mvmt,
+            }))
+            .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""))
+        : undefined,
     }));
 
     /**

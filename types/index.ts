@@ -311,6 +311,9 @@ export interface PLReportTx {
   month: string | null;
   /** Needed to anchor notes to a period — see lib/note-scope.ts. */
   year?: number | null;
+  /** Posting date. Optional because not every caller selects it; the P&L does,
+   *  to tell apart the movements behind one description. */
+  journal_post_date?: string | null;
   branch: string | null;
   check_description: string | null;
   vendor: string | null;

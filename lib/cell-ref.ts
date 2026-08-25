@@ -13,8 +13,33 @@ export interface AnchorOption {
   amount: number;
 }
 
+/**
+ * One movement behind a description. To look at, and only that.
+ *
+ * Deliberately not an AnchorOption: the deepest thing a note can be anchored to
+ * is the description. A transaction row is here so the reader can see what makes
+ * up a figure, not so they can write against one — that was decided and this
+ * type is where it is enforced, by simply not being an anchor.
+ */
+export interface TxRow {
+  id: string;
+  date: string | null;
+  month: string;
+  vendor: string | null;
+  /** The other two descriptions, when they are what tells the rows apart. */
+  detail: string | null;
+  amount: number;
+}
+
 /** One row of the next level down. Also, one of the anchors on offer. */
 export interface BreakdownRow extends AnchorOption {
+  /**
+   * The movements behind it, when there is more than one.
+   *
+   * Absent for a single-movement description: there is nothing to unfold, and a
+   * control that opens nothing is worse than no control.
+   */
+  txs?: TxRow[];
   /** Movements behind it. */
   count?: number;
   /** Stable group key, so a row and its month cells can be matched up. */
@@ -44,6 +69,18 @@ export interface CellRef {
   scope: NoteScope;
   /** Readable trail, e.g. ["Personnel", "Salaries", "61100 — Base Pay"]. */
   breadcrumb: string[];
+  /**
+   * The same trail as cells you can open, outermost first — this cell excluded.
+   *
+   * Going up a level used to mean closing the window and finding the row again
+   * in the grid, every time. With these the header becomes a path: each crumb is
+   * the cell it names, and the back arrow is the last of them.
+   *
+   * Built for the same month as this cell, so stepping up keeps the period.
+   * Ancestors always have children, so none of them carries a description
+   * breakdown and building them costs a walk over nodes already in memory.
+   */
+  ancestors: CellRef[];
   /** Heading of the window — the deepest label of the trail. */
   title: string;
   /** Null on the Total column, whose cell spans every month shown. */
