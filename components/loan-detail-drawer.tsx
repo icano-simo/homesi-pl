@@ -37,7 +37,7 @@ interface LoanRow {
   net: number;
   net_bps: number | null;
   no_margin: boolean;
-  /** DM Margin + RM Margin only. See margin_net in the endpoint. */
+  /** Every margin account, and only margin. See margin_net in the endpoint. */
   margin_net: number;
 }
 
@@ -222,6 +222,20 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
     };
   }, [inScope]);
 
+  /**
+   * The period carries no loan program at all — not "this loan has none".
+   *
+   * One missing program is a gap in a record; every program missing is a column
+   * absent from the file that was loaded, and the two need different words. The
+   * test is over what the server sent, not over the branch filter, because a
+   * filter narrowing to loans that happen to lack it does not make the file
+   * incomplete.
+   */
+  const noProgramAtAll = useMemo(
+    () => !!data?.loans.length && data.loans.every((l) => !l.loan_program?.trim()),
+    [data],
+  );
+
   const sorted = useMemo(() => {
     const rows = [...inScope];
     rows.sort((a, b) => {
@@ -284,6 +298,18 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
             <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
               Net = {(data?.net_groups ?? NET_GROUPS).join(" + ")}
             </span>
+            {/* A whole column of dashes reads as a broken column, and that is
+                how this one was reported. It is not broken: July 2026 is the
+                only period whose file arrived without the program column, so
+                all 48 of its banked loans have nothing to show. Every other
+                period carries it on 100% of loans. Said here rather than left
+                for the reader to infer from a column of "—". */}
+            {noProgramAtAll && (
+              <span title="The source file for this period has no loan program column. Every other period carries it on every loan."
+                    className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                No loan program in this period&apos;s file
+              </span>
+            )}
           </div>
         </div>
 
@@ -318,10 +344,13 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                     <Th key={c} className={`text-right ${extra.includes(c) ? "bg-amber-50 text-amber-800" : ""}`}>{c}</Th>
                   ))}
                   {/* Two different nets on one screen, so both say which they
-                      are. Margin net is DM + RM only; Revenue net is every
-                      revenue concept — measured across the table, 814.522,13
-                      against 4.414.688,43. */}
-                  <Th className="text-right bg-[#A6DEFF]/20">Margin net (DM+RM)</Th>
+                      are — and now they must, because they are close. Margin
+                      net is the five margin accounts; Revenue net adds Fee,
+                      Processing and Origination Income. Measured over 2026:
+                      4.057.635,36 against 4.188.428,19. They used to differ by
+                      a factor of five, which made the labels a courtesy; at
+                      3% apart they are the only thing telling them apart. */}
+                  <Th className="text-right bg-[#A6DEFF]/20">Margin net</Th>
                   <Th className="text-right bg-[#A6DEFF]/20">Margin bps</Th>
                   <Th className="text-right">Revenue net</Th>
                   <Th className="text-right">Revenue bps</Th>

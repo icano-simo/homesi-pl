@@ -30,6 +30,22 @@
 
 export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
 
+/**
+ * Whether a loan came in through a banked channel.
+ *
+ * One definition because there were two, and they only agreed by luck: the loan
+ * detail matched on `startsWith("Banked")` while loan validation matched on
+ * `= "Banked - Retail"`. Today the data holds one banked value (388 of 436, the
+ * other 48 Brokered) so both return the same set — but the column is named for
+ * a family, and the day a second banked channel appears one screen would take
+ * it and the other would drop it, silently and in opposite directions.
+ *
+ * The prefix is the right test. A channel called "Banked - Something" is banked.
+ */
+export function isBankedChannel(channel: string | null | undefined): boolean {
+  return (channel ?? "").trim().startsWith("Banked");
+}
+
 export const BRANCH_MARGIN_ACCOUNTS = [
   "Back-end Margin",
   "Front-end Margin",
