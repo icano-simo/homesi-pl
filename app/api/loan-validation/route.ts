@@ -14,6 +14,15 @@ export interface ValidationRow {
   loan_officer: string | null;
   branch: string | null;
   loan_program: string | null;
+  /**
+   * How the loan came in: "Banked - Retail" or "Brokered".
+   *
+   * A constant in the All Loans list, which filters to banked before this is
+   * built, and genuinely varying in B2B — 96 banked against 10 brokered. So the
+   * value travels for both and only B2B offers it as a filter: a filter with
+   * one option is a control that cannot do anything.
+   */
+  loan_info_channel: string | null;
   month: string | null;
   year: number | null;
   loan_amount: number | null;
@@ -66,7 +75,7 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let loQuery: any = supabase
     .from("loan_officials")
-    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program")
+    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program, loan_info_channel")
     .order("loan_number");
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
@@ -91,7 +100,12 @@ export async function GET(req: NextRequest) {
   // Brokered loans are dropped from it: they do not earn margin the way banked
   // loans do, so listing them as "missing in accounting" reports an absence
   // that was never going to be there. Measured 2026-08-17: 48 brokered of 436.
-  if (type === "all_loans") loQuery = loQuery.eq("loan_info_channel", "Banked - Retail");
+  //
+  // Filtered on the prefix, in JS, through the one predicate that owns the
+  // rule — see isBankedChannel. The `= "Banked - Retail"` this replaces agreed
+  // with the loan detail's own test only because a single banked value exists
+  // today; a second one would have entered one screen and not the other.
+  if (type === "all_loans") loQuery = loQuery.like("loan_info_channel", "Banked%");
 
   const { data: loanOfficialsAll, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
@@ -203,6 +217,7 @@ export async function GET(req: NextRequest) {
       // way. The value in the file stays available in loan_officials.
       branch: resolveLoanBranchAlias(lo.branch as string | null),
       loan_program: lo.loan_program as string | null,
+      loan_info_channel: lo.loan_info_channel as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,
       loan_amount,

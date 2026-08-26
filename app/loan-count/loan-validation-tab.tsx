@@ -344,6 +344,25 @@ function SurplusSection({ rows, type }: { rows: SurplusRow[]; type: ValType }) {
   );
 }
 
+/**
+ * The channel a loan came in through, told apart at a glance.
+ *
+ * Banked and brokered are not two shades of the same thing: they earn through
+ * different mechanisms, which is exactly why the All Loans list keeps only the
+ * banked ones. Where both appear — B2B, 96 against 10 — the difference has to
+ * be readable without reading, or the mixed list looks homogeneous.
+ */
+function ChannelChip({ c }: { c: string | null }) {
+  if (!c?.trim()) return <span className="text-gray-300">—</span>;
+  const brokered = c.trim() === "Brokered";
+  return (
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+      brokered ? "bg-violet-100 text-violet-700" : "bg-sky-100 text-sky-800"}`}>
+      {c}
+    </span>
+  );
+}
+
 // ─── Main table ───────────────────────────────────────────────────────────────
 
 function ValidationTable({
@@ -377,6 +396,7 @@ function ValidationTable({
             <th className="px-3 py-2 font-medium">Borrower Name</th>
             {showLoanOfficer && <th className="px-3 py-2 font-medium">Loan Officer</th>}
             <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Program</th>
+            <th className="px-3 py-2 font-medium whitespace-nowrap">Loan Info Channel</th>
             <th className="px-3 py-2 font-medium">Branch</th>
             <th className="px-3 py-2 font-medium whitespace-nowrap">Month</th>
             {showLoanAmount && <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>}
@@ -424,6 +444,7 @@ function ValidationTable({
                   </td>
                 )}
                 <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.loan_program ?? undefined}>{row.loan_program ?? "—"}</td>
+                <td className="px-3 py-1.5 whitespace-nowrap"><ChannelChip c={row.loan_info_channel} /></td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
                 <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.month ?? "—"}</td>
                 {showLoanAmount && (
@@ -480,6 +501,7 @@ function ValidationSection({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [channelFilter, setChannelFilter] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -505,10 +527,23 @@ function ValidationSection({
   const showAccountingAmt = type !== "b2b";
   const showTxColumns     = type === "b2b";
 
+  /**
+   * The channels actually present, from the rows themselves.
+   *
+   * Offered as a filter only when there is more than one, and that is the whole
+   * point of reading it from the data: All Loans is narrowed to banked before it
+   * reaches here, so a hardcoded pair of options would put a control on screen
+   * that could only ever return everything or nothing. B2B carries both — 96
+   * banked, 10 brokered — and there the control means something.
+   */
+  const channelOpts = !data ? [] :
+    [...new Set(data.rows.map((r) => r.loan_info_channel).filter((c): c is string => !!c?.trim()))].sort();
+
   const visibleRows: ValidationRow[] = !data ? [] :
     data.rows.filter((r) => {
       const lnSearch = filterLoanNumber.trim().toLowerCase();
       if (lnSearch && !r.loan_number.toLowerCase().includes(lnSearch)) return false;
+      if (channelFilter.length > 0 && !channelFilter.includes(r.loan_info_channel ?? "")) return false;
       if (statusFilter.length === 0) return true;
       return (statusFilter.includes("Matched") && r.status === "match") ||
              (statusFilter.includes("Missing in Accounting") && r.status === "missing") ||
@@ -526,6 +561,10 @@ function ValidationSection({
       loan_number: r.loan_number,
       borrower_name: r.borrower_name ?? "",
       ...(showLoanOfficer   ? { loan_officer:      r.loan_officer ?? "" }      : {}),
+      // Both are columns on screen; the export was missing them, so a file
+      // opened next to the table did not answer the same questions.
+      loan_program: r.loan_program ?? "",
+      loan_info_channel: r.loan_info_channel ?? "",
       branch: r.branch ?? "",
       month: r.month ?? "",
       ...(showLoanAmount    ? { loan_amount:        r.loan_amount ?? "" }       : {}),
@@ -541,6 +580,8 @@ function ValidationSection({
       { key: "loan_number",      label: "Loan Number" },
       { key: "borrower_name",    label: "Borrower Name" },
       ...(showLoanOfficer    ? [{ key: "loan_officer",     label: "Loan Officer" }]              : []),
+      { key: "loan_program",     label: "Loan Program" },
+      { key: "loan_info_channel", label: "Loan Info Channel" },
       { key: "branch",           label: "Branch" },
       { key: "month",            label: "Month" },
       ...(showLoanAmount     ? [{ key: "loan_amount",       label: "Loan Amount" }]              : []),
@@ -572,6 +613,23 @@ function ValidationSection({
             selected={statusFilter}
             onChange={setStatusFilter}
           />
+          {channelOpts.length > 1 && (
+            <ReportFilter
+              label="Channel"
+              options={channelOpts}
+              selected={channelFilter}
+              onChange={setChannelFilter}
+            />
+          )}
+          {/* One channel and nothing to choose. Said instead of offered: a
+              dropdown with a single option looks like a filter that is broken,
+              and the reason this list has one is a decision, not an accident. */}
+          {channelOpts.length === 1 && (
+            <span title="This list is narrowed to banked loans: brokered loans do not earn margin the same way, so listing them as missing in accounting would report an absence that was never going to be there."
+                  className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500">
+              {channelOpts[0]} only
+            </span>
+          )}
           {data && data.rows.length > 0 && (
             <button
               onClick={handleExport}
