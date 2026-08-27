@@ -19,23 +19,34 @@
  *   a loan officer matches a payroll person when they share a surname AND a
  *   given name, after case, accents and punctuation are normalized away.
  *
- * Measured over the whole base: 33 of 46 loan officers match exactly one payroll
- * person, 0 are ambiguous, and 13 match nothing. Of those 13, eleven have no
- * surname anywhere in the payroll accounts — seven appear nowhere in the entire
- * P&L — so they are not matching failures at all. The remaining two are name
- * variants ("Steve"/"STEVEN", "Julymar Mar Castro"/"CASTRO, JULY M") and those
- * are what the alias table is for: a human confirms them one at a time.
+ * Measured over the whole base, 46 officers against 67 paid people:
+ *
+ *   29  paired
+ *    4  undecided — two people written two ways each, see below
+ *   13  no candidate at all
+ *
+ * Of the 13, eleven have no surname anywhere in the payroll accounts — seven
+ * appear nowhere in the entire P&L — so they are not matching failures at all.
+ * The remaining two are name variants ("Steve"/"STEVEN", "Julymar Mar Castro"
+ * against "CASTRO, JULY M") and those are what the alias table is for: a human
+ * confirms them one at a time.
  *
  * ─── AND WHY THE MATCH MUST BE 1:1 IN BOTH DIRECTIONS ──────────────────────
  * Requiring only "this loan officer has exactly one candidate" is not enough.
- * loan_officials carries the same person under two spellings — "Galo Rizzo" and
- * "Galo Rizzo Hinojosa" — and both of them have exactly one candidate, the same
- * one. Attributing that person's pay to each spelling counted -2.184,16 twice
- * and left the control total 4.540,47 short of the ledger.
+ * loan_officials carries two people under two spellings each, and every one of
+ * the four has exactly one candidate:
  *
- * A pair is a match only when it is the sole candidate FOR EACH OTHER. That is
- * what makes the three buckets add up to the accounts, which is the only check
- * capable of catching this class of error.
+ *   Galo Rizzo (26 closings)   /  Galo Rizzo Hinojosa (1)      -> RIZZO, GALO F
+ *   Frank Rodriguez (7)        /  Frank Enrique Rodriguez (1)  -> RODRIGUEZ-PEREZ, FRANK E
+ *
+ * Attributing each spelling its candidate's pay counted that pay twice and left
+ * the control total 4.540,47 heavy. So a pair is a match only when it is the
+ * sole candidate FOR EACH OTHER; all four names stay undecided and visible.
+ *
+ * That underlying typo is not fixed here and must not be papered over with an
+ * alias: it splits the CLOSINGS wherever the application groups by officer, not
+ * only the payroll. It is corrected at the source. The migration for the alias
+ * table carries the full argument.
  */
 
 /** Suffixes that are not part of a name for matching purposes. */

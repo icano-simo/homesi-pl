@@ -134,10 +134,12 @@ export default function LoanOfficersPage() {
               <AlertTriangle size={12} className="mr-1 inline" />
               {data.undecided.length} name{data.undecided.length === 1 ? "" : "s"} could not be settled and
               {" "}<span className="font-semibold">were not guessed at</span>: {data.undecided.join(", ")}.
-              {" "}Each of these matches a payroll person that another officer matches too, so neither was given the pay —
-              had one been picked, the totals below would have counted it twice.
-              {" "}Where two of these names are one person written two ways, the fix is to settle the spelling in the loan
-              file; where they are two people, an equivalence for each is what separates them.
+              {" "}Each matches a payroll person that another officer matches too, so neither was given the pay — had one
+              been picked, the totals below would have counted it twice.
+              {" "}These are one person written two ways in the loan file, one spelling carrying almost every closing and
+              the other exactly one. That typo splits the <span className="font-semibold">closings</span> anywhere the app
+              groups by officer, not just the pay here, so it is corrected at the source rather than paired off — an
+              equivalence would settle this screen and leave every other one counting two people.
             </p>
           )}
 
