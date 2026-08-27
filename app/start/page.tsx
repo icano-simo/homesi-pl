@@ -70,7 +70,7 @@ const STEPS: Step[] = [
 
   { n: 6, band: "loans", icon: BookOpen, href: "/loan-count",
     title: "Loan Count",
-    line: "Loans with no DM Margin, and the B2B alerts.",
+    line: "Loans that received no margin in either account, and the B2B alerts.",
     counters: ["noMargin", "b2b"] },
 
   { n: 7, band: "close", icon: TrendingUp, href: "/pl",
@@ -200,7 +200,9 @@ export default function StartPage() {
   const partial = months.length === 0 || years.length === 0 || activeBranches.length === 0;
 
   const label: Record<keyof Counts, string> = {
-    conflicts: "conflicts", unassigned: "unassigned", noMargin: "no DM Margin", b2b: "B2B alerts",
+    // "no margin", not "no DM Margin": the check behind it accepts DM or RM,
+    // and this counter reads that same endpoint rather than repeating the rule.
+    conflicts: "conflicts", unassigned: "unassigned", noMargin: "no margin", b2b: "B2B alerts",
   };
 
   /**
