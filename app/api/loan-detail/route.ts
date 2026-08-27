@@ -249,6 +249,22 @@ export async function GET(req: NextRequest) {
         if (!booked || booked.size === 0) return false;
         return [...booked].some((b) => !expectedMarginAccounts(b).includes(acc));
       });
+      /**
+       * "Earned nothing at all" — the WIDE definition, on purpose.
+       *
+       * DELIBERATELY NOT the check Loan Validation runs. That one asks whether
+       * the corporate margin fee was booked, and accepts DM (41309) or RM
+       * (41307). This one asks whether the loan produced any margin whatsoever,
+       * so it has to include Back-end, Front-end and Discount: those are how a
+       * branch loan earns, and a loan carrying 67.410 of Back-end has plainly
+       * not gone unpaid.
+       *
+       * Narrowing this to DM/RM to "make them consistent" would flag every
+       * branch loan that earns outside the corporate accounts. Widening the
+       * validation check to these five would silence the findings it exists to
+       * raise. Two questions, two answers, and MARGIN_RECEIVED_GL_CODES carries
+       * the same warning from the other side.
+       */
       const noMargin = ALL_MARGIN_ACCOUNTS.every((acc) => (a.concepts[acc] ?? 0) === 0);
 
       return {

@@ -12,7 +12,9 @@ import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan
 type ValType = "b2b" | "all_loans";
 
 const SUB_TABS: { type: ValType; label: string; glLabel: string }[] = [
-  { type: "all_loans",  label: "All Loans",  glLabel: "DM Margin (41309)" },
+  // Both accounts, because a loan matches on either. It said DM Margin alone
+  // while the check tested DM alone; both had to change together.
+  { type: "all_loans",  label: "All Loans",  glLabel: "DM Margin (41309) or RM Margin (41307)" },
   { type: "b2b",        label: "B2B",        glLabel: "B2B Success Fee" },
 ];
 
@@ -956,8 +958,12 @@ function DetailView({
             <th className="px-3 py-2 font-medium text-left">Branch</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month / Year</th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">DM Margin</th>
-            <th className="px-3 py-2 font-medium text-right">BPS</th>
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">DM Margin <span className="font-normal text-gray-400">(41309)</span></th>
+            {/* Its own column, never folded into DM. A loan matches on either
+                account, and 15 of them match ONLY here — with one shared column
+                those 15 would read as a match with nothing behind it. */}
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">RM Margin <span className="font-normal text-gray-400">(41307)</span></th>
+            <th className="px-3 py-2 font-medium text-right">BPS <span className="font-normal text-gray-400">(DM)</span></th>
           </tr>
         </thead>
         <tbody>
@@ -988,11 +994,17 @@ function DetailView({
                   {row.month ?? "—"}{row.year ? ` ${row.year}` : ""}
                 </td>
                 <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(row.loan_amount)}</td>
+                {/* Each account prints only where it actually has a booking. A
+                    dash is "not booked here", which is the whole distinction the
+                    two columns exist to make. */}
                 <td className="px-3 py-1.5 text-right whitespace-nowrap">
-                  {missing ? <span className="text-gray-300">—</span> : fmtMov(row.accounting_total)}
+                  {row.dm_total == null ? <span className="text-gray-300">—</span> : fmtMov(row.dm_total)}
+                </td>
+                <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                  {row.rm_total == null ? <span className="text-gray-300">—</span> : fmtMov(row.rm_total)}
                 </td>
                 <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap">
-                  {missing ? <span className="text-gray-300">—</span> : fmtBPS(row.bps)}
+                  {row.dm_total == null ? <span className="text-gray-300">—</span> : fmtBPS(row.bps)}
                 </td>
               </tr>
             );
@@ -1133,7 +1145,8 @@ function AllLoansSection({
           branch:        r.branch ?? "",
           month_year:    `${r.month ?? ""}${r.year ? ` ${r.year}` : ""}`,
           loan_amount:   r.loan_amount ?? "",
-          dm_margin:     r.accounting_total ?? "",
+          dm_margin:     r.dm_total ?? "",
+          rm_margin:     r.rm_total ?? "",
           bps:           r.bps ?? "",
         }));
       exportToXlsx(`loan-validation-all-loans-detail-${today}.xlsx`, exportRows, [
@@ -1144,7 +1157,8 @@ function AllLoansSection({
         { key: "branch",        label: "Branch" },
         { key: "month_year",    label: "Month / Year" },
         { key: "loan_amount",   label: "Loan Amount" },
-        { key: "dm_margin",     label: "DM Margin" },
+        { key: "dm_margin",     label: "DM Margin (41309)" },
+        { key: "rm_margin",     label: "RM Margin (41307)" },
         { key: "bps",           label: "BPS" },
       ]);
     }
