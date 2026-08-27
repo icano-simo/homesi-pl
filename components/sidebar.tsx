@@ -19,6 +19,7 @@ import {
   Percent,
   PenLine,
   MessageSquare,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { useActiveBranches } from "@/components/branch-filter-provider";
@@ -41,6 +42,9 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Offshore Allocations", href: "/offshore-allocations", icon: Globe },
   { label: "Manual Entry", href: "/manual-entry", icon: PenLine },
   { label: "Loan Count", href: "/loan-count", icon: BookOpen },
+  // Next to Loan Count: same loans, read by who produced them instead of by
+  // whether accounting has them.
+  { label: "Loan Officer P&L", href: "/loan-officers", icon: Users },
   {
     label: "Cost Centers",
     icon: Target,
