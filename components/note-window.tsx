@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { X, Trash2, Pencil, MessageSquarePlus } from "lucide-react";
 import {
+  authorLabel,
   canonicalScopeKey,
   defaultScopeLabel,
   notesForCell,
@@ -267,7 +268,7 @@ export function NoteWindow({
 
                 {/* Band 4 — bookkeeping, deliberately quiet. */}
                 <p className="mt-2 text-[10px] text-slate-400">
-                  {n.author ?? "—"} · {when(n.created_at)}
+                  {authorLabel(n.author)} · {when(n.created_at)}
                   {n.updated_at !== n.created_at && <> · edited {when(n.updated_at)}</>}
                   {isDirect
                     ? then == null

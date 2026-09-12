@@ -3,7 +3,7 @@ import { createServerClient } from "@/lib/supabase-server";
 import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
 import {
   ALL_MARGIN_ACCOUNTS,
-  CORPORATE_MARGIN_ACCOUNTS,
+  isBankedChannel,
   MARGIN_FOR_PERIOD,
   NET_GROUPS,
   expectedMarginAccounts,
@@ -143,11 +143,12 @@ export async function GET(req: NextRequest) {
     // mixing them dilutes every bps in the window against volume this margin
     // was never going to be earned on. Measured: 336 of the 375 loans in
     // scope, $120,424,191 of $131,911,354.
-    const isBanked = (c: string | null) => (c ?? "").trim().startsWith("Banked");
-
+    //
+    // The test itself lives in isBankedChannel, shared with loan validation,
+    // which used to spell the same rule a different way.
     const loans = rawLoans
       .map((l) => ({ ...l, branch: normalizeLoanBranch(l.branch) }))
-      .filter((l) => l.branch !== null && inScope(l.branch) && isBanked(l.loan_info_channel));
+      .filter((l) => l.branch !== null && inScope(l.branch) && isBankedChannel(l.loan_info_channel));
 
     const loanNumbers = loans.map((l) => l.loan_number as string);
 
@@ -248,6 +249,22 @@ export async function GET(req: NextRequest) {
         if (!booked || booked.size === 0) return false;
         return [...booked].some((b) => !expectedMarginAccounts(b).includes(acc));
       });
+      /**
+       * "Earned nothing at all" — the WIDE definition, on purpose.
+       *
+       * DELIBERATELY NOT the check Loan Validation runs. That one asks whether
+       * the corporate margin fee was booked, and accepts DM (41309) or RM
+       * (41307). This one asks whether the loan produced any margin whatsoever,
+       * so it has to include Back-end, Front-end and Discount: those are how a
+       * branch loan earns, and a loan carrying 67.410 of Back-end has plainly
+       * not gone unpaid.
+       *
+       * Narrowing this to DM/RM to "make them consistent" would flag every
+       * branch loan that earns outside the corporate accounts. Widening the
+       * validation check to these five would silence the findings it exists to
+       * raise. Two questions, two answers, and MARGIN_RECEIVED_GL_CODES carries
+       * the same warning from the other side.
+       */
       const noMargin = ALL_MARGIN_ACCOUNTS.every((acc) => (a.concepts[acc] ?? 0) === 0);
 
       return {
@@ -255,15 +272,25 @@ export async function GET(req: NextRequest) {
         borrower_name: l.borrower_name,
         loan_officer: l.loan_officer,
         /**
-         * The margin net: DM Margin + RM Margin and nothing else.
+         * The margin net: every margin account the loan can earn through —
+         * Back-end, Front-end, Discount Income, RM Margin, DM Margin.
          *
-         * A different number from the revenue net beside it, and deliberately
-         * so — Processing Income, Fee Income and the rest are revenue but they
-         * are not margin. Measured across the table the two are 814.522,13 and
-         * 4.414.688,43, so they cannot be confused by accident; they are
-         * labelled apart all the same.
+         * It used to be DM + RM alone, and the old comment here defended that
+         * as deliberate. It was not defensible. DM Margin is a fixed percentage
+         * of the loan amount, so a column built on it barely varies: measured
+         * over the 388 banked loans of 2026 its median was EXACTLY 65,0 bps and
+         * its maximum 90,0, with 94 loans sitting on 65,0 to the cent. An
+         * indicator that is almost a constant is not reading the loan, it is
+         * reading a fee schedule. Loan 770002038757 showed 65,00 bps against an
+         * actual margin of 339,90.
+         *
+         * Still a different number from the revenue net beside it, and that
+         * part was always right: Processing Income, Fee Income and Origination
+         * Income are revenue and are not margin. The two are 4.057.635,36 and
+         * 4.188.428,19 — close enough now that they MUST be labelled apart,
+         * which they are.
          */
-        margin_net: CORPORATE_MARGIN_ACCOUNTS.reduce((sum: number, acc: string) => sum + (a.concepts[acc] ?? 0), 0),
+        margin_net: ALL_MARGIN_ACCOUNTS.reduce((sum: number, acc: string) => sum + (a.concepts[acc] ?? 0), 0),
         branch: l.branch!,
         loan_program: l.loan_program,
         loan_info_channel: l.loan_info_channel,

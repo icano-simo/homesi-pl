@@ -72,12 +72,33 @@ export interface PLNote {
   /** Set when the note lost its transaction; cleared when it is reattached. */
   orphaned_at: string | null;
   note_text: string;
+  /**
+   * Who wrote it, stamped from the session. Null on the 21 notes written before
+   * the endpoint asked — see authorLabel.
+   */
   author: string | null;
   /** Figure of the cell when the note was written. Null for notes created
    *  before the column existed — those show only the current amount. */
   amount_at_creation?: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * How a note names its writer, including when it cannot.
+ *
+ * "Unknown author" rather than a dash. The 21 notes written before the endpoint
+ * recorded a session have no author and never will — there is nowhere to
+ * recover it from and it is not invented — but a dash reads as a rendering gap,
+ * as if the name were there and did not arrive. Saying the name is not known is
+ * a fact about the note, and a reader who needs to ask somebody learns straight
+ * away that there is nobody to ask.
+ *
+ * One definition because the label appears in four places, and four independent
+ * dashes are four chances to say it differently.
+ */
+export function authorLabel(author: string | null | undefined): string {
+  return author?.trim() || "Unknown author";
 }
 
 /** Human labels for scope keys, used in the drawer breadcrumb. */

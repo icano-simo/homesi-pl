@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { MessageSquarePlus, Trash2, Loader2 } from "lucide-react";
-import { canonicalScopeKey, type NoteScope, type PLNote } from "@/lib/note-scope";
+import { authorLabel, canonicalScopeKey, type NoteScope, type PLNote } from "@/lib/note-scope";
 
 /**
  * Chronological note log for a single entity — a cost center, an employee, a
@@ -130,7 +130,7 @@ export function NotesLog({
               <p className="whitespace-pre-wrap text-[12px] text-slate-800">{n.note_text}</p>
               <div className="mt-2 flex items-center justify-between">
                 <span className="text-[10px] text-slate-400">
-                  {n.author ? `${n.author} · ` : ""}{formatWhen(n.created_at)}
+                  {authorLabel(n.author)} · {formatWhen(n.created_at)}
                 </span>
                 <button
                   onClick={() => remove(n.id)}

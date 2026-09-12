@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
+import { MARGIN_RECEIVED_GL_CODES, MARGIN_RECEIVED_GL_LIST } from "@/lib/loan-detail-accounts";
 
 export const dynamic = "force-dynamic";
 
@@ -14,10 +15,39 @@ export interface ValidationRow {
   loan_officer: string | null;
   branch: string | null;
   loan_program: string | null;
+  /**
+   * How the loan came in: "Banked - Retail" or "Brokered".
+   *
+   * A constant in the All Loans list, which filters to banked before this is
+   * built, and genuinely varying in B2B — 96 banked against 10 brokered. So the
+   * value travels for both and only B2B offers it as a filter: a filter with
+   * one option is a control that cannot do anything.
+   */
+  loan_info_channel: string | null;
   month: string | null;
   year: number | null;
   loan_amount: number | null;
+  /** DM Margin (41309) only — never DM + RM. See rm_total. */
   accounting_total: number;
+  /**
+   * The same DM figure, null when there is no DM booking at all.
+   *
+   * accounting_total collapses "no booking" and "a booking of zero" into 0, and
+   * that was harmless while a loan could only match through DM. It is not
+   * harmless now: the 15 loans that match through RM alone would print 0,00
+   * under DM Margin, which reads as a fee booked at zero rather than a fee not
+   * booked there. The field stays for the callers that only want a number.
+   */
+  dm_total: number | null;
+  /**
+   * RM Margin (41307), the alternative booking of the same corporate fee.
+   *
+   * Null means no RM booking at all, which is not the same as a booking of
+   * zero. Its own field because 27 loans carry both accounts and 15 carry only
+   * this one: adding them would make the DM column and its bps into something
+   * other than what they are labelled.
+   */
+  rm_total: number | null;
   bps: number | null;
   status: "match" | "missing" | "exempt";
   tx_description: string | null;
@@ -66,7 +96,7 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let loQuery: any = supabase
     .from("loan_officials")
-    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program")
+    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program, loan_info_channel")
     .order("loan_number");
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
@@ -91,7 +121,12 @@ export async function GET(req: NextRequest) {
   // Brokered loans are dropped from it: they do not earn margin the way banked
   // loans do, so listing them as "missing in accounting" reports an absence
   // that was never going to be there. Measured 2026-08-17: 48 brokered of 436.
-  if (type === "all_loans") loQuery = loQuery.eq("loan_info_channel", "Banked - Retail");
+  //
+  // Filtered on the prefix, in JS, through the one predicate that owns the
+  // rule — see isBankedChannel. The `= "Banked - Retail"` this replaces agreed
+  // with the loan detail's own test only because a single banked value exists
+  // today; a second one would have entered one screen and not the other.
+  if (type === "all_loans") loQuery = loQuery.like("loan_info_channel", "Banked%");
 
   const { data: loanOfficialsAll, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
@@ -110,8 +145,14 @@ export async function GET(req: NextRequest) {
 
   // ── 2. Determine transaction filter strategy ───────────────────────────────
   // B2B, On Demand, Processing: match by check_description text regardless of GL code.
-  // Recruitment and all_loans: match by GL code 41309 (description text TBD for recruitment).
-  const glCode: string | null = type === "all_loans" ? "41309" : null;
+  //
+  // all_loans: match by the margin GL codes — DM Margin (41309) OR RM Margin
+  // (41307). It was 41309 alone, which reported 15 loans as missing their
+  // margin when they had received it in RM: 45 alerts of which only 30 were
+  // real. See MARGIN_RECEIVED_GL_CODES for why this is a different definition
+  // of "margin" from the five accounts the Table List net uses, and why the two
+  // must not be unified.
+  const glCodes: readonly string[] | null = type === "all_loans" ? MARGIN_RECEIVED_GL_LIST : null;
   const descFilter: string | null = type === "b2b" ? "B2B SUCCESS FEE" : null;
 
   // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
@@ -122,7 +163,7 @@ export async function GET(req: NextRequest) {
     let q: any = supabase
       .from("pl_transactions")
       .select("loan_number, loan_number_incomplete, check_description, gl_code, movement, month, year, branch");
-    if (glCode)          q = q.eq("gl_code", glCode);
+    if (glCodes)         q = q.in("gl_code", glCodes as string[]);
     if (descFilter)      q = q.ilike("check_description", `%${descFilter}%`);
     if (months.length  > 0) q = q.in("month",  months);
     if (years.length   > 0) q = q.in("year",   years);
@@ -146,10 +187,24 @@ export async function GET(req: NextRequest) {
 
   // ── 4. Aggregate transactions by loan_number ────────────────────────────────
   const txByLoan = new Map<string, number>();
+  /**
+   * RM Margin kept apart, never added to DM.
+   *
+   * They are alternative bookings of the same corporate fee, not two components
+   * of one figure, and 27 of the 388 loans carry both. Summed, the "DM Margin"
+   * column would silently stop being DM Margin and its bps would stop being the
+   * fee rate it is read as. So each keeps its own column and the check only asks
+   * whether either exists.
+   */
+  const rmByLoan = new Map<string, number>();
   for (const tx of (transactions ?? []) as Array<Record<string, unknown>>) {
     const loanNum = (tx.loan_number as string | null)?.trim();
     if (!loanNum || tx.loan_number_incomplete) continue;
-    txByLoan.set(loanNum, (txByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
+    if (tx.gl_code === MARGIN_RECEIVED_GL_CODES.rm) {
+      rmByLoan.set(loanNum, (rmByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
+    } else {
+      txByLoan.set(loanNum, (txByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
+    }
   }
 
   // ── 4b. Branch-700 aggregation for B2B description / movement columns ─────────
@@ -188,6 +243,12 @@ export async function GET(req: NextRequest) {
   const rows: ValidationRow[] = (loanOfficials ?? []).map((lo: Record<string, unknown>) => {
     const loanNum = lo.loan_number as string;
     const total = txByLoan.get(loanNum);
+    const rmTotal = rmByLoan.get(loanNum);
+    /**
+     * Margin was received if EITHER account carries it. Existence, not amount:
+     * the two are never compared and never added.
+     */
+    const gotMargin = total !== undefined || rmTotal !== undefined;
     const accounting_total = total ?? 0;
     const loan_amount = lo.loan_amount as number | null;
     const bps =
@@ -203,10 +264,14 @@ export async function GET(req: NextRequest) {
       // way. The value in the file stays available in loan_officials.
       branch: resolveLoanBranchAlias(lo.branch as string | null),
       loan_program: lo.loan_program as string | null,
+      loan_info_channel: lo.loan_info_channel as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,
       loan_amount,
       accounting_total,
+      dm_total: total ?? null,
+      /** Null when the loan has no RM booking, so "none" and "zero" stay apart. */
+      rm_total: rmTotal ?? null,
       bps,
       /**
        * Exempt is not a third kind of absence — it is the same absence, on a
@@ -218,7 +283,7 @@ export async function GET(req: NextRequest) {
        * Nothing about the detection changes. The check that already ran is the
        * one that ran; this only decides how its answer is presented.
        */
-      status: total !== undefined
+      status: gotMargin
         ? "match"
         : (type === "b2b" && isB2BFeeExempt(lo.branch as string | null)) ? "exempt" : "missing",
       tx_description: b700?.description ?? null,

@@ -30,6 +30,59 @@
 
 export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
 
+/**
+ * ─── TWO DEFINITIONS OF "MARGIN", BOTH CORRECT ─────────────────────────────
+ *
+ * Do not unify these. They answer different questions, and merging them would
+ * break one of the two screens that depend on them:
+ *
+ *   MARGIN_RECEIVED_GL_CODES — "did the corporate margin fee get booked for
+ *   this loan at all?"  DM Margin (41309) or RM Margin (41307). Used by the
+ *   Loan Validation All Loans check and, through its summary, by the roadmap
+ *   counter. It is about a booking existing, not about how much.
+ *
+ *   ALL_MARGIN_ACCOUNTS — "how much margin did this loan earn?"  The five
+ *   accounts, Back-end and Front-end and Discount included, because a branch
+ *   loan earns through those. Used by the margin net of Table List.
+ *
+ * The narrow one exists because 41309/41307 are the corporate fee: exactly one
+ * of them is expected per loan, so their absence is a finding. The wide one
+ * exists because the amount a loan produced is not the corporate fee. Feeding
+ * the five accounts into the validation check would silence real findings; the
+ * two into the net would go back to reading a fixed 65 bps.
+ *
+ * WHY BOTH CODES AND NOT ONLY DM. Measured over the 388 banked loans: 316
+ * carry only DM, 27 carry both, and 15 carry ONLY RM. Those 15 received their
+ * margin and were being reported as missing it — 45 alerts where 30 were real.
+ * Existence in either is enough; the two are never added together, and the
+ * screen shows each amount in its own column so nothing is conflated.
+ */
+export const MARGIN_RECEIVED_GL_CODES = {
+  dm: "41309",
+  rm: "41307",
+} as const;
+
+export const MARGIN_RECEIVED_GL_LIST: readonly string[] = [
+  MARGIN_RECEIVED_GL_CODES.dm,
+  MARGIN_RECEIVED_GL_CODES.rm,
+];
+
+/**
+ * Whether a loan came in through a banked channel.
+ *
+ * One definition because there were two, and they only agreed by luck: the loan
+ * detail matched on `startsWith("Banked")` while loan validation matched on
+ * `= "Banked - Retail"`. Today the data holds one banked value (388 of 436, the
+ * other 48 Brokered) so both return the same set — but the column is named for
+ * a family, and the day a second banked channel appears one screen would take
+ * it and the other would drop it, silently and in opposite directions.
+ *
+ * The prefix is the right test. A channel called "Banked - Something" is banked.
+ */
+export function isBankedChannel(channel: string | null | undefined): boolean {
+  return (channel ?? "").trim().startsWith("Banked");
+}
+
 export const BRANCH_MARGIN_ACCOUNTS = [
   "Back-end Margin",
   "Front-end Margin",
