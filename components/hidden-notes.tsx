@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { X } from "lucide-react";
-import type { PLNote } from "@/lib/note-scope";
+import { authorLabel, type PLNote } from "@/lib/note-scope";
 
 /** One note the active filters are keeping off the report, and what is keeping it. */
 export interface HiddenNote {
@@ -111,7 +111,7 @@ export function HiddenNotesModal({
               <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-snug text-slate-800">
                 {note.note_text}
               </p>
-              <p className="mt-1 text-[10px] text-slate-400">{note.author ?? "—"}</p>
+              <p className="mt-1 text-[10px] text-slate-400">{authorLabel(note.author)}</p>
             </div>
           ))}
         </div>
