@@ -17,6 +17,7 @@ import { fanOutBySplits, type SplitEntry } from "@/lib/apply-splits";
 import { createPortal } from "react-dom";
 import {
   buildNoteIndex,
+  authorLabel,
   cellKey,
   reportBaseScope,
   notesForCell,
@@ -243,7 +244,7 @@ function NoteDot({
               </p>
               <div className="mt-2 flex items-center justify-between gap-2">
                 <span className="truncate text-[10px] text-slate-400">
-                  {first.author ?? "—"}
+                  {authorLabel(first.author)}
                   {pop.notes.length > 1 ? ` · +${pop.notes.length - 1} more` : ""}
                 </span>
                 <button

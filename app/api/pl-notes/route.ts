@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { canonicalScopeKey, type NoteScope } from "@/lib/note-scope";
 import { txFingerprint, FINGERPRINT_SELECT, type FingerprintableTx } from "@/lib/tx-fingerprint";
+import { requireSession } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -71,12 +72,24 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  /**
+   * Who wrote it comes from the session, never from the caller.
+   *
+   * `author` used to be read from the request body — a field the client never
+   * sent, which is why all 21 existing notes are anonymous. Taking it from the
+   * session fixes that and closes the other half at the same time: a body field
+   * meant anyone could sign a note with anyone's name. That was harmless while
+   * nothing wrote it and stops being harmless the moment the field is used to
+   * ask somebody about their note.
+   */
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
   let body: {
     level?: string;
     scope?: NoteScope;
     transaction_id?: string | null;
     note_text?: string;
-    author?: string | null;
     /** The cell’s figure as the writer saw it. Absent means unknown, which
      *  is different from zero and is rendered as such. */
     amount_at_creation?: number | null;
@@ -118,7 +131,7 @@ export async function POST(req: NextRequest) {
       transaction_id: body.transaction_id ?? null,
       tx_fingerprint: fingerprintValue,
       note_text:      noteText,
-      author:         body.author?.trim() || null,
+      author:         guard.user.email ?? null,
       // Stored, never derived. A figure recomputed later is a different
       // number, and the point of keeping this one is to be able to say so.
       amount_at_creation:

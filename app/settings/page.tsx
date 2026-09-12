@@ -45,7 +45,14 @@ export default function SettingsPage() {
     <div className="max-w-xl space-y-8">
       <div>
         <h2 className="text-xl font-bold text-gray-900">Settings</h2>
-        <p className="mt-1 text-sm text-gray-500">Global application configuration.</p>
+        {/* It used to say "Global application configuration", and it meant it:
+            one row for all 28 accounts, so saving here changed what everyone
+            else was looking at, live and without telling them. Now the filter
+            belongs to whoever set it. */}
+        <p className="mt-1 text-sm text-gray-500">
+          Your own settings. Nobody else is affected by what you change here, and nothing
+          another person changes will move your filter while you are working.
+        </p>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm divide-y divide-gray-100">
@@ -56,11 +63,19 @@ export default function SettingsPage() {
             <h3 className="font-semibold text-gray-800">Active Branch Filter</h3>
           </div>
           <p className="mt-2 text-sm text-gray-500 leading-relaxed">
-            Restricts the entire application to specific branches. Applies automatically to all
-            reports, the CC Assignment engine, and <strong className="text-gray-700">Re-apply All Rules</strong> —
-            which will evaluate only the selected branches instead of all ~12 K rows, improving
-            response time significantly. All other branch data remains intact in the database; only
-            the default view is scoped.
+            Restricts <strong className="text-gray-700">your</strong> view of the application to
+            specific branches. Applies automatically to all reports, the CC Assignment engine, and{" "}
+            <strong className="text-gray-700">Re-apply All Rules</strong> — which will evaluate only
+            the selected branches instead of all ~12 K rows, improving response time significantly.
+            All other branch data remains intact in the database; only your view is scoped.
+          </p>
+          {/* Said here because a note carries the branch it was written under.
+              While this was shared, someone could write a note believing it was
+              about one branch after another person had moved the filter — and
+              nothing afterwards could show it. */}
+          <p className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+            A note you write is anchored to the branches selected here, so this filter decides what
+            your notes are about. It is yours alone: no one else can change it while you work.
           </p>
         </div>
 
@@ -123,8 +138,10 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* Not the browser, and worth saying: this app is used to close the month,
+          and a filter that is forgotten halfway through gets in the way. */}
       <p className="text-xs text-gray-400">
-        Settings are saved to the database and apply across all devices and sessions.
+        Saved to your account, so it follows you to any computer you sign in from.
       </p>
     </div>
   );
