@@ -259,11 +259,17 @@ export async function GET(req: NextRequest) {
        * branch loan earns, and a loan carrying 67.410 of Back-end has plainly
        * not gone unpaid.
        *
-       * Narrowing this to DM/RM to "make them consistent" would flag every
-       * branch loan that earns outside the corporate accounts. Widening the
-       * validation check to these five would silence the findings it exists to
-       * raise. Two questions, two answers, and MARGIN_RECEIVED_GL_CODES carries
-       * the same warning from the other side.
+       * Narrowing this to the accounts Loan Validation checks would flag every
+       * branch loan that earns outside them. Widening that check to these five
+       * would silence the findings it exists to raise. Dos preguntas, dos
+       * respuestas, y MARGIN_GRANTING_GL_CODES lleva el mismo aviso desde el
+       * otro lado -- con la lista de las tres definiciones que hay ahora.
+       *
+       * ⚠ Y UNA QUE HAY QUE ARREGLAR AQUI ALGUN DIA: ALL_MARGIN_ACCOUNTS va por
+       * category_7, y 41305 LO Margin cae en 'Front-end Margin'. O sea que este
+       * neto lleva dentro -2.063.063 de margen CEDIDO al loan officer, sin que
+       * nada lo diga. No se toca en este cambio -- es otra pantalla y moveria
+       * cifras que nadie esta mirando ahora -- pero queda dicho.
        */
       const noMargin = ALL_MARGIN_ACCOUNTS.every((acc) => (a.concepts[acc] ?? 0) === 0);
 

@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
-import { MARGIN_RECEIVED_GL_CODES, MARGIN_RECEIVED_GL_LIST } from "@/lib/loan-detail-accounts";
+import {
+  MARGIN_CEDED_GL_CODE,
+  MARGIN_GRANTING_GL_CODES,
+  MARGIN_GRANTING_GL_LIST,
+} from "@/lib/loan-detail-accounts";
 
 export const dynamic = "force-dynamic";
 
@@ -18,16 +22,25 @@ export interface ValidationRow {
   /**
    * How the loan came in: "Banked - Retail" or "Brokered".
    *
-   * A constant in the All Loans list, which filters to banked before this is
-   * built, and genuinely varying in B2B — 96 banked against 10 brokered. So the
-   * value travels for both and only B2B offers it as a filter: a filter with
-   * one option is a control that cannot do anything.
+   * Varia en los dos sub-tabs desde que All Loans dejo de filtrar a banked: 388
+   * banked y 48 brokered alli, 96 y 10 en B2B. Antes era constante en All Loans
+   * y por eso aquella pantalla enseñaba un letrero en vez de un desplegable.
+   *
+   * Ese letrero no hay que quitarlo: las opciones se derivan de las filas, asi
+   * que el filtro aparece solo donde hay mas de un canal. La regla se cumple
+   * sola, que era el motivo de derivarlas del dato.
    */
   loan_info_channel: string | null;
   month: string | null;
   year: number | null;
   loan_amount: number | null;
-  /** DM Margin (41309) only — never DM + RM. See rm_total. */
+  /**
+   * La SUMA de las cuatro cuentas que otorgan margen. El numerador de `bps`.
+   *
+   * Antes era DM Margin a secas. NO incluye 41305 LO Margin, que es margen
+   * cedido al loan officer y viaja en `lo_margin_ceded`: sumarlo daria bps
+   * negativos en prestamos que ganaron (710002042266 pasaria de 327,5 a -100,7).
+   */
   accounting_total: number;
   /**
    * The same DM figure, null when there is no DM booking at all.
@@ -48,6 +61,17 @@ export interface ValidationRow {
    * other than what they are labelled.
    */
   rm_total: number | null;
+  /** BM Margin (41306). La que salva 17 de las alertas banked. */
+  bm_total: number | null;
+  /** Brokered Origination Income (41870). La cuenta propia de los brokered. */
+  brokered_total: number | null;
+  /**
+   * LO Margin (41305): margen CEDIDO al loan officer.
+   *
+   * Se muestra y NUNCA se suma con las otras cuatro. 290 de sus 315 filas son
+   * negativas; es una distribucion de lo ganado, no un ingreso.
+   */
+  lo_margin_ceded: number | null;
   bps: number | null;
   status: "match" | "missing" | "exempt";
   tx_description: string | null;
@@ -116,17 +140,20 @@ export async function GET(req: NextRequest) {
    */
 
   if (type === "b2b") loQuery = loQuery.eq("b2b", true);
-  // all_loans: no flag filter.
-  //
-  // Brokered loans are dropped from it: they do not earn margin the way banked
-  // loans do, so listing them as "missing in accounting" reports an absence
-  // that was never going to be there. Measured 2026-08-17: 48 brokered of 436.
-  //
-  // Filtered on the prefix, in JS, through the one predicate that owns the
-  // rule — see isBankedChannel. The `= "Banked - Retail"` this replaces agreed
-  // with the loan detail's own test only because a single banked value exists
-  // today; a second one would have entered one screen and not the other.
-  if (type === "all_loans") loQuery = loQuery.like("loan_info_channel", "Banked%");
+  /*
+   * all_loans: sin filtro de bandera Y SIN FILTRO DE CANAL.
+   *
+   * Los brokered estuvieron fuera con este motivo escrito: "no ganan margen
+   * como los banked, asi que listarlos como que falta en contabilidad reporta
+   * una ausencia que nunca iba a estar". Era cierto sobre la regla de entonces
+   * -- que solo miraba DM y RM, dos cuentas corporativas -- y dejo de serlo al
+   * ampliarla: un brokered gana por 41870 Brokered Origination Income, su
+   * cuenta propia, y 31 de los 48 la tienen.
+   *
+   * Excluirlos ya no evitaba un falso positivo: escondia 30 prestamos con
+   * margen contabilizado y 18 sin el, que son hallazgos de verdad y nadie
+   * estaba viendo.
+   */
 
   const { data: loanOfficialsAll, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
@@ -146,13 +173,20 @@ export async function GET(req: NextRequest) {
   // ── 2. Determine transaction filter strategy ───────────────────────────────
   // B2B, On Demand, Processing: match by check_description text regardless of GL code.
   //
-  // all_loans: match by the margin GL codes — DM Margin (41309) OR RM Margin
-  // (41307). It was 41309 alone, which reported 15 loans as missing their
-  // margin when they had received it in RM: 45 alerts of which only 30 were
-  // real. See MARGIN_RECEIVED_GL_CODES for why this is a different definition
-  // of "margin" from the five accounts the Table List net uses, and why the two
-  // must not be unified.
-  const glCodes: readonly string[] | null = type === "all_loans" ? MARGIN_RECEIVED_GL_LIST : null;
+  /*
+   * all_loans: las CUATRO cuentas que otorgan margen -- DM (41309), RM (41307),
+   * BM (41306) y Brokered Origination (41870) -- mas la de margen CEDIDO
+   * (41305), que se trae para poder enseñarla y nunca para sumarla.
+   *
+   * Empezo siendo 41309 a secas, luego 41309 y 41307. Cada ampliacion apago
+   * alertas sobre prestamos que si habian recibido margen, solo que en otra
+   * cuenta. Ver MARGIN_GRANTING_GL_CODES: alli esta la prueba de pertenencia
+   * --¿puede ser lo unico que un prestamo tenga?--, por que 41305, 41308 y
+   * 42109 quedan fuera, y por que esta definicion NO es la del neto de Table
+   * List aunque las dos se llamen margen.
+   */
+  const glCodes: readonly string[] | null =
+    type === "all_loans" ? [...MARGIN_GRANTING_GL_LIST, MARGIN_CEDED_GL_CODE] : null;
   const descFilter: string | null = type === "b2b" ? "B2B SUCCESS FEE" : null;
 
   // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
@@ -185,27 +219,44 @@ export async function GET(req: NextRequest) {
     txOffset += 1000;
   }
 
-  // ── 4. Aggregate transactions by loan_number ────────────────────────────────
-  const txByLoan = new Map<string, number>();
-  /**
-   * RM Margin kept apart, never added to DM.
+  /*
+   * ── 4. Aggregate transactions by loan_number ──────────────────────────────
    *
-   * They are alternative bookings of the same corporate fee, not two components
-   * of one figure, and 27 of the 388 loans carry both. Summed, the "DM Margin"
-   * column would silently stop being DM Margin and its bps would stop being the
-   * fee rate it is read as. So each keeps its own column and the check only asks
-   * whether either exists.
+   * Una entrada por cuenta, nunca una suma prematura. Cada cuenta conserva su
+   * columna porque son bookings ALTERNATIVOS del margen y no componentes de una
+   * cifra: un prestamo puede llevar DM y BM a la vez, y fundirlos haria que la
+   * columna "DM Margin" dejara de ser DM Margin sin avisar.
+   *
+   * Lo unico que se suma es `granted`, y se suma para los bps, que es la unica
+   * pregunta que pide un total.
    */
-  const rmByLoan = new Map<string, number>();
+  const byAccount = new Map<string, Record<string, number>>();
   for (const tx of (transactions ?? []) as Array<Record<string, unknown>>) {
     const loanNum = (tx.loan_number as string | null)?.trim();
     if (!loanNum || tx.loan_number_incomplete) continue;
-    if (tx.gl_code === MARGIN_RECEIVED_GL_CODES.rm) {
-      rmByLoan.set(loanNum, (rmByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
-    } else {
-      txByLoan.set(loanNum, (txByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
-    }
+    const gl = (tx.gl_code as string | null) ?? "";
+    const a = byAccount.get(loanNum) ?? {};
+    a[gl] = (a[gl] ?? 0) + ((tx.movement as number) ?? 0);
+    byAccount.set(loanNum, a);
   }
+
+  /** Lo contabilizado en las cuatro que otorgan, por cuenta y en total. */
+  const marginOf = (loanNum: string) => {
+    const a = byAccount.get(loanNum) ?? {};
+    const granting = MARGIN_GRANTING_GL_LIST.filter((c) => a[c] !== undefined);
+    return {
+      /** Existe en alguna de las cuatro. NO mira el importe: ver abajo. */
+      received: granting.length > 0,
+      /** La suma de las cuatro. El numerador de los bps. */
+      granted: granting.reduce((s, c) => s + (a[c] ?? 0), 0),
+      dm: a[MARGIN_GRANTING_GL_CODES.dm],
+      rm: a[MARGIN_GRANTING_GL_CODES.rm],
+      bm: a[MARGIN_GRANTING_GL_CODES.bm],
+      brokered: a[MARGIN_GRANTING_GL_CODES.brokered],
+      /** Margen cedido al LO. Viaja para verse; jamas entra en `granted`. */
+      ceded: a[MARGIN_CEDED_GL_CODE],
+    };
+  };
 
   // ── 4b. Branch-700 aggregation for B2B description / movement columns ─────────
   const txB700ByLoan = new Map<string, { movement: number; description: string | null }>();
@@ -242,18 +293,30 @@ export async function GET(req: NextRequest) {
   const showBps = type === "all_loans";
   const rows: ValidationRow[] = (loanOfficials ?? []).map((lo: Record<string, unknown>) => {
     const loanNum = lo.loan_number as string;
-    const total = txByLoan.get(loanNum);
-    const rmTotal = rmByLoan.get(loanNum);
+    const m = marginOf(loanNum);
     /**
-     * Margin was received if EITHER account carries it. Existence, not amount:
-     * the two are never compared and never added.
+     * Recibio margen si ALGUNA de las cuatro que otorgan lo lleva. EXISTENCIA,
+     * no importe: las cuatro no se comparan entre si, y un apunte de cero sigue
+     * siendo un apunte -- alguien lo contabilizo.
+     *
+     * 41305 no entra en esta prueba aunque se traiga: es margen cedido, y el
+     * unico prestamo que solo lo tiene lo tiene en negativo. Ver
+     * MARGIN_GRANTING_GL_CODES.
      */
-    const gotMargin = total !== undefined || rmTotal !== undefined;
-    const accounting_total = total ?? 0;
+    const gotMargin = m.received;
+    const accounting_total = m.granted;
     const loan_amount = lo.loan_amount as number | null;
+    /**
+     * Los bps salen de la SUMA de las cuatro, no de DM sola.
+     *
+     * Salia de DM, que es un porcentaje fijo del importe, asi que la columna
+     * medía un baremo de comision y no el margen del prestamo -- el mismo fallo
+     * que ya se corrigio en el neto de Table List. Sobre 710002042266: 7,5 bps
+     * con DM sola, 327,5 con las cuatro, porque su DM eran 168,19 de 7.344,19.
+     */
     const bps =
-      showBps && total !== undefined && loan_amount
-        ? (accounting_total / loan_amount) * 10000
+      showBps && m.received && loan_amount
+        ? (m.granted / loan_amount) * 10000
         : null;
     const b700 = txB700ByLoan.get(loanNum);
     return {
@@ -269,9 +332,17 @@ export async function GET(req: NextRequest) {
       year: lo.year as number | null,
       loan_amount,
       accounting_total,
-      dm_total: total ?? null,
-      /** Null when the loan has no RM booking, so "none" and "zero" stay apart. */
-      rm_total: rmTotal ?? null,
+      /*
+       * Una por cuenta, y todas anulables. Null = no hay apunte; 0 = lo hay y
+       * dice cero. Las dos cosas significan lo contrario y no pueden verse
+       * igual, que es el mismo criterio que ya se aplico a dm_total.
+       */
+      dm_total: m.dm ?? null,
+      rm_total: m.rm ?? null,
+      bm_total: m.bm ?? null,
+      brokered_total: m.brokered ?? null,
+      /** Margen CEDIDO al LO. Se enseña; no esta dentro de accounting_total. */
+      lo_margin_ceded: m.ceded ?? null,
       bps,
       /**
        * Exempt is not a third kind of absence — it is the same absence, on a
