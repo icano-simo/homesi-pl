@@ -189,6 +189,35 @@ export const MARGIN_BRANCH_GL_CODES = {
  * grupos, no solo para esta. Hoy 41870 es la unica; si mañana hay otra, no hay
  * que tocar codigo.
  */
+/**
+ * ─── DOS PREGUNTAS QUE ALGUIEN VA A VOLVER A HACERSE ───────────────────────
+ *
+ * 1. «BRANCH MARGIN INCLUYE LO MARGIN, QUE ES NEGATIVO. ¿NO HABRIA QUE
+ *    RESTARLO?»  NO. Ya resta.
+ *
+ *    Se suman los movimientos tal como vienen y el signo hace el trabajo. Es
+ *    el criterio de toda la app: `movement = credit - debit`, lo positivo suma
+ *    y lo negativo resta. Una resta explicita para 41305 lo restaria DOS veces.
+ *
+ *    Comprobado con el prestamo 710002042266:
+ *
+ *      41200 Discount Income   +9.602,39
+ *      41305 LO Margin         -9.602,39
+ *      41306 BM Margin         +7.176,00
+ *                              ─────────
+ *                               7.176,00
+ *
+ *    Por eso `marginGroupOf` solo dice a que grupo pertenece cada apunte, y
+ *    nunca toca el signo.
+ *
+ * 2. «¿DIVISION MARGIN MIRA LA CUENTA DE BROKER?»  SI, pero solo cuando esta
+ *    contabilizada en la 700.
+ *
+ *    Hoy esas cuatro filas suman 0,00, asi que no aporta nada al total. La
+ *    regla no esta puesta por lo que hace hoy sino para el dia que aporte: si
+ *    manaña la 700 registra ahi un ingreso de verdad, entra en el margen de la
+ *    division sin que haya que tocar nada.
+ */
 export type MarginGroup = "division" | "branch";
 
 export function marginGroupOf(glCode: string | null, branch: string | null): MarginGroup | null {

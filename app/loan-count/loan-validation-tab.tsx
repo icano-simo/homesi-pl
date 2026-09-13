@@ -705,8 +705,6 @@ function DiffBadge({ diff }: { diff: number }) {
 
 // ─── All Loans: types & helpers ───────────────────────────────────────────────
 
-type AllLoansView = "detail" | "analytics";
-
 const MONTH_ORDER = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
@@ -727,190 +725,6 @@ function monthKey(r: ValidationRow): string {
   return r.month && r.year ? `${r.month} ${r.year}` : r.month ?? "";
 }
 
-interface AnalyticsLONode {
-  lo: string;
-  loans: ValidationRow[];
-  byMonth: Record<string, number>;
-  total: number;
-}
-interface AnalyticsBranchNode {
-  branch: string;
-  los: AnalyticsLONode[];
-  byMonth: Record<string, number>;
-  total: number;
-}
-
-function buildAnalyticsTree(rows: ValidationRow[]): AnalyticsBranchNode[] {
-  const branchMap = new Map<string, Map<string, ValidationRow[]>>();
-  for (const row of rows) {
-    const b = row.branch ?? "(No Branch)";
-    const lo = row.loan_officer ?? "(Unknown LO)";
-    if (!branchMap.has(b)) branchMap.set(b, new Map());
-    const lm = branchMap.get(b)!;
-    if (!lm.has(lo)) lm.set(lo, []);
-    lm.get(lo)!.push(row);
-  }
-  return [...branchMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([branch, lm]) => {
-    const los: AnalyticsLONode[] = [...lm.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([lo, loans]) => {
-        const byMonth: Record<string, number> = {};
-        let total = 0;
-        for (const l of loans) {
-          const k = monthKey(l);
-          byMonth[k] = (byMonth[k] ?? 0) + 1;
-          total += 1;
-        }
-        return { lo, loans, byMonth, total };
-      });
-    const byMonth: Record<string, number> = {};
-    let total = 0;
-    for (const n of los) {
-      for (const [k, v] of Object.entries(n.byMonth)) byMonth[k] = (byMonth[k] ?? 0) + v;
-      total += n.total;
-    }
-    return { branch, los, byMonth, total };
-  });
-}
-
-// ─── All Loans: Analytics view ────────────────────────────────────────────────
-
-function AnalyticsView({ rows }: { rows: ValidationRow[] }) {
-  const months = useMemo(() => {
-    const ms = new Set<string>();
-    for (const r of rows) { const k = monthKey(r); if (k) ms.add(k); }
-    return [...ms].sort(sortMonthKey);
-  }, [rows]);
-
-  const tree = useMemo(() => buildAnalyticsTree(rows), [rows]);
-
-  const [expandedBranches, setExpandedBranches] = useState<Set<string>>(new Set());
-  const [expandedLOs, setExpandedLOs] = useState<Set<string>>(new Set());
-
-  const grandByMonth: Record<string, number> = {};
-  let grandTotal = 0;
-  for (const bn of tree) {
-    for (const [k, v] of Object.entries(bn.byMonth)) grandByMonth[k] = (grandByMonth[k] ?? 0) + v;
-    grandTotal += bn.total;
-  }
-
-  const toggleBranch = (b: string) =>
-    setExpandedBranches((p) => { const n = new Set(p); n.has(b) ? n.delete(b) : n.add(b); return n; });
-  const toggleLO = (k: string) =>
-    setExpandedLOs((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
-
-  if (rows.length === 0) return (
-    <div className="rounded-xl border border-gray-100 bg-white px-6 py-10 text-center text-sm text-gray-400">
-      No loans match the current filters.
-    </div>
-  );
-
-  return (
-    <div className="overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm max-h-[520px]">
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 z-10 bg-gray-50">
-          <tr className="border-b border-gray-100 text-gray-500">
-            <th className="px-3 py-2 font-medium text-left min-w-[220px]">Branch / Loan Officer / Loan</th>
-            {months.map((m) => (
-              <th key={m} className="px-3 py-2 font-medium text-right whitespace-nowrap">{m}</th>
-            ))}
-            <th className="px-3 py-2 font-semibold text-right text-gray-700 whitespace-nowrap">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {/* Grand Total */}
-          <tr className="border-b border-blue-100 bg-blue-50/50 font-semibold">
-            <td className="px-3 py-2 text-blue-800">Total</td>
-            {months.map((m) => (
-              <td key={m} className="px-3 py-2 text-right font-mono text-blue-700">
-                {grandByMonth[m] ? grandByMonth[m].toLocaleString() : <span className="text-gray-300">—</span>}
-              </td>
-            ))}
-            <td className="px-3 py-2 text-right font-mono text-blue-800">{grandTotal.toLocaleString()}</td>
-          </tr>
-
-          {tree.map((bn) => {
-            const bExp = expandedBranches.has(bn.branch);
-            return (
-              <Fragment key={`branch-${bn.branch}`}>
-                <tr
-                  className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer select-none"
-                  onClick={() => toggleBranch(bn.branch)}
-                >
-                  <td className="px-3 py-2 font-medium text-gray-800">
-                    <span className="mr-1.5 text-gray-400 text-[10px]">{bExp ? "▾" : "▸"}</span>
-                    Branch {bn.branch}
-                    <span className="ml-2 text-gray-400 font-normal text-[10px]">
-                      ({bn.los.length} LO{bn.los.length !== 1 ? "s" : ""})
-                    </span>
-                  </td>
-                  {months.map((m) => (
-                    <td key={m} className="px-3 py-2 text-right font-mono text-gray-700">
-                      {bn.byMonth[m] ? bn.byMonth[m].toLocaleString() : <span className="text-gray-200">—</span>}
-                    </td>
-                  ))}
-                  <td className="px-3 py-2 text-right font-mono font-semibold text-gray-800">{bn.total.toLocaleString()}</td>
-                </tr>
-
-                {bExp && bn.los.map((ln) => {
-                  const loKey = `${bn.branch}::${ln.lo}`;
-                  const lExp = expandedLOs.has(loKey);
-                  return (
-                    <Fragment key={`lo-${loKey}`}>
-                      <tr
-                        className="border-b border-gray-50 bg-gray-50/40 hover:bg-gray-100/60 cursor-pointer select-none"
-                        onClick={() => toggleLO(loKey)}
-                      >
-                        <td className="px-3 py-1.5 pl-8 text-gray-700">
-                          <span className="mr-1.5 text-gray-400 text-[10px]">{lExp ? "▾" : "▸"}</span>
-                          {ln.lo}
-                          <span className="ml-2 text-gray-400 font-normal text-[10px]">({ln.loans.length})</span>
-                        </td>
-                        {months.map((m) => (
-                          <td key={m} className="px-3 py-1.5 text-right font-mono text-gray-600">
-                            {ln.byMonth[m] ? ln.byMonth[m].toLocaleString() : <span className="text-gray-200">—</span>}
-                          </td>
-                        ))}
-                        <td className="px-3 py-1.5 text-right font-mono font-medium text-gray-700">{ln.total.toLocaleString()}</td>
-                      </tr>
-
-                      {lExp && ln.loans.map((loan) => {
-                        const lk = monthKey(loan);
-                        return (
-                          <tr key={`loan-${loan.loan_number}-${lk}`} className="border-b border-gray-50 bg-white hover:bg-gray-50/50">
-                            <td className="px-3 py-1 pl-14 text-gray-700">
-                              <span className="font-mono text-gray-800">{loan.loan_number}</span>
-                              {loan.borrower_name && (
-                                <span className="ml-2 text-gray-500">{loan.borrower_name}</span>
-                              )}
-                            </td>
-                            {months.map((m) => (
-                              <td key={m} className="px-3 py-1 text-right font-mono">
-                                {lk === m
-                                  ? <span className="text-gray-600">1</span>
-                                  : <span className="text-gray-200">—</span>}
-                              </td>
-                            ))}
-                            <td className="px-3 py-1 text-right font-mono text-gray-700">
-                              {loan.loan_amount != null ? fmtUSD(loan.loan_amount) : "—"}
-                              {loan.bps != null && (
-                                <span className="ml-2 text-gray-400 text-[10px]">{fmtBPS(loan.bps)}</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </Fragment>
-                  );
-                })}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 // ─── All Loans: Detail view ───────────────────────────────────────────────────
 
@@ -923,6 +737,15 @@ function DetailView({
   colFilters: Record<string, string>;
   onColFilterChange: (col: string, val: string) => void;
 }) {
+  /**
+   * ¿Viene lead_source del archivo o ya del espejo?
+   *
+   * Se lee de las propias filas, asi que el aviso se apaga solo el dia que el
+   * endpoint cambie de origen. Una bandera en la pantalla habria que acordarse
+   * de quitarla, y nadie se acuerda.
+   */
+  const fromFile = rows.some((r) => r.lead_source_origin === "loan_officials_file");
+
   const visible = rows.filter((r) => {
     if (colFilters.borrower_name && !(r.borrower_name ?? "").toLowerCase().includes(colFilters.borrower_name.toLowerCase())) return false;
     if (colFilters.loan_officer && !(r.loan_officer ?? "").toLowerCase().includes(colFilters.loan_officer.toLowerCase())) return false;
@@ -966,7 +789,15 @@ function DetailView({
             {filterHeader("loan_officer", "Loan Officer")}
             <th className="px-3 py-2 font-medium text-left">Branch</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Program</th>
-            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Lead Source</th>
+            {/* El aviso sale del origen que trae la propia fila, no de una
+                bandera: el dia que esta columna venga de Encompass, el asterisco
+                desaparece solo. */}
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap"
+                title={fromFile
+                  ? "From the uploaded loan file, not from Encompass. 103 of 436 loans carry values Encompass does not use (Encompass Integration, B2B Strategy, Referral, External Referral, blank) — capture leftovers that will change when this column moves to the mirror."
+                  : undefined}>
+              Lead Source{fromFile && <span className="ml-0.5 text-amber-600">*</span>}
+            </th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Channel</th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
             {/* TWO GROUPS, TWO COLUMNS, BOTH ALWAYS VISIBLE.
@@ -1089,7 +920,6 @@ function AllLoansSection({
   branches: string[];
   filterLoanNumber: string;
 }) {
-  const [view, setView] = useState<AllLoansView>("detail");
   const [data, setData] = useState<ValidationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1160,36 +990,7 @@ function AllLoansSection({
   function handleExport() {
     if (!data || filteredRows.length === 0) return;
     const today = todayISO();
-    if (view === "analytics") {
-      const tree = buildAnalyticsTree(filteredRows);
-      const exportRows: Record<string, unknown>[] = [];
-      for (const bn of tree) {
-        for (const ln of bn.los) {
-          for (const loan of ln.loans) {
-            exportRows.push({
-              branch:        bn.branch,
-              loan_officer:  ln.lo,
-              loan_number:   loan.loan_number,
-              borrower_name: loan.borrower_name ?? "",
-              month:         monthKey(loan),
-              loan_amount:   loan.loan_amount ?? "",
-              bps:           loan.bps ?? "",
-              status:        loan.status === "missing" ? "Missing" : "Match",
-            });
-          }
-        }
-      }
-      exportToXlsx(`loan-validation-all-loans-analytics-${today}.xlsx`, exportRows, [
-        { key: "branch",        label: "Branch" },
-        { key: "loan_officer",  label: "Loan Officer" },
-        { key: "loan_number",   label: "Loan Number" },
-        { key: "borrower_name", label: "Borrower Name" },
-        { key: "month",         label: "Month" },
-        { key: "loan_amount",   label: "Loan Amount" },
-        { key: "bps",           label: "Division BPS" },
-        { key: "status",        label: "Status" },
-      ]);
-    } else {
+    {
       const exportRows = filteredRows
         .filter((r) => {
           if (colFilters.borrower_name && !(r.borrower_name ?? "").toLowerCase().includes(colFilters.borrower_name.toLowerCase())) return false;
@@ -1254,24 +1055,6 @@ function AllLoansSection({
 
   return (
     <div className="space-y-4">
-      {/* Sub-tab switcher */}
-      <div className="flex gap-1 border-b border-gray-200">
-        {(["detail", "analytics"] as AllLoansView[]).map((v) => (
-          <button
-            key={v}
-            onClick={() => setView(v)}
-            className={[
-              "px-4 py-2 text-xs font-medium border-b-2 -mb-px transition-colors",
-              view === v
-                ? "border-blue-600 text-blue-700"
-                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300",
-            ].join(" ")}
-          >
-            {v.charAt(0).toUpperCase() + v.slice(1)}
-          </button>
-        ))}
-      </div>
-
       {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-gray-500 font-medium">Filter:</span>
@@ -1321,15 +1104,11 @@ function AllLoansSection({
             <MetricCard label="Avg branch BPS" value={avgBranchBPS != null ? fmtBPS(avgBranchBPS) : "—"} />
           </div>
 
-          {view === "detail" ? (
-            <DetailView
-              rows={filteredRows}
-              colFilters={colFilters}
-              onColFilterChange={(col, val) => setColFilters((p) => ({ ...p, [col]: val }))}
-            />
-          ) : (
-            <AnalyticsView rows={filteredRows} />
-          )}
+          <DetailView
+            rows={filteredRows}
+            colFilters={colFilters}
+            onColFilterChange={(col, val) => setColFilters((p) => ({ ...p, [col]: val }))}
+          />
 
           {showSurplus && <SurplusSection rows={data.surplus} type="all_loans" />}
         </>
@@ -1352,7 +1131,23 @@ export function LoanValidationTab({
   const { activeBranches } = useActiveBranches();
   const [activeType, setActiveType] = useState<ValType>("all_loans");
   const [selMonths, setSelMonths] = useState<string[]>([]);
-  const [selYears, setSelYears] = useState<string[]>([]);
+  /**
+   * El año EN CURSO viene marcado, calculado de la fecha de hoy.
+   *
+   * No del ultimo año con datos, ni de una constante: las dos se vuelven
+   * mentira sin que nadie las toque. Una constante caduca el 1 de enero -- es
+   * el mismo fallo que el "diciembre" fijo de /start --, y "el ultimo con
+   * datos" deja la pantalla mirando al año pasado justo en enero, que es cuando
+   * mas importa ver que el nuevo empezo vacio.
+   *
+   * ⚠ SE SELECCIONA AUNQUE NO TENGA DATOS, y la pantalla lo dice. Caer en
+   * silencio a otro año enseñaria cifras correctas de un periodo que nadie
+   * pidio, que es peor que una pantalla vacia con su motivo.
+   *
+   * Se calcula en cada carga y no una vez: una pestaña abierta en Nochevieja
+   * sigue en 2026 al dia siguiente.
+   */
+  const [selYears, setSelYears] = useState<string[]>([String(new Date().getFullYear())]);
   const [selBranches, setSelBranches] = useState<string[]>([]);
   const [filterLoanNumber, setFilterLoanNumber] = useState("");
 
@@ -1377,7 +1172,22 @@ export function LoanValidationTab({
   const loanBranches = selBranches;
   const globalBranchIgnored = activeBranches.length > 0;
 
-  const yearOptions = allYears.map(String);
+  /**
+   * El año en curso SIEMPRE esta entre las opciones, tenga datos o no.
+   *
+   * `allYears` sale de lo que hay cargado, asi que el 1 de enero el año nuevo
+   * no aparece: sin esto, el filtro vendria marcado con un año que el
+   * desplegable no ofrece, y el usuario no podria ni volver a el tras
+   * cambiarlo. El orden descendente pone el actual arriba, que es donde se
+   * busca.
+   */
+  const currentYear = String(new Date().getFullYear());
+  const yearOptions = useMemo(
+    () => [...new Set([currentYear, ...allYears.map(String)])].sort((a, b) => Number(b) - Number(a)),
+    [allYears, currentYear],
+  );
+  /** Un año elegido del que no hay ni una fila cargada. Se dice, no se corrige. */
+  const yearsWithoutData = selYears.filter((y) => !allYears.map(String).includes(y));
   const hasFilters = selMonths.length > 0 || selYears.length > 0 || selBranches.length > 0 || filterLoanNumber !== "";
 
   return (
@@ -1403,9 +1213,22 @@ export function LoanValidationTab({
             global branch filter ({activeBranches.join(", ")}) does not apply here
           </span>
         )}
+        {/* El año elegido no tiene ni una fila. Se dice aqui, junto al filtro
+            que lo causa, en vez de dejar una tabla vacia sin explicacion. */}
+        {yearsWithoutData.length > 0 && (
+          <span
+            title="No loans have been loaded for this year yet. The filter is still set to it on purpose: silently falling back to another year would show correct figures for a period nobody asked for."
+            className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[10px] font-medium text-amber-800"
+          >
+            No data loaded for {yearsWithoutData.join(", ")}
+          </span>
+        )}
         {hasFilters && (
           <button
-            onClick={() => { setSelMonths([]); setSelYears([]); setSelBranches([]); setFilterLoanNumber(""); }}
+            // Clear devuelve el año en curso, no lo vacia: "sin año" no es un
+            // estado que esta pantalla quiera ofrecer, y vaciarlo cargaria
+            // todos los periodos de golpe.
+            onClick={() => { setSelMonths([]); setSelYears([currentYear]); setSelBranches([]); setFilterLoanNumber(""); }}
             className="text-xs text-gray-400 hover:text-gray-600 underline"
           >
             Clear

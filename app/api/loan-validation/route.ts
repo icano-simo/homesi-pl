@@ -23,6 +23,11 @@ export interface ValidationRow {
   /** Origen del lead. Sin sufijo de fuente: hoy loan_officials, luego Encompass. */
   lead_source: string | null;
   /**
+   * De donde sale `lead_source`. La pantalla deriva de aqui su aviso, en vez de
+   * llevar una bandera que alguien tenga que acordarse de quitar.
+   */
+  lead_source_origin: "loan_officials_file" | "encompass";
+  /**
    * How the loan came in: "Banked - Retail" or "Brokered".
    *
    * Varia en los dos sub-tabs desde que All Loans dejo de filtrar a banked: 388
@@ -412,12 +417,30 @@ export async function GET(req: NextRequest) {
       branch: resolveLoanBranchAlias(lo.branch as string | null),
       loan_program: lo.loan_program as string | null,
       /*
-       * Hoy sale de loan_officials, que viene del archivo que se sube. Cuando
-       * Loan Count pase a leer del espejo de BigQuery vendra de Encompass
-       * (lead_source), asi que el nombre de la propiedad NO lleva el sufijo del
-       * origen: cambiar la fuente no debe obligar a tocar la pantalla.
+       * Hoy sale de loan_officials, que viene del archivo que se subia. Cuando
+       * Loan Count pase a leer del espejo de BigQuery vendra de Encompass, asi
+       * que el nombre de la propiedad NO lleva el sufijo del origen: cambiar la
+       * fuente no debe obligar a tocar la pantalla.
+       *
+       * ⚠ Y NO ES EL MISMO DATO TODAVIA. Medido: 333 prestamos coinciden con
+       * Encompass y 103 no, porque el archivo trae valores que la fuente no usa
+       * -- Encompass Integration (47), vacio (46), B2B Strategy (4), Referral
+       * (3), External Referral (3). Son residuos de captura.
+       *
+       * El dia del cambio esos 103 pasan a tener el valor de Encompass, que
+       * sobre los cierres esta poblado al 100%. No es una perdida: es que el
+       * archivo traia ruido. El respaldo
+       * loan_officials_class_backup_20260913 los conserva.
        */
       lead_source: lo.lead_source_lo as string | null,
+      /**
+       * De donde sale `lead_source` en esta respuesta.
+       *
+       * Va en el payload y NO como bandera en la pantalla: el aviso de que el
+       * dato es del archivo tiene que desaparecer solo el dia que la consulta
+       * cambie de origen, no cuando alguien se acuerde de quitar un flag.
+       */
+      lead_source_origin: "loan_officials_file" as const,
       loan_info_channel: lo.loan_info_channel as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,
