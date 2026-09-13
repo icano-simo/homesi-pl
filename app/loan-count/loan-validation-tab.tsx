@@ -1,11 +1,21 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
-import { ChevronDown, ChevronRight, Download, AlertTriangle, CheckCircle, TrendingUp } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, AlertTriangle, CheckCircle, TrendingUp, SlidersHorizontal, X } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import * as XLSX from "xlsx";
 import { useActiveBranches } from "@/components/branch-filter-provider";
 import type { ValidationResult, ValidationRow, SurplusRow } from "@/app/api/loan-validation/route";
+import {
+  activeChips,
+  buildFacetOptions,
+  clearOne,
+  EMPTY_FILTERS,
+  NO_VALUE,
+  rowMatches,
+  type LoanValidationFilters,
+  type RangeFilter,
+} from "@/lib/loan-validation-filters";
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
 
@@ -728,15 +738,7 @@ function monthKey(r: ValidationRow): string {
 
 // ─── All Loans: Detail view ───────────────────────────────────────────────────
 
-function DetailView({
-  rows,
-  colFilters,
-  onColFilterChange,
-}: {
-  rows: ValidationRow[];
-  colFilters: Record<string, string>;
-  onColFilterChange: (col: string, val: string) => void;
-}) {
+function DetailView({ rows }: { rows: ValidationRow[] }) {
   /**
    * ¿Viene lead_source del archivo o ya del espejo?
    *
@@ -746,26 +748,10 @@ function DetailView({
    */
   const fromFile = rows.some((r) => r.lead_source_origin === "loan_officials_file");
 
-  const visible = rows.filter((r) => {
-    if (colFilters.borrower_name && !(r.borrower_name ?? "").toLowerCase().includes(colFilters.borrower_name.toLowerCase())) return false;
-    if (colFilters.loan_officer && !(r.loan_officer ?? "").toLowerCase().includes(colFilters.loan_officer.toLowerCase())) return false;
-    return true;
-  });
-
-  function filterHeader(colKey: string, label: string) {
-    return (
-      <th className="px-3 py-2 font-medium text-left">
-        <div className="whitespace-nowrap">{label}</div>
-        <input
-          value={colFilters[colKey] ?? ""}
-          onChange={(e) => onColFilterChange(colKey, e.target.value)}
-          placeholder="Filter…"
-          className="mt-0.5 w-full min-w-[80px] rounded border border-gray-200 px-1.5 py-0.5 text-[10px] font-normal placeholder-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-200"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </th>
-    );
-  }
+  // Ya vienen filtradas: el panel de arriba es el unico sitio donde se filtra.
+  // Antes esta vista tenia DOS cajas propias en las cabeceras, asi que habia
+  // dos mecanismos y los chips no sabian de aquellos.
+  const visible = rows;
 
   if (visible.length === 0) return (
     <div className="rounded-xl border border-gray-100 bg-white px-6 py-10 text-center text-sm text-gray-400">
@@ -785,8 +771,8 @@ function DetailView({
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Year</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Number</th>
-            {filterHeader("borrower_name", "Borrower")}
-            {filterHeader("loan_officer", "Loan Officer")}
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Borrower</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Officer</th>
             <th className="px-3 py-2 font-medium text-left">Branch</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Program</th>
             {/* El aviso sale del origen que trae la propia fila, no de una
@@ -907,6 +893,99 @@ function MetricCard({ label, value }: { label: string; value: string }) {
   );
 }
 
+// ─── All Loans: filter controls ───────────────────────────────────────────────
+
+type SetFilters = React.Dispatch<React.SetStateAction<LoanValidationFilters>>;
+
+/** Un desplegable de faceta. Las opciones y los conteos llegan ya calculados. */
+function Facet({ label, k, f, set, o, c, search }: {
+  label: string;
+  k: keyof LoanValidationFilters;
+  f: LoanValidationFilters;
+  set: SetFilters;
+  o: Record<string, string[]>;
+  c: Record<string, Record<string, number>>;
+  search?: boolean;
+}) {
+  return (
+    <div>
+      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400">{label}</span>
+      <ReportFilter
+        label={label}
+        options={o[k as string] ?? []}
+        counts={c[k as string]}
+        searchable={search}
+        selected={f[k] as string[]}
+        onChange={(v) => set((p) => ({ ...p, [k]: v }))}
+      />
+    </div>
+  );
+}
+
+/** Caja de texto: para identificadores, donde un desplegable no ayuda. */
+function TextFacet({ label, k, f, set }: {
+  label: string; k: "loanNumber" | "borrower"; f: LoanValidationFilters; set: SetFilters;
+}) {
+  return (
+    <div>
+      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400">{label}</span>
+      <input
+        value={f[k]}
+        onChange={(e) => set((p) => ({ ...p, [k]: e.target.value }))}
+        placeholder="Contains…"
+        className="h-7 w-full rounded-lg border border-gray-200 bg-white px-2.5 text-xs placeholder-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-300"
+      />
+    </div>
+  );
+}
+
+/**
+ * Rango numerico, con "sin valor" como CASILLA APARTE y no como un valor del
+ * rango.
+ *
+ * Un prestamo sin apunte y uno con un apunte de 0,00 son hallazgos distintos, y
+ * un rango min=0 max=0 los mezclaria. Marcar la casilla desactiva el rango
+ * porque preguntan cosas incompatibles: no se puede pedir "sin importe" y "entre
+ * dos importes" a la vez.
+ */
+function RangeFacet({ label, k, f, set }: {
+  label: string;
+  k: "loanAmount" | "divisionMargin" | "branchMargin" | "loCommission";
+  f: LoanValidationFilters;
+  set: SetFilters;
+}) {
+  const r = f[k];
+  const upd = (patch: Partial<RangeFilter>) => set((p) => ({ ...p, [k]: { ...p[k], ...patch } }));
+  return (
+    <div>
+      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400">{label}</span>
+      <div className="flex items-center gap-1">
+        <input
+          type="number" value={r.min} disabled={r.emptyOnly}
+          onChange={(e) => upd({ min: e.target.value })}
+          placeholder="min"
+          className="h-7 w-full min-w-0 rounded-lg border border-gray-200 bg-white px-2 text-xs placeholder-gray-300 disabled:bg-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-300"
+        />
+        <span className="text-gray-300">–</span>
+        <input
+          type="number" value={r.max} disabled={r.emptyOnly}
+          onChange={(e) => upd({ max: e.target.value })}
+          placeholder="max"
+          className="h-7 w-full min-w-0 rounded-lg border border-gray-200 bg-white px-2 text-xs placeholder-gray-300 disabled:bg-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-300"
+        />
+      </div>
+      <label className="mt-1 flex cursor-pointer items-center gap-1.5 text-[11px] text-gray-600">
+        <input
+          type="checkbox" checked={r.emptyOnly}
+          onChange={(e) => upd({ emptyOnly: e.target.checked, min: "", max: "" })}
+          className="h-3 w-3 rounded border-gray-300 accent-blue-600"
+        />
+        No value
+      </label>
+    </div>
+  );
+}
+
 // ─── All Loans section ────────────────────────────────────────────────────────
 
 function AllLoansSection({
@@ -923,9 +1002,20 @@ function AllLoansSection({
   const [data, setData] = useState<ValidationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [filterLO, setFilterLO] = useState<string[]>([]);
-  const [filterStatus, setFilterStatus] = useState<string[]>([]);
-  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  /**
+   * Los catorce filtros en UN objeto, y el panel plegado por defecto.
+   *
+   * Antes eran tres sueltos en la barra -- Loan officer, Status y la caja de
+   * numero -- y ya con tres no se veia cuales estaban puestos. Con catorce eso
+   * deja de ser incomodo y pasa a ser una fuente de error: alguien lee un total
+   * creyendo que es el total cuando lleva media tabla filtrada.
+   *
+   * Por eso los controles se pliegan y los ACTIVOS se quedan siempre fuera,
+   * como chips. Se eligio esto frente al embudo por cabecera, que es mas
+   * elegante y esconde justo el estado que importa.
+   */
+  const [filters, setFilters] = useState<LoanValidationFilters>(EMPTY_FILTERS);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -951,21 +1041,31 @@ function AllLoansSection({
     [data],
   );
 
+  /**
+   * Opciones y conteos del CONJUNTO COMPLETO, no de lo filtrado.
+   *
+   * Depende de `data` y de nada mas, asi que elegir una sucursal no vacia el
+   * desplegable de programas: sin esto, filtrar por una cosa encierra al
+   * usuario y le obliga a limpiar todo para volver. Misma decision que en
+   * Metrics B2B.
+   */
+  const { options: facetOptions, counts: facetCounts } = useMemo(
+    () => buildFacetOptions(data?.rows ?? []),
+    [data],
+  );
+
   const filteredRows = useMemo(() => {
     if (!data) return [];
+    // La caja de numero de la barra de arriba sigue actuando, ademas de la del
+    // panel: son dos caminos a lo mismo y el usuario puede usar cualquiera.
     const lnSearch = filterLoanNumber.trim().toLowerCase();
     return data.rows.filter((r) => {
       if (lnSearch && !r.loan_number.toLowerCase().includes(lnSearch)) return false;
-      if (filterLO.length > 0 && !filterLO.includes(r.loan_officer ?? "")) return false;
-      if (filterStatus.length > 0) {
-        const ok =
-          (filterStatus.includes("Matched") && r.status === "match") ||
-          (filterStatus.includes("Missing in Accounting") && r.status === "missing");
-        if (!ok) return false;
-      }
-      return true;
+      return rowMatches(r, filters);
     });
-  }, [data, filterLoanNumber, filterLO, filterStatus]);
+  }, [data, filterLoanNumber, filters]);
+
+  const chips = useMemo(() => activeChips(filters), [filters]);
 
   const matchedRows = filteredRows.filter((r) => r.status === "match");
   const loanCount = filteredRows.length;
@@ -983,20 +1083,16 @@ function AllLoansSection({
     ? branchBpsRows.reduce((s, r) => s + r.branch_bps!, 0) / branchBpsRows.length
     : null;
 
-  const showSurplus =
-    !!data && data.surplus.length > 0 &&
-    (filterStatus.length === 0 || filterStatus.includes("Surplus in Accounting"));
+  const showSurplus = !!data && data.surplus.length > 0 && filters.status.length === 0;
 
   function handleExport() {
     if (!data || filteredRows.length === 0) return;
     const today = todayISO();
     {
+      // Sin un segundo filtrado: `filteredRows` ya es lo que se ve. El export
+      // llevaba su propia copia de dos filtros y podia decir otra cosa que la
+      // tabla de al lado.
       const exportRows = filteredRows
-        .filter((r) => {
-          if (colFilters.borrower_name && !(r.borrower_name ?? "").toLowerCase().includes(colFilters.borrower_name.toLowerCase())) return false;
-          if (colFilters.loan_officer && !(r.loan_officer ?? "").toLowerCase().includes(colFilters.loan_officer.toLowerCase())) return false;
-          return true;
-        })
         .map((r) => ({
           // Mismo orden que la tabla: identificacion, dinero, estado.
           year:          r.year ?? "",
@@ -1055,33 +1151,83 @@ function AllLoansSection({
 
   return (
     <div className="space-y-4">
-      {/* Filters */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-gray-500 font-medium">Filter:</span>
-        {loOptions.length > 0 && (
-          <ReportFilter label="Loan Officer" options={loOptions} selected={filterLO} onChange={setFilterLO} />
-        )}
-        <ReportFilter
-          label="Status"
-          options={["Matched", "Missing in Accounting", "Extra in Accounting"]}
-          selected={filterStatus}
-          onChange={setFilterStatus}
-        />
-        {(filterLO.length > 0 || filterStatus.length > 0) && (
+      {/* ── Filters: collapsed controls, permanent chips ──────────────────── */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => { setFilterLO([]); setFilterStatus([]); }}
-            className="text-xs text-gray-400 hover:text-gray-600 underline"
+            onClick={() => setFiltersOpen((o) => !o)}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+              chips.length > 0
+                ? "border-sky-200 bg-sky-50 text-sky-900"
+                : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+            }`}
           >
-            Clear
+            <SlidersHorizontal size={13} />
+            Filters{chips.length > 0 ? ` (${chips.length})` : ""}
+            <ChevronDown size={13} className={`transition-transform ${filtersOpen ? "rotate-180" : ""}`} />
           </button>
-        )}
-        {data && filteredRows.length > 0 && (
-          <button
-            onClick={handleExport}
-            className="ml-auto flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 shadow-sm"
-          >
-            <Download size={13} /> Export Excel
-          </button>
+
+          {/* Los filtros ACTIVOS viven fuera del panel, siempre visibles.
+              Plegar los controles esta bien; plegar el estado no. Un total
+              leido sin saber que hay tres filtros puestos es el error que esto
+              existe para evitar. */}
+          {chips.map((c) => (
+            <span key={c.key}
+                  className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-900">
+              {c.label}
+              <button onClick={() => setFilters((f) => clearOne(f, c.key))}
+                      aria-label={`Remove ${c.label}`}
+                      className="ml-0.5 text-sky-400 hover:text-red-500">
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+          {chips.length > 0 && (
+            <button onClick={() => setFilters(EMPTY_FILTERS)}
+                    className="text-xs text-gray-400 underline hover:text-gray-600">
+              Clear all
+            </button>
+          )}
+
+          {data && filteredRows.length > 0 && (
+            <button
+              onClick={handleExport}
+              className="ml-auto flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 shadow-sm"
+            >
+              <Download size={13} /> Export Excel
+            </button>
+          )}
+        </div>
+
+        {filtersOpen && (
+          <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-3 lg:grid-cols-4">
+              <Facet label="Year"         k="year"         f={filters} set={setFilters} o={facetOptions} c={facetCounts} />
+              <Facet label="Month"        k="month"        f={filters} set={setFilters} o={facetOptions} c={facetCounts} />
+              <Facet label="Branch"       k="branch"       f={filters} set={setFilters} o={facetOptions} c={facetCounts} search />
+              <Facet label="Loan officer" k="loanOfficer"  f={filters} set={setFilters} o={facetOptions} c={facetCounts} search />
+              <Facet label="Loan program" k="loanProgram"  f={filters} set={setFilters} o={facetOptions} c={facetCounts} search />
+              <Facet label="Lead source"  k="leadSource"   f={filters} set={setFilters} o={facetOptions} c={facetCounts} search />
+              <Facet label="Channel"      k="channel"      f={filters} set={setFilters} o={facetOptions} c={facetCounts} />
+              <Facet label="Status"       k="status"       f={filters} set={setFilters} o={facetOptions} c={facetCounts} />
+
+              <TextFacet label="Loan number" k="loanNumber" f={filters} set={setFilters} />
+              <TextFacet label="Borrower"    k="borrower"   f={filters} set={setFilters} />
+
+              <RangeFacet label="Loan amount"     k="loanAmount"     f={filters} set={setFilters} />
+              <RangeFacet label="Division margin" k="divisionMargin" f={filters} set={setFilters} />
+              <RangeFacet label="Branch margin"   k="branchMargin"   f={filters} set={setFilters} />
+              <RangeFacet label="LO commission"   k="loCommission"   f={filters} set={setFilters} />
+            </div>
+            <p className="mt-3 text-[11px] text-gray-500">
+              Dropdown options and counts come from every loaded loan, not from what is already
+              filtered — so narrowing one column never empties another.{" "}
+              <span className="font-medium text-gray-600">{NO_VALUE}</span> isolates the loans where
+              the field is empty; for amounts, <span className="font-medium text-gray-600">no value</span>{" "}
+              is a separate checkbox from a 0 — a loan with no booking and one booked at 0.00 are
+              different findings.
+            </p>
+          </div>
         )}
       </div>
 
@@ -1104,11 +1250,7 @@ function AllLoansSection({
             <MetricCard label="Avg branch BPS" value={avgBranchBPS != null ? fmtBPS(avgBranchBPS) : "—"} />
           </div>
 
-          <DetailView
-            rows={filteredRows}
-            colFilters={colFilters}
-            onColFilterChange={(col, val) => setColFilters((p) => ({ ...p, [col]: val }))}
-          />
+          <DetailView rows={filteredRows} />
 
           {showSurplus && <SurplusSection rows={data.surplus} type="all_loans" />}
         </>
