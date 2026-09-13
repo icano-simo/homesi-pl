@@ -45,11 +45,17 @@ sin ellas delante alguien va a leer la lista como si fuera una sentencia.
   este script no hace. Si el objetivo es limpiar de verdad, este es el paso 1.
 
 
-  Y UNA TERCERA, menor: solo mira .ts y .tsx bajo app/, components/ y lib/. Una
-  llamada desde un .mjs de scripts/, desde un cron o desde otra aplicacion
-  --homesi-reporte-actividad comparte base de datos, no codigo-- no se ve desde
-  aqui. Para una ruta que parezca un webhook o un endpoint de integracion,
-  comprobar a mano antes de tocarla.
+  AVISO 3 — SOLO MIRA .ts Y .tsx BAJO app/, components/ Y lib/.
+
+  Y ese sesgo es real en este repo, no teorico: en scripts/ hay .mjs sueltos
+  --create-user.mjs, grant-app-access.mjs, migrate-password-flag.mjs-- que este
+  barrido no abre. Una llamada desde ahi, desde un cron, o desde otra aplicacion
+  --homesi-reporte-actividad comparte base de datos, no codigo-- no se ve.
+
+  Asi que para una ruta que parezca un webhook, un endpoint de integracion o
+  algo que se invoque a mano, comprobar aparte antes de tocarla. Ampliar SCAN es
+  facil y empeora el aviso 1; se deja corto a proposito y con la limitacion
+  dicha.
 
 
 COMO VERIFICAR UNA CANDIDATA, que es lo que hay que hacer con cada una:
@@ -130,8 +136,8 @@ def main():
     if not muertas:
         print("  (ninguna)")
     print("")
-    print("NO es una sentencia. Leer los dos avisos de la cabecera de este")
-    print("archivo, y verificar cada una con:")
+    print("NO es una sentencia. Leer los TRES avisos de la cabecera de este")
+    print("archivo, y verificar cada candidata con:")
     print('    git log --all --oneline -S "api/<la-ruta>" -- app components lib')
 
     return 0

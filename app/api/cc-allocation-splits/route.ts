@@ -255,7 +255,28 @@ export async function PUT(req: NextRequest) {
   const primaryCcId    = [...splits].sort((a, b) => b.percentage - a.percentage)[0].cost_center_id;
   const operationalPct = splits.reduce((s, r) => s + ((r.is_operational ?? true) ? r.percentage : 0), 0);
 
-  // 4. Find split_propagated and unassigned txs — manual exceptions are never overwritten
+  /*
+   * 4. Find split_propagated and unassigned txs — manual exceptions are never
+   *    overwritten.
+   *
+   * ⚠ ESA GUARDA ES DELIBERADA Y NO SE PUEDE PERDER EN UN "RESTAURAR".
+   *
+   * Aqui habia antes dos rutas, /api/vendors/assign-cc y
+   * /api/offshore-allocations/assign-cc, que hacian lo de un solo cost center
+   * en vez de un reparto. Las sustituyo este endpoint en 18124db (2026-06-26,
+   * FASE 1) y quedaron muertas tres meses hasta que se borraron el 2026-09-12.
+   *
+   * AQUELLAS PISABAN UNA ASIGNACION MANUAL SIN PREGUNTAR: seleccionaban por
+   * vendor o por check_description_3 y actualizaban todo lo que cayera, sin
+   * mirar assignment_origin. Este `.or(...)` es exactamente la diferencia, es
+   * una MEJORA, y lleva en produccion desde junio.
+   *
+   * Se escribe porque es el tipo de matiz que se "restaura" sin darse cuenta:
+   * quien saque una de esas rutas del historial para recuperar el asignar-uno
+   * --y su codigo sigue ahi, en 18124db y anteriores-- se lleva de vuelta el
+   * pisar excepciones manuales, y eso no deja rastro visible. La asignacion que
+   * alguien hizo a mano desaparece sin error y sin aviso.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let txQ: any = supabase.from("pl_transactions").select("id,year,month");
   if (assign_type === "vendor") {
