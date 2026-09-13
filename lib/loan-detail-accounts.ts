@@ -39,14 +39,16 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
  * fundirlas una vez; juntarlas rompe alguna de las tres pantallas que dependen
  * de ellas.
  *
- *   MARGIN_GRANTING_GL_CODES  ¿se contabilizo algo de margen para este
- *                             prestamo?  Cuatro codigos GL, por EXISTENCIA.
- *                             Loan Validation All Loans, y el contador del
- *                             roadmap a traves de su resumen.
+ *   MARGIN_DIVISION_GL_LIST   ¿se llevo la DIVISION su margen?  Por
+ *                             EXISTENCIA. Loan Validation All Loans, y el
+ *                             contador del roadmap a traves de su resumen.
  *
- *   los mismos, SUMADOS       ¿a cuanto salio?  La suma de esas cuatro sobre
- *                             el importe del prestamo. Los bps de Loan
- *                             Validation.
+ *   MARGIN_BRANCH_GL_LIST     ¿se quedo la SUCURSAL el suyo?  La otra mitad de
+ *                             la misma pantalla, y una pregunta independiente:
+ *                             95 prestamos tienen uno y no el otro.
+ *
+ *   cada grupo, SUMADO        ¿a cuanto salio cada uno?  Dos columnas de bps,
+ *                             nunca una. Ver la nota de los dos grupos.
  *
  *   ALL_MARGIN_ACCOUNTS       ¿cuanto margen produjo?  Cinco category_7 --
  *                             Back-end, Front-end, Discount, DM, RM. El neto
@@ -116,16 +118,64 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
  * banked en BM Margin y las 30 brokered en Brokered Origination Income,
  * ninguna repartida. Los brokered ni siquiera se miraban.
  */
-export const MARGIN_GRANTING_GL_CODES = {
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Y SON DOS GRUPOS, NO UNO: QUIEN SE LLEVA EL MARGEN
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠ NO LOS SUMES EN UN SOLO NUMERO. Lo estuvieron un rato y escondia justo lo
+ * que la validacion existe para encontrar.
+ *
+ *   DIVISION  41309 DM Margin + 41307 RM Margin
+ *             lo que se lleva la division por el prestamo
+ *   BRANCH    41306 BM Margin + 41870 Brokered Origination Income
+ *             lo que se queda la sucursal que lo produjo
+ *
+ * Son dos cobros distintos a dos destinatarios distintos, y cada uno puede
+ * faltar sin el otro. Medido sobre los 436:
+ *
+ *   con margen de division        358
+ *   con margen de branch          357
+ *   con los dos                   310
+ *   SOLO division, sin branch      48   <- cobro la division y la sucursal no
+ *   SOLO branch, sin division      47   <- cobro la sucursal y la division no
+ *   ninguno de los dos             31
+ *
+ * Esos 95 pasaban como "recibio margen" con un numero unico. Un prestamo con
+ * margen de division y sin margen de sucursal no tiene nada raro EN ESE NUMERO
+ * -- y a la sucursal no le llego nada.
+ *
+ * ─── Y LA PRUEBA DE QUE SON DOS MEDIDAS Y NO UNA ───────────────────────────
+ *
+ * Sus bps no se parecen en nada:
+ *
+ *   DIVISION   801.593    min 7,5   mediana 65,0   max  90,0
+ *   BRANCH   3.944.411    min 0,0   mediana 350,0  max 485,0
+ *
+ * La mediana de division es EXACTAMENTE 65,0 porque es un baremo: un
+ * porcentaje fijo del importe. La de branch se reparte de 0 a 485 porque es el
+ * margen real del prestamo. Promediarlas da un numero que no es ninguna de las
+ * dos -- el mismo error que tenia el neto de Table List cuando leia 65 bps
+ * fijos y parecia un indicador.
+ */
+export const MARGIN_DIVISION_GL_CODES = {
   dm: "41309",
   rm: "41307",
+} as const;
+
+export const MARGIN_BRANCH_GL_CODES = {
   bm: "41306",
   brokered: "41870",
 } as const;
 
-export const MARGIN_GRANTING_GL_LIST: readonly string[] = Object.values(
-  MARGIN_GRANTING_GL_CODES,
-);
+export const MARGIN_DIVISION_GL_LIST: readonly string[] = Object.values(MARGIN_DIVISION_GL_CODES);
+export const MARGIN_BRANCH_GL_LIST: readonly string[] = Object.values(MARGIN_BRANCH_GL_CODES);
+
+/** Las cuatro, solo para pedirlas a la base de una vez. Nunca para sumarlas. */
+export const MARGIN_GRANTING_GL_LIST: readonly string[] = [
+  ...MARGIN_DIVISION_GL_LIST,
+  ...MARGIN_BRANCH_GL_LIST,
+];
 
 /**
  * Margen CEDIDO al loan officer. Se muestra, nunca se suma con las de arriba.

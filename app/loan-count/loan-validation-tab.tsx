@@ -15,8 +15,11 @@ const SUB_TABS: { type: ValType; label: string; glLabel: string }[] = [
   // Las cuatro que otorgan margen, porque un prestamo casa con cualquiera de
   // ellas. La etiqueta y la comprobacion cambian siempre juntas: cuando decia
   // "DM Margin" y probaba DM, al menos coincidian.
+  // DOS preguntas, y la etiqueta lo dice: un prestamo esta bien cuando cobraron
+  // los dos. Cuando era una sola, 95 prestamos con uno y sin el otro pasaban
+  // como correctos.
   { type: "all_loans",  label: "All Loans",
-    glLabel: "DM (41309), RM (41307), BM (41306) o Brokered Origination (41870)" },
+    glLabel: "división DM+RM (41309, 41307) · sucursal BM+Brokered (41306, 41870)" },
   { type: "b2b",        label: "B2B",        glLabel: "B2B Success Fee" },
 ];
 
@@ -960,20 +963,27 @@ function DetailView({
             <th className="px-3 py-2 font-medium text-left">Branch</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month / Year</th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
-            {/* Una columna por cuenta, nunca fundidas. Son bookings
-                ALTERNATIVOS del margen y no componentes de una cifra: 17
-                prestamos casan SOLO por BM y 30 SOLO por Brokered, y con una
-                columna compartida esos 47 se leerian como un match sin nada
-                detras. */}
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">DM <span className="font-normal text-gray-400">(41309)</span></th>
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">RM <span className="font-normal text-gray-400">(41307)</span></th>
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">BM <span className="font-normal text-gray-400">(41306)</span></th>
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Brokered <span className="font-normal text-gray-400">(41870)</span></th>
-            {/* Cedido al LO, en gris y separada de las cuatro de arriba: no
-                suma con ellas ni entra en los bps. Sumarla daria bps negativos
-                en prestamos que ganaron. */}
+            {/* DOS GRUPOS, DOS COLUMNAS, LAS DOS SIEMPRE A LA VISTA.
+                Sin conmutador Division/Branch/Ambas a proposito: el uso es
+                revisar de una vez que todas las sucursales cobraron por sus
+                prestamos, y un conmutador escondería justo la comparacion que
+                se viene a hacer. Ademas ocupan UNA COLUMNA MENOS que las cuatro
+                cuentas sueltas que habia aqui.
+                El detalle por cuenta no se pierde: va en el title. */}
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-sky-50/70">
+              Margen división
+              <span className="block text-[10px] font-normal text-gray-400">DM + RM</span>
+            </th>
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-sky-50/70">BPS</th>
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-emerald-50/70">
+              Margen sucursal
+              <span className="block text-[10px] font-normal text-gray-400">BM + Brokered</span>
+            </th>
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-emerald-50/70">BPS</th>
+            {/* Cedido al LO, en gris y aparte de las dos: no suma con ninguna ni
+                entra en sus bps. Sumarla daria bps negativos en prestamos que
+                ganaron. */}
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap text-gray-400">LO Margin cedido <span className="font-normal">(41305)</span></th>
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap">BPS <span className="font-normal text-gray-400">(las 4)</span></th>
           </tr>
         </thead>
         <tbody>
@@ -1004,29 +1014,31 @@ function DetailView({
                   {row.month ?? "—"}{row.year ? ` ${row.year}` : ""}
                 </td>
                 <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(row.loan_amount)}</td>
-                {/* Cada cuenta se imprime solo donde tiene apunte. El guion es
-                    "aqui no se contabilizo", que es toda la distincion para la
-                    que existen las columnas separadas. */}
-                <td className="px-3 py-1.5 text-right whitespace-nowrap">
-                  {row.dm_total == null ? <span className="text-gray-300">—</span> : fmtMov(row.dm_total)}
+                {/* Cada grupo se imprime solo donde tiene apunte. El guion es
+                    "aqui no cobro", que es toda la distincion para la que las
+                    dos columnas existen por separado: 48 prestamos tienen la
+                    de la izquierda y no la de la derecha, y 47 al reves. */}
+                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-sky-50/40 ${row.division_received ? "" : "text-amber-700"}`}
+                    title={row.division_received
+                      ? `DM ${row.dm_total ?? "—"} · RM ${row.rm_total ?? "—"}`
+                      : "Sin apunte en DM Margin ni RM Margin: la división no cobró por este préstamo."}>
+                  {row.division_total == null ? "sin margen" : fmtMov(row.division_total)}
                 </td>
-                <td className="px-3 py-1.5 text-right whitespace-nowrap">
-                  {row.rm_total == null ? <span className="text-gray-300">—</span> : fmtMov(row.rm_total)}
+                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap bg-sky-50/40">
+                  {fmtBPS(row.bps)}
                 </td>
-                <td className="px-3 py-1.5 text-right whitespace-nowrap">
-                  {row.bm_total == null ? <span className="text-gray-300">—</span> : fmtMov(row.bm_total)}
+                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-emerald-50/40 ${row.branch_received ? "" : "text-amber-700"}`}
+                    title={row.branch_received
+                      ? `BM ${row.bm_total ?? "—"} · Brokered ${row.brokered_total ?? "—"}`
+                      : "Sin apunte en BM Margin ni Brokered Origination: a la sucursal no le llegó margen por este préstamo."}>
+                  {row.branch_margin_total == null ? "sin margen" : fmtMov(row.branch_margin_total)}
                 </td>
-                <td className="px-3 py-1.5 text-right whitespace-nowrap">
-                  {row.brokered_total == null ? <span className="text-gray-300">—</span> : fmtMov(row.brokered_total)}
+                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap bg-emerald-50/40">
+                  {fmtBPS(row.branch_bps)}
                 </td>
                 <td className="px-3 py-1.5 text-right whitespace-nowrap text-gray-400"
-                    title="Margen cedido al loan officer. No suma con las cuatro de la izquierda ni entra en los BPS.">
+                    title="Margen cedido al loan officer. No suma con ninguna de las dos columnas ni entra en sus BPS.">
                   {row.lo_margin_ceded == null ? <span className="text-gray-300">—</span> : fmtMov(row.lo_margin_ceded)}
-                </td>
-                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap">
-                  {/* Los bps siguen al estado, no a DM: un prestamo que casa por
-                      BM tiene bps aunque su DM sea un guion. */}
-                  {row.status === "missing" ? <span className="text-gray-300">—</span> : fmtBPS(row.bps)}
                 </td>
               </tr>
             );
@@ -1113,8 +1125,17 @@ function AllLoansSection({
   const loanCount = filteredRows.length;
   const amtRows = filteredRows.filter((r) => r.loan_amount != null);
   const avgLoanAmount = amtRows.length > 0 ? amtRows.reduce((s, r) => s + r.loan_amount!, 0) / amtRows.length : null;
+  /**
+   * Dos medias, no una. `bps` es el de DIVISION y `branch_bps` el de SUCURSAL,
+   * y viven en escalas distintas -- mediana 65 contra 350 -- asi que una sola
+   * tarjeta "Avg BPS" no podia decir cual estaba enseñando.
+   */
   const bpsRows = matchedRows.filter((r) => r.bps != null);
   const avgBPS = bpsRows.length > 0 ? bpsRows.reduce((s, r) => s + r.bps!, 0) / bpsRows.length : null;
+  const branchBpsRows = matchedRows.filter((r) => r.branch_bps != null);
+  const avgBranchBPS = branchBpsRows.length > 0
+    ? branchBpsRows.reduce((s, r) => s + r.branch_bps!, 0) / branchBpsRows.length
+    : null;
 
   const showSurplus =
     !!data && data.surplus.length > 0 &&
@@ -1149,7 +1170,7 @@ function AllLoansSection({
         { key: "borrower_name", label: "Borrower Name" },
         { key: "month",         label: "Month" },
         { key: "loan_amount",   label: "Loan Amount" },
-        { key: "bps",           label: "BPS" },
+        { key: "bps",           label: "BPS división" },
         { key: "status",        label: "Status" },
       ]);
     } else {
@@ -1167,12 +1188,15 @@ function AllLoansSection({
           branch:        r.branch ?? "",
           month_year:    `${r.month ?? ""}${r.year ? ` ${r.year}` : ""}`,
           loan_amount:   r.loan_amount ?? "",
+          division_margin: r.division_total ?? "",
+          division_bps:    r.bps ?? "",
+          branch_margin:   r.branch_margin_total ?? "",
+          branch_bps:      r.branch_bps ?? "",
           dm_margin:       r.dm_total ?? "",
           rm_margin:       r.rm_total ?? "",
           bm_margin:       r.bm_total ?? "",
           brokered_margin: r.brokered_total ?? "",
           lo_margin_ceded: r.lo_margin_ceded ?? "",
-          bps:           r.bps ?? "",
         }));
       exportToXlsx(`loan-validation-all-loans-detail-${today}.xlsx`, exportRows, [
         { key: "status",        label: "Status" },
@@ -1182,6 +1206,12 @@ function AllLoansSection({
         { key: "branch",        label: "Branch" },
         { key: "month_year",    label: "Month / Year" },
         { key: "loan_amount",   label: "Loan Amount" },
+        // Los dos grupos primero, que son las dos preguntas; el desglose por
+        // cuenta despues, para quien quiera reconstruir la suma.
+        { key: "division_margin", label: "Margen division (DM+RM)" },
+        { key: "division_bps",    label: "BPS division" },
+        { key: "branch_margin",   label: "Margen sucursal (BM+Brokered)" },
+        { key: "branch_bps",      label: "BPS sucursal" },
         { key: "dm_margin",       label: "DM Margin (41309)" },
         { key: "rm_margin",       label: "RM Margin (41307)" },
         { key: "bm_margin",       label: "BM Margin (41306)" },
@@ -1253,10 +1283,14 @@ function AllLoansSection({
       ) : data ? (
         <>
           {/* Metric cards */}
-          <div className="grid grid-cols-3 gap-3">
+          {/* Cuatro y no tres: "Avg BPS" a secas dejo de significar algo al
+              separar los dos margenes. Uno ronda los 65 -- es un baremo -- y el
+              otro los 350. Una sola tarjeta tendria que elegir cual esconde. */}
+          <div className="grid grid-cols-4 gap-3">
             <MetricCard label="Loan Count" value={loanCount.toLocaleString()} />
             <MetricCard label="Avg Loan Amount" value={avgLoanAmount != null ? fmtUSD(avgLoanAmount) : "—"} />
-            <MetricCard label="Avg BPS" value={avgBPS != null ? fmtBPS(avgBPS) : "—"} />
+            <MetricCard label="Avg BPS división" value={avgBPS != null ? fmtBPS(avgBPS) : "—"} />
+            <MetricCard label="Avg BPS sucursal" value={avgBranchBPS != null ? fmtBPS(avgBranchBPS) : "—"} />
           </div>
 
           {view === "detail" ? (

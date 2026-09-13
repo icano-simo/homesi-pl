@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
 import {
+  MARGIN_BRANCH_GL_CODES,
+  MARGIN_BRANCH_GL_LIST,
   MARGIN_CEDED_GL_CODE,
-  MARGIN_GRANTING_GL_CODES,
+  MARGIN_DIVISION_GL_CODES,
+  MARGIN_DIVISION_GL_LIST,
   MARGIN_GRANTING_GL_LIST,
 } from "@/lib/loan-detail-accounts";
 
@@ -72,7 +75,23 @@ export interface ValidationRow {
    * negativas; es una distribucion de lo ganado, no un ingreso.
    */
   lo_margin_ceded: number | null;
+  /**
+   * Las dos preguntas, por separado.
+   *
+   * `status` es "match" solo cuando las dos son true. Estos dos dicen cual
+   * falla, que es lo que un solo numero escondia: 48 prestamos tienen margen de
+   * division y no de branch, y 47 al reves.
+   */
+  division_received: boolean;
+  branch_received: boolean;
+  /** DM + RM sumados. Null cuando no hay apunte en ninguna de las dos. */
+  division_total: number | null;
+  /** BM + Brokered Origination sumados. */
+  branch_margin_total: number | null;
+  /** bps de DIVISION sobre el importe del prestamo. */
   bps: number | null;
+  /** bps de BRANCH. Otra escala: mediana 350 contra 65. Nunca se promedian. */
+  branch_bps: number | null;
   status: "match" | "missing" | "exempt";
   tx_description: string | null;
   tx_movement: number | null;
@@ -240,20 +259,37 @@ export async function GET(req: NextRequest) {
     byAccount.set(loanNum, a);
   }
 
-  /** Lo contabilizado en las cuatro que otorgan, por cuenta y en total. */
+  /**
+   * Lo contabilizado, EN DOS GRUPOS y nunca en uno.
+   *
+   * Division (DM + RM) es lo que se lleva la division; branch (BM + Brokered
+   * Origination) lo que se queda la sucursal. Cada uno con su existencia y su
+   * suma, porque cada uno puede faltar sin el otro: 48 prestamos tienen solo
+   * division y 47 solo branch. Ver MARGIN_DIVISION_GL_CODES.
+   *
+   * Dentro de cada grupo las cuentas SI se suman -- son bookings alternativos
+   * del mismo cobro. Entre grupos no, jamas: son dos cobros a dos
+   * destinatarios, y sus bps ni siquiera viven en la misma escala (mediana 65
+   * contra 350).
+   */
   const marginOf = (loanNum: string) => {
     const a = byAccount.get(loanNum) ?? {};
-    const granting = MARGIN_GRANTING_GL_LIST.filter((c) => a[c] !== undefined);
+    const sum = (codes: readonly string[]) => {
+      const present = codes.filter((c) => a[c] !== undefined);
+      return {
+        /** Existe en alguna del grupo. EXISTENCIA, no importe. */
+        received: present.length > 0,
+        total: present.reduce((s, c) => s + (a[c] ?? 0), 0),
+      };
+    };
     return {
-      /** Existe en alguna de las cuatro. NO mira el importe: ver abajo. */
-      received: granting.length > 0,
-      /** La suma de las cuatro. El numerador de los bps. */
-      granted: granting.reduce((s, c) => s + (a[c] ?? 0), 0),
-      dm: a[MARGIN_GRANTING_GL_CODES.dm],
-      rm: a[MARGIN_GRANTING_GL_CODES.rm],
-      bm: a[MARGIN_GRANTING_GL_CODES.bm],
-      brokered: a[MARGIN_GRANTING_GL_CODES.brokered],
-      /** Margen cedido al LO. Viaja para verse; jamas entra en `granted`. */
+      division: sum(MARGIN_DIVISION_GL_LIST),
+      branch: sum(MARGIN_BRANCH_GL_LIST),
+      dm: a[MARGIN_DIVISION_GL_CODES.dm],
+      rm: a[MARGIN_DIVISION_GL_CODES.rm],
+      bm: a[MARGIN_BRANCH_GL_CODES.bm],
+      brokered: a[MARGIN_BRANCH_GL_CODES.brokered],
+      /** Margen cedido al LO. Viaja para verse; jamas entra en ninguna suma. */
       ceded: a[MARGIN_CEDED_GL_CODE],
     };
   };
@@ -294,30 +330,25 @@ export async function GET(req: NextRequest) {
   const rows: ValidationRow[] = (loanOfficials ?? []).map((lo: Record<string, unknown>) => {
     const loanNum = lo.loan_number as string;
     const m = marginOf(loanNum);
-    /**
-     * Recibio margen si ALGUNA de las cuatro que otorgan lo lleva. EXISTENCIA,
-     * no importe: las cuatro no se comparan entre si, y un apunte de cero sigue
-     * siendo un apunte -- alguien lo contabilizo.
-     *
-     * 41305 no entra en esta prueba aunque se traiga: es margen cedido, y el
-     * unico prestamo que solo lo tiene lo tiene en negativo. Ver
-     * MARGIN_GRANTING_GL_CODES.
-     */
-    const gotMargin = m.received;
-    const accounting_total = m.granted;
     const loan_amount = lo.loan_amount as number | null;
     /**
-     * Los bps salen de la SUMA de las cuatro, no de DM sola.
+     * DOS PREGUNTAS, NO UNA. `status` dice si hay algo que mirar en este
+     * prestamo; cual de las dos falla lo dicen los dos booleanos.
      *
-     * Salia de DM, que es un porcentaje fijo del importe, asi que la columna
-     * medía un baremo de comision y no el margen del prestamo -- el mismo fallo
-     * que ya se corrigio en el neto de Table List. Sobre 710002042266: 7,5 bps
-     * con DM sola, 327,5 con las cuatro, porque su DM eran 168,19 de 7.344,19.
+     * Un prestamo "correcto" es el que cobraron los dos. Con un solo numero,
+     * los 95 que tienen uno y no el otro pasaban como si no hubiera nada que
+     * ver -- y a uno de los dos destinatarios no le llego su margen.
+     *
+     * 41305 no entra en ninguna de las dos pruebas aunque se traiga: es margen
+     * cedido, y el unico prestamo que solo lo tiene lo tiene en negativo.
      */
-    const bps =
-      showBps && m.received && loan_amount
-        ? (m.granted / loan_amount) * 10000
-        : null;
+    const gotMargin = m.division.received && m.branch.received;
+    const accounting_total = m.division.total;
+    /** Cada grupo sobre el importe del prestamo. Nunca uno sobre el otro. */
+    const bpsOf = (v: number, has: boolean) =>
+      showBps && has && loan_amount ? (v / loan_amount) * 10000 : null;
+    const bps = bpsOf(m.division.total, m.division.received);
+    const branch_bps = bpsOf(m.branch.total, m.branch.received);
     const b700 = txB700ByLoan.get(loanNum);
     return {
       loan_number: loanNum,
@@ -341,9 +372,17 @@ export async function GET(req: NextRequest) {
       rm_total: m.rm ?? null,
       bm_total: m.bm ?? null,
       brokered_total: m.brokered ?? null,
-      /** Margen CEDIDO al LO. Se enseña; no esta dentro de accounting_total. */
+      /** Margen CEDIDO al LO. Se enseña; no esta dentro de ninguna suma. */
       lo_margin_ceded: m.ceded ?? null,
+      /** ¿Se llevo la division su margen? Y ¿se quedo la sucursal el suyo? */
+      division_received: m.division.received,
+      branch_received: m.branch.received,
+      /** DM + RM. Null sin apunte, para distinguirlo de un apunte de cero. */
+      division_total: m.division.received ? m.division.total : null,
+      /** BM + Brokered Origination. */
+      branch_margin_total: m.branch.received ? m.branch.total : null,
       bps,
+      branch_bps,
       /**
        * Exempt is not a third kind of absence — it is the same absence, on a
        * branch that does not pay the fee. 733 and 776 do not owe the B2B
