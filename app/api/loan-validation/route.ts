@@ -2,12 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
 import {
+  MARGIN_ALL_GL_LIST,
   MARGIN_BRANCH_GL_CODES,
-  MARGIN_BRANCH_GL_LIST,
-  MARGIN_CEDED_GL_CODE,
   MARGIN_DIVISION_GL_CODES,
-  MARGIN_DIVISION_GL_LIST,
-  MARGIN_GRANTING_GL_LIST,
+  marginGroupOf,
 } from "@/lib/loan-detail-accounts";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +20,8 @@ export interface ValidationRow {
   loan_officer: string | null;
   branch: string | null;
   loan_program: string | null;
+  /** Origen del lead. Sin sufijo de fuente: hoy loan_officials, luego Encompass. */
+  lead_source: string | null;
   /**
    * How the loan came in: "Banked - Retail" or "Brokered".
    *
@@ -74,7 +74,13 @@ export interface ValidationRow {
    * Se muestra y NUNCA se suma con las otras cuatro. 290 de sus 315 filas son
    * negativas; es una distribucion de lo ganado, no un ingreso.
    */
-  lo_margin_ceded: number | null;
+  discount_total: number | null;
+  /** LO Margin (41305): un componente del margen de la sucursal, dentro de
+   *  branch_margin_total. NO es compensacion del loan officer. */
+  lo_margin_total: number | null;
+  /** Lo que cobra el loan officer, de comp.loan_commission. Null = sin fila. */
+  lo_commission: number | null;
+  lo_commission_bps: number | null;
   /**
    * Las dos preguntas, por separado.
    *
@@ -139,7 +145,7 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let loQuery: any = supabase
     .from("loan_officials")
-    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program, loan_info_channel")
+    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program, lead_source_lo, loan_info_channel")
     .order("loan_number");
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
@@ -204,8 +210,7 @@ export async function GET(req: NextRequest) {
    * 42109 quedan fuera, y por que esta definicion NO es la del neto de Table
    * List aunque las dos se llamen margen.
    */
-  const glCodes: readonly string[] | null =
-    type === "all_loans" ? [...MARGIN_GRANTING_GL_LIST, MARGIN_CEDED_GL_CODE] : null;
+  const glCodes: readonly string[] | null = type === "all_loans" ? MARGIN_ALL_GL_LIST : null;
   const descFilter: string | null = type === "b2b" ? "B2B SUCCESS FEE" : null;
 
   // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
@@ -250,13 +255,30 @@ export async function GET(req: NextRequest) {
    * pregunta que pide un total.
    */
   const byAccount = new Map<string, Record<string, number>>();
+  /**
+   * El grupo se decide POR LA SUCURSAL DEL APUNTE, no por una lista fija.
+   *
+   * 41870 Brokered Origination esta en los dos grupos: en una sucursal es
+   * margen de esa sucursal, en la 700 es de la division. Sus cuatro filas de la
+   * 700 suman exactamente 0,00 -- un traslado, no un ingreso -- y con una lista
+   * fija por columna habrian entrado en el margen de una sucursal que nunca los
+   * recibio. Ver marginGroupOf.
+   */
+  const groupTotals = new Map<string, { division: number; branch: number; nDiv: number; nBr: number }>();
   for (const tx of (transactions ?? []) as Array<Record<string, unknown>>) {
     const loanNum = (tx.loan_number as string | null)?.trim();
     if (!loanNum || tx.loan_number_incomplete) continue;
     const gl = (tx.gl_code as string | null) ?? "";
+    const v = (tx.movement as number) ?? 0;
     const a = byAccount.get(loanNum) ?? {};
-    a[gl] = (a[gl] ?? 0) + ((tx.movement as number) ?? 0);
+    a[gl] = (a[gl] ?? 0) + v;
     byAccount.set(loanNum, a);
+
+    const grp = marginGroupOf(gl, tx.branch as string | null);
+    if (!grp) continue;
+    const g = groupTotals.get(loanNum) ?? { division: 0, branch: 0, nDiv: 0, nBr: 0 };
+    if (grp === "division") { g.division += v; g.nDiv++; } else { g.branch += v; g.nBr++; }
+    groupTotals.set(loanNum, g);
   }
 
   /**
@@ -274,23 +296,18 @@ export async function GET(req: NextRequest) {
    */
   const marginOf = (loanNum: string) => {
     const a = byAccount.get(loanNum) ?? {};
-    const sum = (codes: readonly string[]) => {
-      const present = codes.filter((c) => a[c] !== undefined);
-      return {
-        /** Existe en alguna del grupo. EXISTENCIA, no importe. */
-        received: present.length > 0,
-        total: present.reduce((s, c) => s + (a[c] ?? 0), 0),
-      };
-    };
+    const g = groupTotals.get(loanNum);
     return {
-      division: sum(MARGIN_DIVISION_GL_LIST),
-      branch: sum(MARGIN_BRANCH_GL_LIST),
+      /** Existencia, no importe: un apunte de cero sigue siendo un apunte. */
+      division: { received: (g?.nDiv ?? 0) > 0, total: g?.division ?? 0 },
+      branch: { received: (g?.nBr ?? 0) > 0, total: g?.branch ?? 0 },
+      /** El desglose por cuenta, para el tooltip. No se suma aqui. */
       dm: a[MARGIN_DIVISION_GL_CODES.dm],
       rm: a[MARGIN_DIVISION_GL_CODES.rm],
       bm: a[MARGIN_BRANCH_GL_CODES.bm],
+      discount: a[MARGIN_BRANCH_GL_CODES.discount],
+      loMargin: a[MARGIN_BRANCH_GL_CODES.loMargin],
       brokered: a[MARGIN_BRANCH_GL_CODES.brokered],
-      /** Margen cedido al LO. Viaja para verse; jamas entra en ninguna suma. */
-      ceded: a[MARGIN_CEDED_GL_CODE],
     };
   };
 
@@ -312,6 +329,41 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  /*
+   * ── 4c. Lo que cobra el loan officer ──────────────────────────────────────
+   *
+   * De comp.loan_commission, el espejo de Compensafe. Otro schema, o sea otro
+   * cliente: `db.schema` se fija al construir y no se puede cambiar por
+   * consulta.
+   *
+   * ⚠ NO TIENE NADA QUE VER CON 41305 LO Margin pese al parecido de los
+   * nombres. Aquella es una cuenta contable, un componente del margen de la
+   * sucursal; esta es lo que se le paga a una persona. Que sus totales no se
+   * parezcan no es una discrepancia: son magnitudes de cosas distintas.
+   *
+   * ⚠ Y QUE FALLE NO PUEDE TUMBAR LA PANTALLA. Loan Validation funcionaba sin
+   * Compensafe; si el schema no esta expuesto o el sync no ha corrido, lo
+   * correcto es enseñar la validacion sin comisiones.
+   */
+  const commissionByLoan = new Map<string, { lo_pay: number | null; lo_effective_bps: number | null }>();
+  if (type === "all_loans") {
+    try {
+      const comp = createServerClient("comp");
+      const { data, error } = await comp
+        .from("loan_commission")
+        .select("loan_number,lo_pay,lo_effective_bps");
+      if (error) throw new Error(error.message);
+      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+        commissionByLoan.set(r.loan_number as string, {
+          lo_pay: r.lo_pay == null ? null : Number(r.lo_pay),
+          lo_effective_bps: r.lo_effective_bps == null ? null : Number(r.lo_effective_bps),
+        });
+      }
+    } catch (e) {
+      console.error("[loan-validation] comp.loan_commission no disponible:", e);
+    }
+  }
+
   /**
    * Surplus is judged against the WHOLE master of the period, not against the
    * branch-filtered list.
@@ -330,6 +382,7 @@ export async function GET(req: NextRequest) {
   const rows: ValidationRow[] = (loanOfficials ?? []).map((lo: Record<string, unknown>) => {
     const loanNum = lo.loan_number as string;
     const m = marginOf(loanNum);
+    const com = commissionByLoan.get(loanNum);
     const loan_amount = lo.loan_amount as number | null;
     /**
      * DOS PREGUNTAS, NO UNA. `status` dice si hay algo que mirar en este
@@ -358,6 +411,13 @@ export async function GET(req: NextRequest) {
       // way. The value in the file stays available in loan_officials.
       branch: resolveLoanBranchAlias(lo.branch as string | null),
       loan_program: lo.loan_program as string | null,
+      /*
+       * Hoy sale de loan_officials, que viene del archivo que se sube. Cuando
+       * Loan Count pase a leer del espejo de BigQuery vendra de Encompass
+       * (lead_source), asi que el nombre de la propiedad NO lleva el sufijo del
+       * origen: cambiar la fuente no debe obligar a tocar la pantalla.
+       */
+      lead_source: lo.lead_source_lo as string | null,
       loan_info_channel: lo.loan_info_channel as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,
@@ -368,12 +428,16 @@ export async function GET(req: NextRequest) {
        * dice cero. Las dos cosas significan lo contrario y no pueden verse
        * igual, que es el mismo criterio que ya se aplico a dm_total.
        */
+      /** Desglose por cuenta, para el tooltip de cada columna. */
       dm_total: m.dm ?? null,
       rm_total: m.rm ?? null,
       bm_total: m.bm ?? null,
+      discount_total: m.discount ?? null,
+      lo_margin_total: m.loMargin ?? null,
       brokered_total: m.brokered ?? null,
-      /** Margen CEDIDO al LO. Se enseña; no esta dentro de ninguna suma. */
-      lo_margin_ceded: m.ceded ?? null,
+      /** Lo que cobra el loan officer, de Compensafe. Null = sin fila. */
+      lo_commission: com?.lo_pay ?? null,
+      lo_commission_bps: com?.lo_effective_bps ?? null,
       /** ¿Se llevo la division su margen? Y ¿se quedo la sucursal el suyo? */
       division_received: m.division.received,
       branch_received: m.branch.received,

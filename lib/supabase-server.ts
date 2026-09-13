@@ -12,13 +12,21 @@ import { createClient } from "@supabase/supabase-js";
  * only service_role holds privileges on it — which is why every data path in
  * this app goes through here and not through the browser client.
  */
-export function createServerClient() {
+/**
+ * El schema se fija al CONSTRUIR el cliente y no se puede cambiar por consulta,
+ * asi que leer un segundo schema son dos clientes.
+ *
+ * El argumento es opcional y por defecto vale lo de siempre: las 40+ rutas que
+ * ya existen no cambian ni una linea, y solo quien necesita otro schema lo
+ * nombra. Hoy eso es `comp`, el espejo de Compensafe que escribe simo-sync.
+ */
+export function createServerClient(schema: string = "finance_division") {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
       auth: { persistSession: false },
-      db: { schema: "finance_division" },
+      db: { schema },
     }
   );
 }

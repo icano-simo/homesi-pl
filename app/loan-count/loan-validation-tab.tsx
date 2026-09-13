@@ -19,7 +19,7 @@ const SUB_TABS: { type: ValType; label: string; glLabel: string }[] = [
   // los dos. Cuando era una sola, 95 prestamos con uno y sin el otro pasaban
   // como correctos.
   { type: "all_loans",  label: "All Loans",
-    glLabel: "división DM+RM (41309, 41307) · sucursal BM+Brokered (41306, 41870)" },
+    glLabel: "division DM+RM (41309, 41307) · branch BM+Discount+LO+Brokered (41306, 41200, 41305, 41870)" },
   { type: "b2b",        label: "B2B",        glLabel: "B2B Success Fee" },
 ];
 
@@ -955,35 +955,43 @@ function DetailView({
       <table className="w-full text-xs">
         <thead className="sticky top-0 z-10 bg-gray-50">
           <tr className="border-b border-gray-100 text-gray-500 align-top">
-            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Status</th>
+            {/* Identificacion primero, dinero despues, estado al final. El
+                Status abria la tabla y era lo ultimo que se necesitaba para
+                localizar una fila: primero se busca el prestamo, luego se mira
+                que le paso. */}
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Year</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month</th>
             <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Number</th>
-            {filterHeader("borrower_name", "Borrower Name")}
+            {filterHeader("borrower_name", "Borrower")}
             {filterHeader("loan_officer", "Loan Officer")}
-            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Program</th>
             <th className="px-3 py-2 font-medium text-left">Branch</th>
-            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Month / Year</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Loan Program</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Lead Source</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Channel</th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap">Loan Amount</th>
-            {/* DOS GRUPOS, DOS COLUMNAS, LAS DOS SIEMPRE A LA VISTA.
-                Sin conmutador Division/Branch/Ambas a proposito: el uso es
-                revisar de una vez que todas las sucursales cobraron por sus
-                prestamos, y un conmutador escondería justo la comparacion que
-                se viene a hacer. Ademas ocupan UNA COLUMNA MENOS que las cuatro
-                cuentas sueltas que habia aqui.
-                El detalle por cuenta no se pierde: va en el title. */}
+            {/* TWO GROUPS, TWO COLUMNS, BOTH ALWAYS VISIBLE.
+                No Division/Branch/Both switch on purpose: the job is to check
+                in one pass that every branch was paid for its loans, and a
+                switch would hide exactly the comparison you came to make.
+                The per-account breakdown is not lost -- it lives in the title. */}
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-sky-50/70">
-              Margen división
+              Division margin
               <span className="block text-[10px] font-normal text-gray-400">DM + RM</span>
             </th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-sky-50/70">BPS</th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-emerald-50/70">
-              Margen sucursal
-              <span className="block text-[10px] font-normal text-gray-400">BM + Brokered</span>
+              Branch margin
+              <span className="block text-[10px] font-normal text-gray-400">BM + Discount + LO + Brokered</span>
             </th>
             <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-emerald-50/70">BPS</th>
-            {/* Cedido al LO, en gris y aparte de las dos: no suma con ninguna ni
-                entra en sus bps. Sumarla daria bps negativos en prestamos que
-                ganaron. */}
-            <th className="px-3 py-2 font-medium text-right whitespace-nowrap text-gray-400">LO Margin cedido <span className="font-normal">(41305)</span></th>
+            {/* Lo que cobra una PERSONA, no una cuenta contable. Separada de las
+                dos de margen y en su propio tono por eso. */}
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-violet-50/70">
+              LO commission
+              <span className="block text-[10px] font-normal text-gray-400">Compensafe</span>
+            </th>
+            <th className="px-3 py-2 font-medium text-right whitespace-nowrap bg-violet-50/70">BPS</th>
+            <th className="px-3 py-2 font-medium text-left whitespace-nowrap">Status</th>
           </tr>
         </thead>
         <tbody>
@@ -994,6 +1002,49 @@ function DetailView({
                 key={`${row.loan_number}-${row.month}-${row.year}`}
                 className={`border-b border-gray-50 hover:brightness-95 ${missing ? "bg-amber-50/70" : ""}`}
               >
+                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.year ?? "—"}</td>
+                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.month ?? "—"}</td>
+                <td className="px-3 py-1.5 font-mono text-gray-800 whitespace-nowrap">{row.loan_number}</td>
+                <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.borrower_name ?? ""}>{row.borrower_name ?? "—"}</td>
+                <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.loan_officer ?? ""}>{row.loan_officer ?? "—"}</td>
+                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
+                <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.loan_program ?? undefined}>{row.loan_program ?? "—"}</td>
+                <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.lead_source ?? undefined}>{row.lead_source ?? "—"}</td>
+                <td className="px-3 py-1.5 whitespace-nowrap"><ChannelChip c={row.loan_info_channel} /></td>
+                <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(row.loan_amount)}</td>
+                {/* Each group prints only where it has a booking. "No margin"
+                    in amber rather than a dash: in a margin column a dash reads
+                    as missing data, and this is an accounting fact. It is the
+                    whole reason the two columns are separate -- 48 loans have
+                    the left one and not the right, and 46 the other way. */}
+                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-sky-50/40 ${row.division_received ? "" : "text-amber-700"}`}
+                    title={row.division_received
+                      ? `DM Margin ${row.dm_total ?? "—"} · RM Margin ${row.rm_total ?? "—"}`
+                      : "No booking in DM Margin or RM Margin: the division was not paid for this loan."}>
+                  {row.division_total == null ? "No margin" : fmtMov(row.division_total)}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap bg-sky-50/40">
+                  {fmtBPS(row.bps)}
+                </td>
+                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-emerald-50/40 ${row.branch_received ? "" : "text-amber-700"}`}
+                    title={row.branch_received
+                      ? `BM Margin ${row.bm_total ?? "—"} · Discount Income ${row.discount_total ?? "—"} · LO Margin ${row.lo_margin_total ?? "—"} · Brokered Origination ${row.brokered_total ?? "—"}`
+                      : "No booking in any branch margin account: the branch was not paid for this loan."}>
+                  {row.branch_margin_total == null ? "No margin" : fmtMov(row.branch_margin_total)}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap bg-emerald-50/40">
+                  {fmtBPS(row.branch_bps)}
+                </td>
+                {/* Null is not zero: no row in Compensafe means nobody knows
+                    what was paid, and 0.00 would claim it was nothing. */}
+                <td className="px-3 py-1.5 text-right whitespace-nowrap bg-violet-50/40">
+                  {row.lo_commission == null
+                    ? <span className="text-gray-300" title="No commission data for this loan">—</span>
+                    : fmtMov(row.lo_commission)}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap bg-violet-50/40">
+                  {fmtBPS(row.lo_commission_bps)}
+                </td>
                 <td className="px-3 py-1.5">
                   {missing ? (
                     <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
@@ -1004,41 +1055,6 @@ function DetailView({
                       <CheckCircle size={9} /> Match
                     </span>
                   )}
-                </td>
-                <td className="px-3 py-1.5 font-mono text-gray-800 whitespace-nowrap">{row.loan_number}</td>
-                <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.borrower_name ?? ""}>{row.borrower_name ?? "—"}</td>
-                <td className="max-w-[140px] truncate px-3 py-1.5 text-gray-700" title={row.loan_officer ?? ""}>{row.loan_officer ?? "—"}</td>
-                <td className="max-w-[150px] truncate px-3 py-1.5 text-gray-600" title={row.loan_program ?? undefined}>{row.loan_program ?? "—"}</td>
-                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{row.branch ?? "—"}</td>
-                <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">
-                  {row.month ?? "—"}{row.year ? ` ${row.year}` : ""}
-                </td>
-                <td className="px-3 py-1.5 text-right font-mono text-gray-700 whitespace-nowrap">{fmtUSD(row.loan_amount)}</td>
-                {/* Cada grupo se imprime solo donde tiene apunte. El guion es
-                    "aqui no cobro", que es toda la distincion para la que las
-                    dos columnas existen por separado: 48 prestamos tienen la
-                    de la izquierda y no la de la derecha, y 47 al reves. */}
-                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-sky-50/40 ${row.division_received ? "" : "text-amber-700"}`}
-                    title={row.division_received
-                      ? `DM ${row.dm_total ?? "—"} · RM ${row.rm_total ?? "—"}`
-                      : "Sin apunte en DM Margin ni RM Margin: la división no cobró por este préstamo."}>
-                  {row.division_total == null ? "sin margen" : fmtMov(row.division_total)}
-                </td>
-                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap bg-sky-50/40">
-                  {fmtBPS(row.bps)}
-                </td>
-                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-emerald-50/40 ${row.branch_received ? "" : "text-amber-700"}`}
-                    title={row.branch_received
-                      ? `BM ${row.bm_total ?? "—"} · Brokered ${row.brokered_total ?? "—"}`
-                      : "Sin apunte en BM Margin ni Brokered Origination: a la sucursal no le llegó margen por este préstamo."}>
-                  {row.branch_margin_total == null ? "sin margen" : fmtMov(row.branch_margin_total)}
-                </td>
-                <td className="px-3 py-1.5 text-right font-mono text-gray-600 whitespace-nowrap bg-emerald-50/40">
-                  {fmtBPS(row.branch_bps)}
-                </td>
-                <td className="px-3 py-1.5 text-right whitespace-nowrap text-gray-400"
-                    title="Margen cedido al loan officer. No suma con ninguna de las dos columnas ni entra en sus BPS.">
-                  {row.lo_margin_ceded == null ? <span className="text-gray-300">—</span> : fmtMov(row.lo_margin_ceded)}
                 </td>
               </tr>
             );
@@ -1170,7 +1186,7 @@ function AllLoansSection({
         { key: "borrower_name", label: "Borrower Name" },
         { key: "month",         label: "Month" },
         { key: "loan_amount",   label: "Loan Amount" },
-        { key: "bps",           label: "BPS división" },
+        { key: "bps",           label: "Division BPS" },
         { key: "status",        label: "Status" },
       ]);
     } else {
@@ -1181,45 +1197,57 @@ function AllLoansSection({
           return true;
         })
         .map((r) => ({
-          status:        r.status === "missing" ? "Missing" : r.status === "exempt" ? "Branch exempt" : "Match",
+          // Mismo orden que la tabla: identificacion, dinero, estado.
+          year:          r.year ?? "",
+          month:         r.month ?? "",
           loan_number:   r.loan_number,
           borrower_name: r.borrower_name ?? "",
           loan_officer:  r.loan_officer ?? "",
           branch:        r.branch ?? "",
-          month_year:    `${r.month ?? ""}${r.year ? ` ${r.year}` : ""}`,
+          loan_program:  r.loan_program ?? "",
+          lead_source:   r.lead_source ?? "",
+          channel:       r.loan_info_channel ?? "",
           loan_amount:   r.loan_amount ?? "",
           division_margin: r.division_total ?? "",
           division_bps:    r.bps ?? "",
           branch_margin:   r.branch_margin_total ?? "",
           branch_bps:      r.branch_bps ?? "",
+          lo_commission:     r.lo_commission ?? "",
+          lo_commission_bps: r.lo_commission_bps ?? "",
           dm_margin:       r.dm_total ?? "",
           rm_margin:       r.rm_total ?? "",
           bm_margin:       r.bm_total ?? "",
+          discount_income: r.discount_total ?? "",
+          lo_margin:       r.lo_margin_total ?? "",
           brokered_margin: r.brokered_total ?? "",
-          lo_margin_ceded: r.lo_margin_ceded ?? "",
+          status:        r.status === "missing" ? "Missing" : r.status === "exempt" ? "Branch exempt" : "Match",
         }));
       exportToXlsx(`loan-validation-all-loans-detail-${today}.xlsx`, exportRows, [
-        { key: "status",        label: "Status" },
+        { key: "year",          label: "Year" },
+        { key: "month",         label: "Month" },
         { key: "loan_number",   label: "Loan Number" },
-        { key: "borrower_name", label: "Borrower Name" },
+        { key: "borrower_name", label: "Borrower" },
         { key: "loan_officer",  label: "Loan Officer" },
         { key: "branch",        label: "Branch" },
-        { key: "month_year",    label: "Month / Year" },
+        { key: "loan_program",  label: "Loan Program" },
+        { key: "lead_source",   label: "Lead Source" },
+        { key: "channel",       label: "Channel" },
         { key: "loan_amount",   label: "Loan Amount" },
-        // Los dos grupos primero, que son las dos preguntas; el desglose por
-        // cuenta despues, para quien quiera reconstruir la suma.
-        { key: "division_margin", label: "Margen division (DM+RM)" },
-        { key: "division_bps",    label: "BPS division" },
-        { key: "branch_margin",   label: "Margen sucursal (BM+Brokered)" },
-        { key: "branch_bps",      label: "BPS sucursal" },
-        { key: "dm_margin",       label: "DM Margin (41309)" },
-        { key: "rm_margin",       label: "RM Margin (41307)" },
-        { key: "bm_margin",       label: "BM Margin (41306)" },
-        { key: "brokered_margin", label: "Brokered Origination (41870)" },
-        // Ultima y con el nombre entero: en una hoja de calculo, una columna
-        // llamada "LO Margin" al lado de las otras cuatro se suma sola.
-        { key: "lo_margin_ceded", label: "LO Margin CEDIDO (41305) - no suma" },
-        { key: "bps",           label: "BPS" },
+        // Los tres grupos primero, que son lo que se viene a mirar; el desglose
+        // por cuenta despues, para quien quiera reconstruir las sumas.
+        { key: "division_margin",   label: "Division margin (DM+RM)" },
+        { key: "division_bps",      label: "Division BPS" },
+        { key: "branch_margin",     label: "Branch margin (BM+Discount+LO+Brokered)" },
+        { key: "branch_bps",        label: "Branch BPS" },
+        { key: "lo_commission",     label: "LO commission (Compensafe)" },
+        { key: "lo_commission_bps", label: "LO commission BPS" },
+        { key: "dm_margin",         label: "DM Margin (41309)" },
+        { key: "rm_margin",         label: "RM Margin (41307)" },
+        { key: "bm_margin",         label: "BM Margin (41306)" },
+        { key: "discount_income",   label: "Discount Income (41200)" },
+        { key: "lo_margin",         label: "LO Margin (41305)" },
+        { key: "brokered_margin",   label: "Brokered Origination (41870)" },
+        { key: "status",            label: "Status" },
       ]);
     }
   }
@@ -1289,8 +1317,8 @@ function AllLoansSection({
           <div className="grid grid-cols-4 gap-3">
             <MetricCard label="Loan Count" value={loanCount.toLocaleString()} />
             <MetricCard label="Avg Loan Amount" value={avgLoanAmount != null ? fmtUSD(avgLoanAmount) : "—"} />
-            <MetricCard label="Avg BPS división" value={avgBPS != null ? fmtBPS(avgBPS) : "—"} />
-            <MetricCard label="Avg BPS sucursal" value={avgBranchBPS != null ? fmtBPS(avgBranchBPS) : "—"} />
+            <MetricCard label="Avg division BPS" value={avgBPS != null ? fmtBPS(avgBPS) : "—"} />
+            <MetricCard label="Avg branch BPS" value={avgBranchBPS != null ? fmtBPS(avgBranchBPS) : "—"} />
           </div>
 
           {view === "detail" ? (

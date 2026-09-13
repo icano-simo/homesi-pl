@@ -65,24 +65,13 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
  *   41309  DM Margin                    350 prestamos   +777.592
  *   41307  RM Margin                     43             + 36.930
  *   41306  BM Margin                    329             +3.748.787
+ *   41200  Discount Income              295             +1.567.162
+ *   41305  LO Margin                    308             -2.063.063
  *   41870  Brokered Origination Income   31             + 207.725
  *
- * ⚠ 41305 LO Margin NO ESTA, Y NO ES UN OLVIDO. Es margen CEDIDO al loan
- * officer -- una distribucion de lo ganado, no un ingreso. 290 de sus 315
- * filas son negativas, total -2.063.063. Sumarlo convierte en perdida
- * prestamos que ganaron:
- *
- *   710002042266   sin el 327,5 bps   con el -100,7
- *   770002038757   sin el 415,0 bps   con el  -66,0
- *
- * Y para el estado decide exactamente UN prestamo: el unico que tiene LO
- * Margin y nada mas, con importe negativo. Marcarlo como "recibio margen"
- * seria decir lo contrario de lo que paso. Viaja en columna propia, porque
- * cuanto se cedio es informacion util; lo que no puede es entrar en la suma.
- *
- * ⚠ 41308 LO Comp - BPS tampoco: comparte category_7 'Front-end Margin' con
- * 41305, o sea que el propio mapeo contable dice que es la misma naturaleza.
- * Cuatro prestamos, ninguno en solitario.
+ * ⚠ 41308 LO Comp - BPS queda fuera: cuatro prestamos, ninguno en solitario,
+ * asi que no decide ningun estado. Es la unica razon por la que esta fuera --
+ * una decision barata sobre un caso que hoy no existe.
  *
  * ⚠ 42109 Corp Margin - Branch Concessions tampoco: cinco filas positivas
  * contra cinco negativas es un AJUSTE sobre el margen, no una concesion de
@@ -126,22 +115,21 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
  * ⚠ NO LOS SUMES EN UN SOLO NUMERO. Lo estuvieron un rato y escondia justo lo
  * que la validacion existe para encontrar.
  *
- *   DIVISION  41309 DM Margin + 41307 RM Margin
+ *   DIVISION  41309 DM + 41307 RM + 41870 contabilizado en la 700
  *             lo que se lleva la division por el prestamo
- *   BRANCH    41306 BM Margin + 41870 Brokered Origination Income
- *             lo que se queda la sucursal que lo produjo
+ *   BRANCH    41306 BM + 41200 Discount + 41305 LO Margin + 41870 en sucursal
+ *             lo que se queda la sucursal que lo produjo -- las mismas cuentas
+ *             que muestran las Mini P&L Cards
  *
  * Son dos cobros distintos a dos destinatarios distintos, y cada uno puede
  * faltar sin el otro. Medido sobre los 436:
  *
- *   con margen de division        358
- *   con margen de branch          357
- *   con los dos                   310
+ *   con margen de division        360
+ *   con margen de branch          358
  *   SOLO division, sin branch      48   <- cobro la division y la sucursal no
- *   SOLO branch, sin division      47   <- cobro la sucursal y la division no
- *   ninguno de los dos             31
+ *   SOLO branch, sin division      46   <- cobro la sucursal y la division no
  *
- * Esos 95 pasaban como "recibio margen" con un numero unico. Un prestamo con
+ * Esos 94 pasaban como "recibio margen" con un numero unico. Un prestamo con
  * margen de division y sin margen de sucursal no tiene nada raro EN ESE NUMERO
  * -- y a la sucursal no le llego nada.
  *
@@ -149,8 +137,8 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
  *
  * Sus bps no se parecen en nada:
  *
- *   DIVISION   801.593    min 7,5   mediana 65,0   max  90,0
- *   BRANCH   3.944.411    min 0,0   mediana 350,0  max 485,0
+ *   DIVISION     801.593    mediana  65,0
+ *   BRANCH     3.452.668    mediana 300,0   min -111,3   max 425,0
  *
  * La mediana de division es EXACTAMENTE 65,0 porque es un baremo: un
  * porcentaje fijo del importe. La de branch se reparte de 0 a 485 porque es el
@@ -161,27 +149,64 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
 export const MARGIN_DIVISION_GL_CODES = {
   dm: "41309",
   rm: "41307",
+  brokered: "41870",
 } as const;
 
 export const MARGIN_BRANCH_GL_CODES = {
   bm: "41306",
+  discount: "41200",
+  /**
+   * LO Margin. Un COMPONENTE DEL MARGEN de la sucursal, del estilo de un
+   * upfront margin.
+   *
+   * ⚠ NO ES COMPENSACION DEL LOAN OFFICER pese al nombre, y no tiene ninguna
+   * relacion con comp.loan_commission. Esta rama llego a describirlo como
+   * "margen cedido al LO" y era falso; si encuentras ese texto en algun sitio,
+   * es un resto que hay que borrar.
+   *
+   * Que su total (-2.063.063) no se parezca al de Compensafe (933.929) no es
+   * una discrepancia que explicar: son magnitudes de cosas distintas.
+   */
+  loMargin: "41305",
   brokered: "41870",
 } as const;
 
-export const MARGIN_DIVISION_GL_LIST: readonly string[] = Object.values(MARGIN_DIVISION_GL_CODES);
-export const MARGIN_BRANCH_GL_LIST: readonly string[] = Object.values(MARGIN_BRANCH_GL_CODES);
-
-/** Las cuatro, solo para pedirlas a la base de una vez. Nunca para sumarlas. */
-export const MARGIN_GRANTING_GL_LIST: readonly string[] = [
-  ...MARGIN_DIVISION_GL_LIST,
-  ...MARGIN_BRANCH_GL_LIST,
-];
-
 /**
- * Margen CEDIDO al loan officer. Se muestra, nunca se suma con las de arriba.
- * Ver la nota: sumarlo da bps negativos en prestamos que ganaron.
+ * ⚠ 41870 ESTA EN LOS DOS GRUPOS, Y NO ES UN ERROR.
+ *
+ * Lo que decide es DONDE ESTA CONTABILIZADO el apunte, no en que lista
+ * aparece. Es el mismo criterio de la columna ambar del P&L: la cuenta se juzga
+ * contra la sucursal donde esta la transaccion.
+ *
+ *   Brokered Origination en una sucursal   34 filas · 207.724,91  -> branch
+ *   Brokered Origination en la 700          4 filas ·       0,00  -> division
+ *
+ * Esos cuatro suman exactamente cero entre si: es un traslado, no un ingreso.
+ * Asignarlos a `branch` con una lista fija los habria metido en el margen de
+ * una sucursal que nunca los recibio.
+ *
+ * La funcion resuelve por ubicacion para CUALQUIER cuenta que este en los dos
+ * grupos, no solo para esta. Hoy 41870 es la unica; si mañana hay otra, no hay
+ * que tocar codigo.
  */
-export const MARGIN_CEDED_GL_CODE = "41305";
+export type MarginGroup = "division" | "branch";
+
+export function marginGroupOf(glCode: string | null, branch: string | null): MarginGroup | null {
+  const inDivision = (Object.values(MARGIN_DIVISION_GL_CODES) as string[]).includes(glCode ?? "");
+  const inBranch = (Object.values(MARGIN_BRANCH_GL_CODES) as string[]).includes(glCode ?? "");
+  if (inDivision && inBranch) return branch === "700" ? "division" : "branch";
+  if (inDivision) return "division";
+  if (inBranch) return "branch";
+  return null;
+}
+
+/** Todas, solo para pedirlas a la base de una vez. Nunca para sumarlas juntas. */
+export const MARGIN_ALL_GL_LIST: readonly string[] = [
+  ...new Set([
+    ...Object.values(MARGIN_DIVISION_GL_CODES),
+    ...Object.values(MARGIN_BRANCH_GL_CODES),
+  ]),
+];
 
 /**
  * Whether a loan came in through a banked channel.
