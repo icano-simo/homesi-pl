@@ -493,8 +493,9 @@ function AllLoansSection() {
        * Y deja un solo sitio donde se filtra, que es lo que hace que no pueda
        * volver a pasar.
        */
-      const p = new URLSearchParams({ type: "all_loans" });
-      const res = await fetch(`/api/loan-validation?${p}`);
+      // Sin `type`: el endpoint ya no tiene modos. Pasarlo era decirle que
+      // eligiera entre una sola cosa.
+      const res = await fetch("/api/loan-validation");
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
       setData(json);
@@ -597,7 +598,7 @@ function AllLoansSection() {
           discount_income: r.discount_total ?? "",
           lo_margin:       r.lo_margin_total ?? "",
           brokered_margin: r.brokered_total ?? "",
-          status:        r.status === "missing" ? "Missing" : r.status === "exempt" ? "Branch exempt" : "Match",
+          status:        r.status === "missing" ? "Missing" : "Match",
         }));
       exportToXlsx(`loan-validation-all-loans-detail-${today}.xlsx`, exportRows, [
         { key: "year",          label: "Year" },

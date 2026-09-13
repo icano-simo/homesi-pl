@@ -109,7 +109,7 @@ export function facetsOf(r: ValidationRow): Record<string, string> {
     leadSource: val(r.lead_source),
     channel: val(r.loan_info_channel),
     loanOfficer: val(r.loan_officer),
-    status: r.status === "missing" ? "Missing" : r.status === "exempt" ? "Branch exempt" : "Match",
+    status: r.status === "missing" ? "Missing" : "Match",
   };
 }
 

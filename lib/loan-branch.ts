@@ -39,28 +39,55 @@ const BRANCH_ALIASES: Record<string, string> = {
   Affinity: "716",
 };
 
-/**
- * Branches exempt from the B2B success fee.
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * REGLA DE NEGOCIO SIN CODIGO: la exoneracion del B2B success fee
+ * ─────────────────────────────────────────────────────────────────────────────
  *
- * They do not pay it, so a b2b loan of theirs with no fee is correct and must
- * not raise an alert — the validation exists to find branches that should have
- * been charged and were not. Reported as "branch exempt, not charged" instead.
+ * LAS SUCURSALES 733 Y 776 NO PAGAN EL B2B SUCCESS FEE.
  *
- * Here, next to the aliases, because it is a fact about a branch and not about
- * one report. Exempting the next one is a line in this list, not a condition
- * copied into a component.
+ * Esto era `B2B_FEE_EXEMPT_BRANCHES` y `isB2BFeeExempt()`, y se retiro el
+ * 2026-09-12 al quitar la pestaña B2B de Loan Validation: sin la pestaña y sin
+ * el contador de /start, la rama type === "b2b" del endpoint se quedo sin
+ * llamador, y con ella el unico consumidor que estas dos cosas tenian.
  *
- * Measured 2026-08-17: of the 106 loans with b2b = true, 34 are on these two
- * (733: 32, 776: 2) and never alert; the other 72 sit on seven branches that
- * are charged and do alert when the fee is missing.
+ * SE BORRA EL CODIGO, NO EL HALLAZGO. Costo averiguarlo y va a hacer falta
+ * cuando el usuario retome el tema; si vuelve a consultarse en el futuro es una
+ * lista de dos elementos, no una investigacion otra vez.
+ *
+ * POR QUE IMPORTA: un prestamo b2b de esas dos sin fee es CORRECTO, no un
+ * hallazgo. La validacion existe para encontrar sucursales que debieron cobrar
+ * y no cobraron. Quien vuelva a escribir esa comprobacion sin esta excepcion va
+ * a producir 34 alertas falsas el primer dia, y van a parecer reales.
+ *
+ * MEDIDO el 2026-08-17 y RE-MEDIDO contra la base el 2026-09-12, al borrar el
+ * codigo. Los 106 prestamos con b2b = true, por sucursal:
+ *
+ *     733          32  ← EXONERADA, nunca alerta
+ *     776           2  ← EXONERADA, nunca alerta
+ *     ------------------
+ *     exentos      34
+ *
+ *     747          23      716          19      703          14
+ *     724          10      150           3      770           2
+ *     728           1
+ *     ------------------
+ *     que cobran   72  en siete sucursales, y si alertan cuando falta el fee
+ *     ==================
+ *     total       106
+ *
+ * Las dos cifras coinciden al prestamo un mes despues, asi que la exoneracion
+ * no es un artefacto de un corte concreto.
+ *
+ * Y VA AQUI, junto a los alias, porque es un hecho sobre una sucursal y no
+ * sobre un informe. El dia que haya que aplicarla otra vez, exonerar a la
+ * siguiente es una linea en una lista de este archivo, no una condicion copiada
+ * dentro de un componente.
+ *
+ * ⚠ Y NO SE ARREGLA DANDOLE CUENTA PROPIA AL FEE. El B2B success fee se detecta
+ * por el texto de check_description y no tiene gl_code propio. Eso esta bien
+ * asi: ver la nota de memoria del success fee antes de proponer tocar gl 70100.
  */
-export const B2B_FEE_EXEMPT_BRANCHES: readonly string[] = ["733", "776"];
-
-/** True when this branch does not pay the B2B success fee. */
-export function isB2BFeeExempt(branch: string | null | undefined): boolean {
-  const b = resolveLoanBranchAlias(branch);
-  return b !== null && B2B_FEE_EXEMPT_BRANCHES.includes(b);
-}
 
 /** The corporate branch: centralized costs, division-wide loan volume. */
 export const CORPORATE_BRANCH = "700";

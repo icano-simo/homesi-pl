@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
-import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
+import { resolveLoanBranchAlias } from "@/lib/loan-branch";
 import {
   MARGIN_ALL_GL_LIST,
   MARGIN_BRANCH_GL_CODES,
@@ -10,9 +10,17 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// On Demand and Processing were retired from the UI; the type keeps only what
-// is reachable.
-type ValType = "b2b" | "all_loans";
+/*
+ * Este endpoint ya no tiene modos.
+ *
+ * Tuvo cuatro --b2b, on_demand, processing, all_loans-- y cada uno se retiro de
+ * la interfaz por separado. El parametro `type` sobrevivio al ultimo de ellos
+ * apuntando a codigo que nadie alcanzaba, con `b2b` de valor por defecto: una
+ * llamada sin parametro habria entrado en la rama muerta.
+ *
+ * Se atiende una sola pregunta: de los prestamos de la lista maestra, cuales
+ * recibieron margen en alguna de las cinco cuentas y cuales no.
+ */
 
 export interface ValidationRow {
   loan_number: string;
@@ -103,9 +111,15 @@ export interface ValidationRow {
   bps: number | null;
   /** bps de BRANCH. Otra escala: mediana 350 contra 65. Nunca se promedian. */
   branch_bps: number | null;
-  status: "match" | "missing" | "exempt";
-  tx_description: string | null;
-  tx_movement: number | null;
+  /*
+   * Sin "exempt". Era el tercer valor y solo lo producia la rama b2b: un
+   * prestamo de la 733 o la 776 sin success fee no era un hallazgo porque esas
+   * sucursales no lo pagan. Fuera la rama, ninguna fila puede salir exenta.
+   *
+   * La regla de negocio NO se pierde: esta escrita en lib/loan-branch.ts, que
+   * es donde hara falta cuando el usuario retome el tema.
+   */
+  status: "match" | "missing";
 }
 
 export interface SurplusRow {
@@ -117,10 +131,6 @@ export interface SurplusRow {
   year: number | null;
   branch: string | null;
   incomplete: boolean;
-  borrower_name: string | null;
-  loan_officer: string | null;
-  loan_amount: number | null;
-  surplus_reason: "loan_exists_not_flagged" | "loan_not_found" | "loan_number_unresolved" | null;
 }
 
 export interface ValidationResult {
@@ -129,8 +139,6 @@ export interface ValidationResult {
   summary: {
     match_count: number;
     missing_count: number;
-    /** Fee absent on a branch that does not pay it. Not a finding. */
-    exempt_count: number;
     surplus_count: number;
   };
 }
@@ -139,7 +147,6 @@ export async function GET(req: NextRequest) {
   const supabase = createServerClient();
   const { searchParams } = new URL(req.url);
 
-  const type = (searchParams.get("type") ?? "b2b") as ValType;
   const months = searchParams.getAll("month");
   const years = searchParams.getAll("year").map(Number).filter((n) => !isNaN(n));
   const branches = searchParams.getAll("branch");
@@ -169,9 +176,8 @@ export async function GET(req: NextRequest) {
    * loan read as "missing in accounting".
    */
 
-  if (type === "b2b") loQuery = loQuery.eq("b2b", true);
   /*
-   * all_loans: sin filtro de bandera Y SIN FILTRO DE CANAL.
+   * Sin filtro de bandera Y SIN FILTRO DE CANAL.
    *
    * Los brokered estuvieron fuera con este motivo escrito: "no ganan margen
    * como los banked, asi que listarlos como que falta en contabilidad reporta
@@ -201,10 +207,8 @@ export async function GET(req: NextRequest) {
     : (loanOfficialsAll ?? []);
 
   // ── 2. Determine transaction filter strategy ───────────────────────────────
-  // B2B, On Demand, Processing: match by check_description text regardless of GL code.
-  //
   /*
-   * all_loans: las CUATRO cuentas que otorgan margen -- DM (41309), RM (41307),
+   * Las CUATRO cuentas que otorgan margen -- DM (41309), RM (41307),
    * BM (41306) y Brokered Origination (41870) -- mas la de margen CEDIDO
    * (41305), que se trae para poder enseñarla y nunca para sumarla.
    *
@@ -215,8 +219,16 @@ export async function GET(req: NextRequest) {
    * 42109 quedan fuera, y por que esta definicion NO es la del neto de Table
    * List aunque las dos se llamen margen.
    */
-  const glCodes: readonly string[] | null = type === "all_loans" ? MARGIN_ALL_GL_LIST : null;
-  const descFilter: string | null = type === "b2b" ? "B2B SUCCESS FEE" : null;
+  const glCodes: readonly string[] = MARGIN_ALL_GL_LIST;
+
+  /*
+   * Sin descFilter. Los modos retirados emparejaban por TEXTO de
+   * check_description --"B2B SUCCESS FEE"-- en vez de por cuenta, porque
+   * aquellos conceptos no tienen cuenta propia. Ver la nota de memoria del
+   * success fee: eso esta bien asi y no se arregla creando una cuenta. Pero ya
+   * no queda modo que empareje por texto, y un filtro que siempre vale null es
+   * una rama que nadie puede tomar.
+   */
 
   // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
   // Paginate to avoid Supabase's default 1000-row cap.
@@ -226,8 +238,7 @@ export async function GET(req: NextRequest) {
     let q: any = supabase
       .from("pl_transactions")
       .select("loan_number, loan_number_incomplete, check_description, gl_code, movement, month, year, branch");
-    if (glCodes)         q = q.in("gl_code", glCodes as string[]);
-    if (descFilter)      q = q.ilike("check_description", `%${descFilter}%`);
+    q = q.in("gl_code", glCodes as string[]);
     if (months.length  > 0) q = q.in("month",  months);
     if (years.length   > 0) q = q.in("year",   years);
     // No branch filter. A loan's fee is matched by loan_number wherever it was
@@ -316,23 +327,12 @@ export async function GET(req: NextRequest) {
     };
   };
 
-  // ── 4b. Branch-700 aggregation for B2B description / movement columns ─────────
-  const txB700ByLoan = new Map<string, { movement: number; description: string | null }>();
-  if (type === "b2b") {
-    for (const tx of (transactions ?? []) as Array<Record<string, unknown>>) {
-      const loanNum = (tx.loan_number as string | null)?.trim();
-      if (!loanNum || (tx.loan_number_incomplete as boolean) || (tx.branch as string) !== "700") continue;
-      const existing = txB700ByLoan.get(loanNum);
-      if (existing) {
-        existing.movement += (tx.movement as number) ?? 0;
-      } else {
-        txB700ByLoan.set(loanNum, {
-          movement: (tx.movement as number) ?? 0,
-          description: tx.check_description as string | null,
-        });
-      }
-    }
-  }
+  /*
+   * Aqui vivia la agregacion de la sucursal 700, que alimentaba las columnas
+   * Description y Movement de la tabla de B2B. Solo corria con type === "b2b",
+   * asi que sus dos campos --tx_description y tx_movement-- salian siempre en
+   * null para todo lo demas. Se van los tres.
+   */
 
   /*
    * ── 4c. Lo que cobra el loan officer ──────────────────────────────────────
@@ -351,22 +351,20 @@ export async function GET(req: NextRequest) {
    * correcto es enseñar la validacion sin comisiones.
    */
   const commissionByLoan = new Map<string, { lo_pay: number | null; lo_effective_bps: number | null }>();
-  if (type === "all_loans") {
-    try {
-      const comp = createServerClient("comp");
-      const { data, error } = await comp
-        .from("loan_commission")
-        .select("loan_number,lo_pay,lo_effective_bps");
-      if (error) throw new Error(error.message);
-      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-        commissionByLoan.set(r.loan_number as string, {
-          lo_pay: r.lo_pay == null ? null : Number(r.lo_pay),
-          lo_effective_bps: r.lo_effective_bps == null ? null : Number(r.lo_effective_bps),
-        });
-      }
-    } catch (e) {
-      console.error("[loan-validation] comp.loan_commission no disponible:", e);
+  try {
+    const comp = createServerClient("comp");
+    const { data, error } = await comp
+      .from("loan_commission")
+      .select("loan_number,lo_pay,lo_effective_bps");
+    if (error) throw new Error(error.message);
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      commissionByLoan.set(r.loan_number as string, {
+        lo_pay: r.lo_pay == null ? null : Number(r.lo_pay),
+        lo_effective_bps: r.lo_effective_bps == null ? null : Number(r.lo_effective_bps),
+      });
     }
+  } catch (e) {
+    console.error("[loan-validation] comp.loan_commission no disponible:", e);
   }
 
   /**
@@ -383,7 +381,6 @@ export async function GET(req: NextRequest) {
   );
 
   // ── 5. Build validation rows (one per loan in loan_officials) ───────────────
-  const showBps = type === "all_loans";
   const rows: ValidationRow[] = (loanOfficials ?? []).map((lo: Record<string, unknown>) => {
     const loanNum = lo.loan_number as string;
     const m = marginOf(loanNum);
@@ -404,10 +401,9 @@ export async function GET(req: NextRequest) {
     const accounting_total = m.division.total;
     /** Cada grupo sobre el importe del prestamo. Nunca uno sobre el otro. */
     const bpsOf = (v: number, has: boolean) =>
-      showBps && has && loan_amount ? (v / loan_amount) * 10000 : null;
+      has && loan_amount ? (v / loan_amount) * 10000 : null;
     const bps = bpsOf(m.division.total, m.division.received);
     const branch_bps = bpsOf(m.branch.total, m.branch.received);
-    const b700 = txB700ByLoan.get(loanNum);
     return {
       loan_number: loanNum,
       borrower_name: lo.borrower_name as string | null,
@@ -471,20 +467,14 @@ export async function GET(req: NextRequest) {
       bps,
       branch_bps,
       /**
-       * Exempt is not a third kind of absence — it is the same absence, on a
-       * branch that does not pay the fee. 733 and 776 do not owe the B2B
-       * success fee, so no fee found there is correct and must not read as a
-       * finding; the validation exists to catch the branches that are charged
-       * and came back empty.
+       * Dos valores, no tres. "exempt" solo tenia sentido frente al B2B success
+       * fee: la ausencia era la misma, pero en una sucursal que no lo paga.
        *
-       * Nothing about the detection changes. The check that already ran is the
-       * one that ran; this only decides how its answer is presented.
+       * Aqui la pregunta es otra --¿recibio margen este prestamo?-- y a esa no
+       * hay sucursal exonerada: todas cobran margen. La exoneracion del success
+       * fee queda anotada en lib/loan-branch.ts, sin codigo que la aplique.
        */
-      status: gotMargin
-        ? "match"
-        : (type === "b2b" && isB2BFeeExempt(lo.branch as string | null)) ? "exempt" : "missing",
-      tx_description: b700?.description ?? null,
-      tx_movement: b700 != null ? b700.movement : null,
+      status: gotMargin ? "match" : "missing",
     };
   });
 
@@ -504,67 +494,30 @@ export async function GET(req: NextRequest) {
         year: tx.year as number | null,
         branch: tx.branch as string | null,
         incomplete,
-        borrower_name: null,
-        loan_officer: null,
-        loan_amount: null,
-        surplus_reason: null,
       });
     }
   }
 
-  // ── 7. Enrich surplus for flagged types ─────────────────────────────────────
-  if (type !== "all_loans" && surplus.length > 0) {
-    const completeLns = [
-      ...new Set(
-        surplus
-          .filter((s) => s.loan_number && !s.incomplete)
-          .map((s) => s.loan_number as string)
-      ),
-    ];
-
-    const enrichMap = new Map<
-      string,
-      { borrower_name: string | null; loan_officer: string | null; branch: string | null; loan_amount: number | null }
-    >();
-
-    if (completeLns.length > 0) {
-      const { data: enrichData } = await supabase
-        .from("loan_officials")
-        .select("loan_number, borrower_name, loan_officer, branch, loan_amount")
-        .in("loan_number", completeLns);
-
-      for (const row of (enrichData ?? []) as Array<Record<string, unknown>>) {
-        enrichMap.set(row.loan_number as string, {
-          borrower_name: row.borrower_name as string | null,
-          loan_officer: row.loan_officer as string | null,
-          branch: row.branch as string | null,
-          loan_amount: row.loan_amount as number | null,
-        });
-      }
-    }
-
-    for (const s of surplus) {
-      if (!s.loan_number || s.incomplete) {
-        s.surplus_reason = "loan_number_unresolved";
-      } else {
-        const enrich = enrichMap.get(s.loan_number);
-        if (enrich) {
-          s.borrower_name = enrich.borrower_name;
-          s.loan_officer = enrich.loan_officer;
-          if (!s.branch) s.branch = enrich.branch;
-          s.loan_amount = enrich.loan_amount;
-          s.surplus_reason = "loan_exists_not_flagged";
-        } else {
-          s.surplus_reason = "loan_not_found";
-        }
-      }
-    }
-  }
+  /*
+   * Aqui vivia el paso 7, que enriquecia los surplus con el nombre del
+   * prestatario, su loan officer y su importe, y les ponia un `surplus_reason`
+   * de tres valores.
+   *
+   * Su guarda era `if (type !== "all_loans")`, asi que NUNCA corrio en esta
+   * pantalla: los cuatro campos salian en null desde que all_loans fue el unico
+   * modo que quedaba, y la tabla de surplus --que no los pinta-- se veia igual.
+   * Una consulta mas a loan_officials por cada carga, para rellenar campos que
+   * nadie leia.
+   *
+   * Los tres motivos alimentaban el modo de tres cubos de SurplusSection, que
+   * se fue con la pestaña B2B por la misma razon: distinguir "existe pero no
+   * esta marcado" de "no esta en officials" solo tenia sentido con una bandera
+   * delante. Aqui la pregunta es una: el numero esta en la lista maestra o no.
+   */
 
   const summary = {
     match_count: rows.filter((r) => r.status === "match").length,
     missing_count: rows.filter((r) => r.status === "missing").length,
-    exempt_count: rows.filter((r) => r.status === "exempt").length,
     surplus_count: surplus.length,
   };
 
