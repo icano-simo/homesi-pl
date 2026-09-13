@@ -43,7 +43,11 @@ interface LoanRow {
   lo_commission: number | null;
   lo_commission_bps: number | null;
   lo_commission_name: string | null;
-  /** revenue − comisión, sobre el revenue YA FILTRADO por sucursal. */
+  /** Revenue contabilizado en la 700: lo que se lleva corporativo. */
+  corporate_revenue: number;
+  /** revenue − corporate_revenue. Con lo que la sucursal paga la comisión. */
+  branch_revenue: number;
+  /** branch_revenue − comisión. Se muestra tal cual, negativo incluido. */
   net_after_commission: number | null;
 }
 
@@ -65,6 +69,8 @@ interface Summary {
   commission_missing_period: boolean;
   /** La consulta falló. Distinto de "no hay datos". */
   commission_unavailable: boolean;
+  corporate_revenue: number;
+  branch_revenue: number;
   net_after_commission: number;
 }
 
@@ -237,6 +243,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
       margin_bps: volume ? (marginNet / volume) * 10000 : null,
       commission: conComision.reduce((s, l) => s + (l.lo_commission ?? 0), 0),
       commission_loans: conComision.length,
+      branch_revenue: inScope.reduce((s, l) => s + l.branch_revenue, 0),
     };
   }, [inScope]);
 
@@ -301,10 +308,10 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                 <p className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
                   <span className="font-semibold">La comisión no está filtrada por sucursal.</span>{" "}
                   El revenue de abajo sólo cuenta {branchFilter.length === 1 ? `la ${branchFilter[0]}` : `las ${branchFilter.length} sucursales filtradas`},
-                  pero la comisión del LO es entera. Un{" "}
-                  <span className="font-semibold">Revenue − LO commission</span> negativo aquí suele
-                  significar que el margen del préstamo está contabilizado en otra sucursal, no que el
-                  préstamo pierda dinero.
+                  pero la comisión del LO es la del préstamo entero: es una fila por préstamo y no
+                  tiene sucursal contable que filtrar. Con un filtro puesto,{" "}
+                  <span className="font-semibold">Branch revenue − commission</span> compara una parte
+                  del revenue contra la comisión completa.
                 </p>
               )}
             </div>
@@ -415,11 +422,19 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                       y el nombre largo. Margin net y Revenue net ya se
                       confundieron cuando quedaron al 3% uno del otro; un
                       "Net" suelto al lado de aquellos dos no diría de cuál
-                      sale. Este dice su resta entera. */}
+                      sale. Este dice su resta entera.
+
+                      Y el minuendo va en su propia columna, no calculado por
+                      detrás: el neto tiene que poder reconstruirse de lo que
+                      está a su izquierda en la misma fila. */}
+                  <Th className="text-right bg-amber-50 text-amber-900 whitespace-nowrap">
+                    Branch revenue
+                    <span className="block font-normal normal-case text-amber-700/70">excl. 700</span>
+                  </Th>
                   <Th className="text-right bg-amber-50 text-amber-900">LO commission</Th>
                   <Th className="text-right bg-amber-50 text-amber-900">LO bps</Th>
                   <Th className="text-right bg-amber-50 text-amber-900 whitespace-nowrap">
-                    Revenue − LO commission
+                    Branch revenue − commission
                   </Th>
                 </tr>
               </thead>
@@ -448,6 +463,15 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                         sabe qué se pagó, y 0,00 afirmaría que nada. Cuando la
                         fila existe y dice 0, sí se imprime 0,00 -- eso es el
                         dato. */}
+                    {/* El revenue de la sucursal se muestra siempre: existe
+                        haya comisión o no, y es la cifra con la que la sucursal
+                        pagaría. */}
+                    <Td className={`text-right font-mono tabular-nums ${num(l.branch_revenue)}`}
+                        title={l.corporate_revenue !== 0
+                          ? `De ${fmt(l.revenue)} totales, ${fmt(l.corporate_revenue)} están contabilizados en la 700`
+                          : undefined}>
+                      {fmt(l.branch_revenue)}
+                    </Td>
                     {l.lo_commission === null ? (
                       <>
                         <Td className="text-right text-slate-300" title="Sin dato de comisión para este préstamo">—</Td>
@@ -499,6 +523,9 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net)}`}>
                     {fmtBps(totals.net_bps)}
                   </Td>
+                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.branch_revenue)}`}>
+                    {fmt(totals.branch_revenue)}
+                  </Td>
                   <Td className={`text-right font-mono font-bold tabular-nums ${num(-totals.commission)}`}>
                     {fmt(totals.commission)}
                   </Td>
@@ -508,8 +535,8 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   <Td className="text-right font-mono text-[10px] font-normal text-slate-500">
                     {totals.commission_loans}/{totals.loan_count}
                   </Td>
-                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net - totals.commission)}`}>
-                    {fmt(totals.net - totals.commission)}
+                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.branch_revenue - totals.commission)}`}>
+                    {fmt(totals.branch_revenue - totals.commission)}
                   </Td>
                 </tr>
               </tfoot>
@@ -653,6 +680,25 @@ function MiniPL({ l }: { l: LoanRow }) {
         <div className="px-3 pt-2">
           <Block title="Total revenue" total={l.revenue} amount={l.loan_amount} lines={l.lines} loan={l} />
 
+          {/* Lo que se lleva la 700 y lo que le queda a la sucursal, en dos
+              líneas visibles. El neto de abajo resta la comisión de la segunda,
+              así que las dos tienen que estar a la vista o el banner sería otra
+              vez un número que no se puede reconstruir de lo que hay encima. */}
+          {l.corporate_revenue !== 0 && (
+            <div className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
+              <span className="truncate text-slate-500">de ello, contabilizado en la 700</span>
+              <span className={`shrink-0 font-mono tabular-nums ${num(l.corporate_revenue)}`}>
+                {fmt(l.corporate_revenue)}
+              </span>
+            </div>
+          )}
+          <div className="flex items-baseline justify-between gap-2 border-t border-slate-200/80 px-3 py-1 text-[11px] font-semibold">
+            <span className="truncate text-slate-700">Revenue de la sucursal</span>
+            <span className={`shrink-0 font-mono tabular-nums ${num(l.branch_revenue)}`}>
+              {fmt(l.branch_revenue)}
+            </span>
+          </div>
+
           {/* La comisión va debajo del revenue y en su propia banda: es lo que
               se le paga a una persona, no un concepto de ingreso, y mezclarla
               entre las líneas la haría sumar donde resta. */}
@@ -685,7 +731,7 @@ function MiniPL({ l }: { l: LoanRow }) {
         <NetBanner
           net={l.net_after_commission ?? 0}
           netBps={l.loan_amount ? ((l.net_after_commission ?? 0) / l.loan_amount) * 10000 : null}
-          label="Revenue − LO commission"
+          label="Branch revenue − commission"
         />
       )}
     </div>
@@ -783,6 +829,21 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
         <div className="px-3 pt-2">
           <Block title="Total revenue" total={s.revenue} amount={s.volume} lines={s.lines} />
 
+          {s.corporate_revenue !== 0 && (
+            <div className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
+              <span className="truncate text-slate-500">de ello, contabilizado en la 700</span>
+              <span className={`shrink-0 font-mono tabular-nums ${num(s.corporate_revenue)}`}>
+                {fmt(s.corporate_revenue)}
+              </span>
+            </div>
+          )}
+          <div className="flex items-baseline justify-between gap-2 border-t border-slate-200/80 px-3 py-1 text-[11px] font-semibold">
+            <span className="truncate text-slate-700">Revenue de las sucursales</span>
+            <span className={`shrink-0 font-mono tabular-nums ${num(s.branch_revenue)}`}>
+              {fmt(s.branch_revenue)}
+            </span>
+          </div>
+
           <div className="my-1.5 flex items-center justify-between rounded-lg border border-amber-200/60 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900">
             <span className="uppercase tracking-wide">LO commission</span>
             <span className="font-mono tabular-nums">{fmt(s.commission_total)}</span>
@@ -801,7 +862,7 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
         <NetBanner
           net={s.net_after_commission}
           netBps={s.volume ? (s.net_after_commission / s.volume) * 10000 : null}
-          label="Revenue − LO commission"
+          label="Branch revenue − commission"
         />
       )}
     </div>

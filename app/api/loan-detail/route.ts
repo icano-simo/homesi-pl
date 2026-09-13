@@ -118,20 +118,44 @@ export interface LoanDetailRow {
   /** Quién cobró, como lo escribe Compensafe. */
   lo_commission_name: string | null;
   /**
-   * revenue − lo_commission. Null sin dato de comisión.
+   * Revenue de este préstamo contabilizado en la 700 — lo que se lleva
+   * corporativo. Se publica para que `branch_revenue` sea una resta visible y
+   * no un número que aparece sin explicación.
+   */
+  corporate_revenue: number;
+  /**
+   * `revenue − corporate_revenue`: lo que le queda a la sucursal.
    *
-   * ⚠ EL REVENUE ESTÁ FILTRADO POR SUCURSAL Y LA COMISIÓN NO PUEDE ESTARLO:
-   * es una fila por préstamo, sin sucursal contable. Así que con un filtro
-   * activo esto compara el revenue de ESA sucursal contra la comisión entera, y
-   * sale negativo en préstamos que no pierden dinero -- su margen está en la
-   * 700. Medido: 8 negativos sin filtro, 83 restringiendo cada préstamo a su
-   * propia sucursal.
+   * Es el minuendo del neto, y va en el payload en vez de calcularse en la
+   * pantalla porque la pantalla tiene que poder enseñarlo: el neto se
+   * reconstruye de las dos líneas que están encima de él.
    *
-   * Se calcula igual sobre el revenue filtrado, y a propósito: el neto tiene
-   * que poder reconstruirse de los dos números que están a su lado en la misma
-   * fila. Un neto que usara el revenue completo mientras la tarjeta muestra el
-   * filtrado sería otra vez un encabezado que no cuadra con su desglose. Lo que
-   * se hace en su lugar es DECIRLO en pantalla mientras haya filtro.
+   * Con un filtro de sucursal activo las transacciones ya vienen acotadas, así
+   * que `corporate_revenue` es cero y esto coincide con `revenue`. Sin filtro,
+   * son distintos y la diferencia es lo que la 700 se lleva: 2.452,52 de media
+   * por préstamo.
+   */
+  branch_revenue: number;
+  /**
+   * `branch_revenue − lo_commission`. Null sin dato de comisión.
+   *
+   * LA SUCURSAL PAGA LA COMISIÓN CON LO QUE LE QUEDA después de repartirle sus
+   * bps a corporativo, así que el neto se mide contra eso y no contra el
+   * revenue entero.
+   *
+   * ⚠ SALE NEGATIVO EN 47 DE 270 PRÉSTAMOS HOY, Y SE MUESTRA TAL CUAL. La mayor
+   * parte son dos sucursales --728 y 733-- cuyo P&L está incompleto: falta
+   * cargar su margen, y hasta que se cargue su revenue propio es casi cero
+   * contra una comisión que sí se pagó.
+   *
+   * NO SE INTENTA DISTINGUIR "incompleto" de "pérdida real", y es deliberado:
+   * sería adivinar sobre datos que cambian en cuanto se suba el archivo que
+   * falta. Cuando eso ocurra, estos números se corrigen solos sin tocar una
+   * línea -- que es justamente la prueba de que aquí no hay nada cableado.
+   *
+   * ⚠ Y LA COMISIÓN NO SE FILTRA POR SUCURSAL: es una fila por préstamo, sin
+   * sucursal contable. Con un filtro activo esto enfrenta el revenue de ESA
+   * sucursal contra la comisión entera. Se dice en pantalla.
    */
   net_after_commission: number | null;
 }
@@ -291,13 +315,23 @@ export async function GET(req: NextRequest) {
       /** category_7 -> branches the amount is booked in. Not the loan's branch:
        *  DM Margin is booked in 700 on loans the other branches originated. */
       conceptBranches: Record<string, Set<string>>;
+      /**
+       * Revenue de este préstamo contabilizado en la 700.
+       *
+       * Lo que se lleva corporativo, y por tanto lo que la sucursal NO tiene
+       * para pagar la comisión. Se guarda aparte para poder enseñarlo como
+       * línea propia: el neto resta el revenue de la sucursal, y esa resta
+       * tiene que poder reconstruirse de lo que está en pantalla.
+       */
+      corporateRevenue: number;
     };
     const agg = new Map<string, Agg>();
     for (const t of txs) {
       if (!t.category_7) continue;
       let a = agg.get(t.loan_number);
-      if (!a) { a = { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
+      if (!a) { a = { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {}, corporateRevenue: 0 }; agg.set(t.loan_number, a); }
       const v = money(t.movement);
+      if (t.branch === "700") a.corporateRevenue += v;
       a.concepts[t.category_7] = (a.concepts[t.category_7] ?? 0) + v;
       const gl = t.gl_code ?? "—";
       const line = (a.lines[gl] ??= { gl_code: gl, gl_name: t.gl_name ?? t.category_7, category_7: t.category_7, amount: 0 });
@@ -316,7 +350,7 @@ export async function GET(req: NextRequest) {
     }
 
     const rows: LoanDetailRow[] = loans.map((l) => {
-      const a = agg.get(l.loan_number) ?? { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
+      const a = agg.get(l.loan_number) ?? { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {}, corporateRevenue: 0 };
       const amount = money(l.loan_amount);
       const com = commissionByLoan.get(l.loan_number);
 
@@ -402,7 +436,9 @@ export async function GET(req: NextRequest) {
         lo_commission: com ? money(com.lo_pay) : null,
         lo_commission_bps: com && com.lo_effective_bps != null ? Number(com.lo_effective_bps) : null,
         lo_commission_name: com?.lo_name ?? null,
-        net_after_commission: com ? revenue - money(com.lo_pay) : null,
+        corporate_revenue: a.corporateRevenue,
+        branch_revenue: revenue - a.corporateRevenue,
+        net_after_commission: com ? revenue - a.corporateRevenue - money(com.lo_pay) : null,
       };
     });
 
@@ -468,9 +504,13 @@ export async function GET(req: NextRequest) {
       commission_missing_period: rows.length > 0 && rows.every((r) => r.lo_commission === null),
       /** La consulta a `comp` falló: no es lo mismo que "no hay datos". */
       commission_unavailable: !commissionAvailable,
-      /** Neto del mes tras comisión, sobre el revenue ya filtrado. */
+      /** Lo que se lleva la 700 en el mes, y lo que le queda a las sucursales. */
+      corporate_revenue: rows.reduce((s, r) => s + r.corporate_revenue, 0),
+      branch_revenue: rows.reduce((s, r) => s + r.branch_revenue, 0),
+      /** Neto del mes: revenue de sucursal menos comisión. Misma regla que la fila. */
       net_after_commission:
-        summaryRevenue - rows.reduce((s, r) => s + (r.lo_commission ?? 0), 0),
+        rows.reduce((s, r) => s + r.branch_revenue, 0) -
+        rows.reduce((s, r) => s + (r.lo_commission ?? 0), 0),
     };
 
     // ── Margin in these books that is not on one of this card's loans ───────
