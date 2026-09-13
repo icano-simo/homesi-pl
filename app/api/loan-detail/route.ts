@@ -92,6 +92,56 @@ export interface LoanDetailRow {
   net_bps: number | null;
   /** No margin account carries an amount. The question this view answers. */
   no_margin: boolean;
+
+  /**
+   * ─── LO COMISIÓN, DESDE COMPENSAFE ────────────────────────────────────────
+   *
+   * `lo_pay` de comp.loan_commission, y NUNCA `total_pay`: ese incluye
+   * `other_pay`, que es el override y se le paga a OTRA persona -- el manager
+   * del loan officer. Las líneas de la fuente lo dicen literalmente ("BR 770 -
+   * Override on Badovinac"). Sumarlo a lo del LO atribuiría el pago de uno a
+   * otro.
+   *
+   * `null` cuando el préstamo no tiene fila en Compensafe, y nunca 0: un cero
+   * afirma que no se pagó nada y el dato no lo sostiene. Mismo criterio que
+   * `dm_total` en Loan Validation.
+   *
+   * ⚠ 0 SÍ APARECE, y significa otra cosa: dos préstamos tienen fila con
+   * `lo_pay = 0`. En uno el LO cobró 0 y 100 fue de override; en el otro
+   * (703002011834) hay 7.512,30 de `total_pay` con los cuatro componentes a
+   * cero y sin `lo_name`. Ahí el 0,00 es el dato y se muestra tal cual, sin
+   * compensar nada.
+   */
+  lo_commission: number | null;
+  /** `lo_effective_bps`, ya calculados arriba. No se recalculan aquí. */
+  lo_commission_bps: number | null;
+  /** Quién cobró, como lo escribe Compensafe. */
+  lo_commission_name: string | null;
+  /**
+   * revenue − lo_commission. Null sin dato de comisión.
+   *
+   * ⚠ EL REVENUE ESTÁ FILTRADO POR SUCURSAL Y LA COMISIÓN NO PUEDE ESTARLO:
+   * es una fila por préstamo, sin sucursal contable. Así que con un filtro
+   * activo esto compara el revenue de ESA sucursal contra la comisión entera, y
+   * sale negativo en préstamos que no pierden dinero -- su margen está en la
+   * 700. Medido: 8 negativos sin filtro, 83 restringiendo cada préstamo a su
+   * propia sucursal.
+   *
+   * Se calcula igual sobre el revenue filtrado, y a propósito: el neto tiene
+   * que poder reconstruirse de los dos números que están a su lado en la misma
+   * fila. Un neto que usara el revenue completo mientras la tarjeta muestra el
+   * filtrado sería otra vez un encabezado que no cuadra con su desglose. Lo que
+   * se hace en su lugar es DECIRLO en pantalla mientras haya filtro.
+   */
+  net_after_commission: number | null;
+}
+
+/** Una fila de comp.loan_commission, con sólo lo que esta vista usa. */
+interface CommissionRow {
+  loan_number: string;
+  lo_name: string | null;
+  lo_pay: number | null;
+  lo_effective_bps: number | null;
 }
 
 export async function GET(req: NextRequest) {
@@ -186,6 +236,43 @@ export async function GET(req: NextRequest) {
       txs.push(...rows);
     }
 
+    // ── Lo que se le pagó al loan officer ───────────────────────────────────
+    //
+    // Otro cliente porque es otro schema: `db.schema` se fija al construir y no
+    // se puede cambiar por consulta. `comp` es el espejo de Compensafe que
+    // escribe simo-sync, una fila por préstamo.
+    //
+    // Sin filtro de sucursal ni de mes: la clave es el préstamo, y esta tabla
+    // no tiene sucursal contable que filtrar. Se piden exactamente los
+    // préstamos que la ventana ya va a listar.
+    //
+    // ⚠ QUE ESTA CONSULTA FALLE NO PUEDE TUMBAR LA VENTANA. Compensafe es una
+    // fuente añadida a un P&L que funcionaba sin ella; si el schema no está
+    // expuesto o el sync no ha corrido, lo correcto es enseñar el P&L sin
+    // comisiones -- que es exactamente lo que ve un periodo de 2025 -- y no una
+    // pantalla de error donde antes había cifras.
+    const comp = createServerClient("comp");
+    const commissionByLoan = new Map<string, CommissionRow>();
+    let commissionAvailable = true;
+    try {
+      for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
+        const chunk = loanNumbers.slice(i, i + IN_CHUNK);
+        if (chunk.length === 0) break;
+        const rows = await page(
+          () =>
+            comp
+              .from("loan_commission")
+              .select("loan_number,lo_name,lo_pay,lo_effective_bps")
+              .in("loan_number", chunk),
+          "loan_number",
+        );
+        for (const r of rows as CommissionRow[]) commissionByLoan.set(r.loan_number, r);
+      }
+    } catch (e) {
+      commissionAvailable = false;
+      console.error("[loan-detail] comp.loan_commission no disponible:", e);
+    }
+
     // ── Aggregate by loan and concept ───────────────────────────────────────
     // By concept, never by row. There are genuine reversal pairs in the data —
     // one loan carries Processing Income +1,736.17 and -1,736.17, another Fee
@@ -231,6 +318,7 @@ export async function GET(req: NextRequest) {
     const rows: LoanDetailRow[] = loans.map((l) => {
       const a = agg.get(l.loan_number) ?? { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
       const amount = money(l.loan_amount);
+      const com = commissionByLoan.get(l.loan_number);
 
       // Revenue is the whole story here: NET_GROUPS holds one group, so the
       // net is its total. costs stays at zero for the shape of the payload.
@@ -308,6 +396,13 @@ export async function GET(req: NextRequest) {
         revenue, costs, net,
         net_bps: bps(net, amount),
         no_margin: noMargin,
+
+        // Null sin fila, y 0 sólo cuando la fila dice 0. Ver el comentario del
+        // tipo: las dos cosas significan lo contrario y no pueden verse igual.
+        lo_commission: com ? money(com.lo_pay) : null,
+        lo_commission_bps: com && com.lo_effective_bps != null ? Number(com.lo_effective_bps) : null,
+        lo_commission_name: com?.lo_name ?? null,
+        net_after_commission: com ? revenue - money(com.lo_pay) : null,
       };
     });
 
@@ -347,6 +442,35 @@ export async function GET(req: NextRequest) {
       costs: summaryCosts,
       net: summaryNet,
       net_bps: bps(summaryNet, summaryVolume),
+
+      /**
+       * ─── LA COMISIÓN DEL MES, Y SOBRE CUÁNTOS PRÉSTAMOS ───────────────────
+       *
+       * Los dos números viajan juntos porque el total solo:
+       * no significa nada sin saber de cuántos préstamos sale. Medido sobre los
+       * 388 banked del P&L, 270 tienen fila en Compensafe.
+       *
+       * ⚠ Y ESO SE PARTE EN DOS CASOS QUE NO SE PARECEN. Compensafe empieza en
+       * enero de 2026:
+       *
+       *   2025 sep-dic   113 préstamos, CERO con comisión
+       *   2026 ene-jul   275 préstamos, 270 con comisión (faltan 5)
+       *
+       * Un periodo entero sin cobertura es un hecho sobre el periodo, y hay que
+       * decirlo una vez en la cabecera; un préstamo suelto sin fila es un hueco
+       * de ese préstamo y se dice en su fila. Con las mismas palabras para los
+       * dos, octubre de 2025 son 31 guiones seguidos que parecen una columna
+       * rota -- el caso de julio y `loan_program` otra vez.
+       */
+      commission_total: rows.reduce((s, r) => s + (r.lo_commission ?? 0), 0),
+      commission_loans: rows.filter((r) => r.lo_commission !== null).length,
+      /** El periodo entero no tiene una sola fila de comisión. */
+      commission_missing_period: rows.length > 0 && rows.every((r) => r.lo_commission === null),
+      /** La consulta a `comp` falló: no es lo mismo que "no hay datos". */
+      commission_unavailable: !commissionAvailable,
+      /** Neto del mes tras comisión, sobre el revenue ya filtrado. */
+      net_after_commission:
+        summaryRevenue - rows.reduce((s, r) => s + (r.lo_commission ?? 0), 0),
     };
 
     // ── Margin in these books that is not on one of this card's loans ───────

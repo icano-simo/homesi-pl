@@ -39,6 +39,12 @@ interface LoanRow {
   no_margin: boolean;
   /** Every margin account, and only margin. See margin_net in the endpoint. */
   margin_net: number;
+  /** lo_pay de Compensafe. Null = sin fila; 0 = la fila dice 0. */
+  lo_commission: number | null;
+  lo_commission_bps: number | null;
+  lo_commission_name: string | null;
+  /** revenue − comisión, sobre el revenue YA FILTRADO por sucursal. */
+  net_after_commission: number | null;
 }
 
 interface Summary {
@@ -52,6 +58,14 @@ interface Summary {
   costs: number;
   net: number;
   net_bps: number | null;
+  commission_total: number;
+  /** De cuántos préstamos sale el total. Sin esto el total no dice nada. */
+  commission_loans: number;
+  /** Ni un solo préstamo del periodo tiene comisión: Compensafe no lo cubre. */
+  commission_missing_period: boolean;
+  /** La consulta falló. Distinto de "no hay datos". */
+  commission_unavailable: boolean;
+  net_after_commission: number;
 }
 
 interface DetailData {
@@ -213,12 +227,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
     for (const l of inScope) for (const [k, v] of Object.entries(l.concepts)) concepts[k] = (concepts[k] ?? 0) + v;
     const net = inScope.reduce((s, l) => s + l.net, 0);
     const marginNet = inScope.reduce((s, l) => s + l.margin_net, 0);
+    // Sólo lo que tiene fila. Los null no suman cero: no suman.
+    const conComision = inScope.filter((l) => l.lo_commission !== null);
     return {
       loan_count: inScope.length,
       without_margin: inScope.filter((l) => l.no_margin).length,
       volume, concepts, net, marginNet,
       net_bps:    volume ? (net / volume) * 10000 : null,
       margin_bps: volume ? (marginNet / volume) * 10000 : null,
+      commission: conComision.reduce((s, l) => s + (l.lo_commission ?? 0), 0),
+      commission_loans: conComision.length,
     };
   }, [inScope]);
 
@@ -269,6 +287,26 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                 bps divide by <span className="font-semibold text-[#001A40]">each loan&apos;s own amount</span>,
                 not the monthly loan volume used in the P&amp;L grid.
               </p>
+              {/* Dicho aquí, junto a "Banked loans only" y no en un tooltip,
+                  porque cambia cómo se lee cada fila de la tabla.
+
+                  El revenue está acotado a las sucursales filtradas; la
+                  comisión no puede estarlo -- es una fila por préstamo y no
+                  tiene sucursal contable. Así que la resta enfrenta el revenue
+                  de ESTA sucursal contra la comisión entera, y sale negativa en
+                  préstamos que no pierden dinero: su margen está contabilizado
+                  en la 700. Medido: 8 negativos sin filtro, 83 restringiendo
+                  cada préstamo a su propia sucursal. */}
+              {branchFilter.length > 0 && (
+                <p className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900">
+                  <span className="font-semibold">La comisión no está filtrada por sucursal.</span>{" "}
+                  El revenue de abajo sólo cuenta {branchFilter.length === 1 ? `la ${branchFilter[0]}` : `las ${branchFilter.length} sucursales filtradas`},
+                  pero la comisión del LO es entera. Un{" "}
+                  <span className="font-semibold">Revenue − LO commission</span> negativo aquí suele
+                  significar que el margen del préstamo está contabilizado en otra sucursal, no que el
+                  préstamo pierda dinero.
+                </p>
+              )}
             </div>
             <button onClick={onClose} aria-label="Close"
               className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
@@ -304,6 +342,25 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                 all 48 of its banked loans have nothing to show. Every other
                 period carries it on 100% of loans. Said here rather than left
                 for the reader to infer from a column of "—". */}
+            {/* Un periodo entero sin comisiones NO es lo mismo que un préstamo
+                sin fila, y con las mismas palabras se leen igual: octubre de
+                2025 son 31 guiones seguidos, que parecen una columna rota.
+                Compensafe empieza en enero de 2026 -- 113 préstamos de 2025 sin
+                una sola fila, 270 de 275 en 2026. */}
+            {data?.summary.commission_missing_period && !data.summary.commission_unavailable && (
+              <span title="Compensafe arranca en enero de 2026. Los préstamos anteriores no tienen comisión registrada en el origen."
+                    className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                Sin datos de comisión en este periodo
+              </span>
+            )}
+            {/* Distinto de lo anterior: aquí el dato puede existir y no se pudo
+                leer. Decir "no hay comisiones" sería falso. */}
+            {data?.summary.commission_unavailable && (
+              <span title="No se pudo consultar comp.loan_commission. El resto del P&L no depende de esa consulta."
+                    className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
+                Comisiones no disponibles
+              </span>
+            )}
             {noProgramAtAll && (
               <span title="The source file for this period has no loan program column. Every other period carries it on every loan."
                     className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
@@ -354,6 +411,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   <Th className="text-right bg-[#A6DEFF]/20">Margin bps</Th>
                   <Th className="text-right">Revenue net</Th>
                   <Th className="text-right">Revenue bps</Th>
+                  {/* Tercer neto de la misma tabla, y por eso la franja propia
+                      y el nombre largo. Margin net y Revenue net ya se
+                      confundieron cuando quedaron al 3% uno del otro; un
+                      "Net" suelto al lado de aquellos dos no diría de cuál
+                      sale. Este dice su resta entera. */}
+                  <Th className="text-right bg-amber-50 text-amber-900">LO commission</Th>
+                  <Th className="text-right bg-amber-50 text-amber-900">LO bps</Th>
+                  <Th className="text-right bg-amber-50 text-amber-900 whitespace-nowrap">
+                    Revenue − LO commission
+                  </Th>
                 </tr>
               </thead>
               <tbody>
@@ -377,6 +444,30 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                     </Td>
                     <Amount v={l.net} amount={l.loan_amount} bold />
                     <Td className={`text-right font-mono tabular-nums font-bold ${num(l.net)}`}>{fmtBps(l.net_bps)}</Td>
+                    {/* Un guion, nunca un cero: sin fila en Compensafe no se
+                        sabe qué se pagó, y 0,00 afirmaría que nada. Cuando la
+                        fila existe y dice 0, sí se imprime 0,00 -- eso es el
+                        dato. */}
+                    {l.lo_commission === null ? (
+                      <>
+                        <Td className="text-right text-slate-300" title="Sin dato de comisión para este préstamo">—</Td>
+                        <Td className="text-right text-slate-300">—</Td>
+                        <Td className="text-right text-slate-300">—</Td>
+                      </>
+                    ) : (
+                      <>
+                        <Td className={`text-right font-mono tabular-nums ${num(-l.lo_commission)}`}
+                            title={l.lo_commission_name ?? undefined}>
+                          {fmt(l.lo_commission)}
+                        </Td>
+                        <Td className="text-right font-mono tabular-nums text-slate-600">
+                          {fmtBps(l.lo_commission_bps)}
+                        </Td>
+                        <Td className={`text-right font-mono tabular-nums font-bold ${num(l.net_after_commission ?? 0)}`}>
+                          {fmt(l.net_after_commission ?? 0)}
+                        </Td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -407,6 +498,18 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   <Amount v={totals.net} amount={totals.volume} bold />
                   <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net)}`}>
                     {fmtBps(totals.net_bps)}
+                  </Td>
+                  <Td className={`text-right font-mono font-bold tabular-nums ${num(-totals.commission)}`}>
+                    {fmt(totals.commission)}
+                  </Td>
+                  {/* Cuántos préstamos hay detrás del total, no unos bps: un
+                      total de comisión sin saber sobre cuántos sale no dice
+                      nada, y en 2025 sale sobre cero. */}
+                  <Td className="text-right font-mono text-[10px] font-normal text-slate-500">
+                    {totals.commission_loans}/{totals.loan_count}
+                  </Td>
+                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net - totals.commission)}`}>
+                    {fmt(totals.net - totals.commission)}
                   </Td>
                 </tr>
               </tfoot>
@@ -549,10 +652,42 @@ function MiniPL({ l }: { l: LoanRow }) {
 
         <div className="px-3 pt-2">
           <Block title="Total revenue" total={l.revenue} amount={l.loan_amount} lines={l.lines} loan={l} />
+
+          {/* La comisión va debajo del revenue y en su propia banda: es lo que
+              se le paga a una persona, no un concepto de ingreso, y mezclarla
+              entre las líneas la haría sumar donde resta. */}
+          <div className="my-1.5 flex items-center justify-between rounded-lg border border-amber-200/60 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900">
+            <span className="uppercase tracking-wide">LO commission</span>
+            {l.lo_commission === null ? (
+              <span className="text-[10px] font-semibold normal-case italic text-amber-700">
+                sin dato de comisión
+              </span>
+            ) : (
+              <span className="font-mono tabular-nums">
+                {fmt(l.lo_commission)}
+                <span className="ml-1 font-normal opacity-70">{fmtBps(l.lo_commission_bps)} bps</span>
+              </span>
+            )}
+          </div>
+          {l.lo_commission !== null && l.lo_commission_name && (
+            <p className="px-3 pb-1 text-[11px] text-slate-600">{l.lo_commission_name}</p>
+          )}
         </div>
       </div>
 
-      <NetBanner net={l.net} netBps={l.net_bps} />
+      {/* Con comisión, el banner pasa a ser el neto DESPUÉS de pagarla -- que es
+          la pregunta del módulo. Sin comisión se queda en el de revenue: un
+          banner que dijera "tras comisión" sobre un préstamo cuya comisión no
+          se conoce estaría afirmando que la comisión fue cero. */}
+      {l.lo_commission === null ? (
+        <NetBanner net={l.net} netBps={l.net_bps} />
+      ) : (
+        <NetBanner
+          net={l.net_after_commission ?? 0}
+          netBps={l.loan_amount ? ((l.net_after_commission ?? 0) / l.loan_amount) * 10000 : null}
+          label="Revenue − LO commission"
+        />
+      )}
     </div>
   );
 }
@@ -647,9 +782,28 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
         </div>
         <div className="px-3 pt-2">
           <Block title="Total revenue" total={s.revenue} amount={s.volume} lines={s.lines} />
+
+          <div className="my-1.5 flex items-center justify-between rounded-lg border border-amber-200/60 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900">
+            <span className="uppercase tracking-wide">LO commission</span>
+            <span className="font-mono tabular-nums">{fmt(s.commission_total)}</span>
+          </div>
+          {/* El total solo no dice nada sin saber sobre cuántos préstamos sale.
+              En un mes de 2025 sale sobre cero, y sin esta línea ese 0,00
+              parecería que no se pagó comisión. */}
+          <p className="px-3 pb-1 text-[11px] text-slate-500">
+            {s.commission_loans} de {s.loan_count} préstamo{s.loan_count === 1 ? "" : "s"} con dato de comisión
+          </p>
         </div>
       </div>
-      <NetBanner net={s.net} netBps={s.net_bps} />
+      {s.commission_loans === 0 ? (
+        <NetBanner net={s.net} netBps={s.net_bps} />
+      ) : (
+        <NetBanner
+          net={s.net_after_commission}
+          netBps={s.volume ? (s.net_after_commission / s.volume) * 10000 : null}
+          label="Revenue − LO commission"
+        />
+      )}
     </div>
   );
 }
@@ -660,7 +814,12 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
  * negative result is the one thing in this window that should be impossible to
  * scroll past.
  */
-function NetBanner({ net, netBps }: { net: number; netBps: number | null }) {
+function NetBanner({ net, netBps, label }: {
+  net: number;
+  netBps: number | null;
+  /** Qué neto es. Por defecto el de revenue, que es el que había. */
+  label?: string;
+}) {
   const loss = net < 0;
   return (
     <div
@@ -670,8 +829,11 @@ function NetBanner({ net, netBps }: { net: number; netBps: number | null }) {
     >
       {/* "NET MARGIN" was the wrong name for it: this is every revenue concept
           netted, not the DM+RM margin the table now shows in its own column.
-          With both on screen the two names have to be different. */}
-      <span>REVENUE NET</span>
+          With both on screen the two names have to be different.
+
+          Y ahora hay un tercero -- el neto tras comisión -- así que el banner
+          dice cuál está mostrando en vez de dar por supuesto que sólo hay uno. */}
+      <span className="uppercase">{label ?? "Revenue net"}</span>
       <span>
         <span className={`font-mono font-bold tabular-nums ${loss ? "text-rose-700" : "text-emerald-300"}`}>
           {fmt(net)}
