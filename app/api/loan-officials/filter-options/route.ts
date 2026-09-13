@@ -10,11 +10,11 @@ export async function GET() {
   // dropdown because the fetch stopped at 1000 rows looks exactly like a filter
   // that does not work.
   const PAGE = 1000;
-  const data: Array<{ month: string | null; year: number | null; branch: string | null }> = [];
+  const data: Array<{ month: string | null; year: number | null }> = [];
   for (let from = 0; ; from += PAGE) {
     const { data: rows, error } = await supabase
       .from("loan_officials")
-      .select("month,year,branch")
+      .select("month,year")
       .order("year")
       .order("month")
       .range(from, from + PAGE - 1);
@@ -26,7 +26,9 @@ export async function GET() {
 
   const months = [...new Set((data ?? []).map((r: { month: string | null }) => r.month).filter(Boolean))] as string[];
   const years = [...new Set((data ?? []).map((r: { year: number | null }) => r.year).filter((y) => y != null))] as number[];
-  const branches = [...new Set((data ?? []).map((r: { branch: string | null }) => r.branch).filter(Boolean))].sort() as string[];
 
-  return NextResponse.json({ months, years, branches });
+  // Ya no devuelve branches: su unico consumidor era el desplegable Branch de la
+  // barra de Loan Validation, que se fue con la pestaña B2B. Devolverlo sin que
+  // nadie lo lea es traer una columna mas de 436 filas para tirarla.
+  return NextResponse.json({ months, years });
 }

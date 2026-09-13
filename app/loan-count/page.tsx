@@ -176,7 +176,9 @@ export default function LoanCountPage() {
   const [loading, setLoading] = useState(true);
   const [allMonths, setAllMonths] = useState<string[]>([]);
   const [allYears, setAllYears] = useState<number[]>([]);
-  const [allBranches, setAllBranches] = useState<string[]>([]);
+  // Sin allBranches: la unica pantalla que lo consumia era el desplegable Branch
+  // de la barra de Loan Validation, que servia a B2B. All Loans arma sus propias
+  // opciones de sucursal desde el conjunto completo de filas, en su panel.
   const [selMonths, setSelMonths] = useState<string[]>([]);
   const [selYears, setSelYears] = useState<string[]>([]);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
@@ -208,10 +210,9 @@ export default function LoanCountPage() {
   useEffect(() => {
     fetch("/api/loan-officials/filter-options")
       .then((r) => r.json())
-      .then((d: { months: string[]; years: number[]; branches: string[] }) => {
+      .then((d: { months: string[]; years: number[] }) => {
         setAllMonths(d.months ?? []);
         setAllYears(d.years ?? []);
-        setAllBranches(d.branches ?? []);
       })
       .catch(console.error);
   }, []);
@@ -511,11 +512,9 @@ export default function LoanCountPage() {
       {/* Loan Validation tab */}
       {mainTab === "validation" && (
         <div className="flex-1 min-h-0 overflow-auto">
-          <LoanValidationTab
-            allMonths={allMonths}
-            allYears={allYears}
-            allBranches={allBranches}
-          />
+          {/* Sin props: la pantalla carga todos los periodos y arma sus propias
+              opciones de filtro del conjunto completo. */}
+          <LoanValidationTab />
         </div>
       )}
 
