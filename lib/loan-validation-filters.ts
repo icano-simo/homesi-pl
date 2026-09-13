@@ -67,6 +67,24 @@ export const EMPTY_FILTERS: LoanValidationFilters = {
   branchMargin: EMPTY_RANGE, loCommission: EMPTY_RANGE,
 };
 
+/**
+ * Con que filtros se entra: el año EN CURSO, calculado de la fecha de hoy.
+ *
+ * No una constante -- caduca el 1 de enero, que es el "diciembre" fijo de
+ * /start otra vez -- ni "el ultimo año con datos", que en enero deja la
+ * pantalla mirando al año pasado justo cuando mas importa ver que el nuevo
+ * empezo vacio.
+ *
+ * ⚠ ES UN FILTRO DE CLIENTE, no del endpoint. El endpoint carga TODOS los
+ * periodos a proposito: si cargara solo el año elegido, las opciones de cada
+ * desplegable saldrian de un conjunto ya recortado y el desplegable de año solo
+ * se ofreceria a si mismo. Eso es exactamente el encierro que paso al empezar,
+ * y la razon de que las opciones vengan del conjunto completo.
+ */
+export function initialFilters(now: Date = new Date()): LoanValidationFilters {
+  return { ...EMPTY_FILTERS, year: [String(now.getFullYear())] };
+}
+
 /** El texto de una columna de texto, con el vacio normalizado a NO_VALUE. */
 const val = (v: string | number | null | undefined): string => {
   const s = v == null ? "" : String(v).trim();

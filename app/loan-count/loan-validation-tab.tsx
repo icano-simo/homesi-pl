@@ -11,6 +11,7 @@ import {
   buildFacetOptions,
   clearOne,
   EMPTY_FILTERS,
+  initialFilters,
   NO_VALUE,
   rowMatches,
   type LoanValidationFilters,
@@ -988,17 +989,14 @@ function RangeFacet({ label, k, f, set }: {
 
 // ─── All Loans section ────────────────────────────────────────────────────────
 
-function AllLoansSection({
-  months,
-  years,
-  branches,
-  filterLoanNumber,
-}: {
-  months: string[];
-  years: string[];
-  branches: string[];
-  filterLoanNumber: string;
-}) {
+/**
+ * All Loans carga TODOS los periodos y sucursales, y filtra en el cliente.
+ *
+ * Por eso ya no recibe months/years/branches: pasarselos al endpoint es lo que
+ * recortaba el conjunto del que salen las opciones de los desplegables, y lo
+ * que dejaba 123 prestamos de 2025 inalcanzables.
+ */
+function AllLoansSection({ filterLoanNumber }: { filterLoanNumber: string }) {
   const [data, setData] = useState<ValidationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1014,17 +1012,33 @@ function AllLoansSection({
    * como chips. Se eligio esto frente al embudo por cabecera, que es mas
    * elegante y esconde justo el estado que importa.
    */
-  const [filters, setFilters] = useState<LoanValidationFilters>(EMPTY_FILTERS);
+  const [filters, setFilters] = useState<LoanValidationFilters>(() => initialFilters());
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
+      /*
+       * ⚠ SIN month, year NI branch: se cargan TODOS los periodos y todas las
+       * sucursales, y filtra el panel.
+       *
+       * Se pasaban, y de ahi salio un fallo que cuesta ver: las opciones de
+       * cada desplegable se derivan de las filas cargadas, asi que con el año
+       * en curso preseleccionado el endpoint devolvia solo 2026 -- y entonces
+       * el desplegable de AÑO solo se ofrecia a si mismo. Habia 123 prestamos
+       * de 2025 invisibles y sin forma de llegar a ellos, porque para verlos
+       * habia que elegir un año que la lista ya no contenia.
+       *
+       * Es la regla que ya habiamos acordado --opciones del conjunto completo y
+       * no de lo filtrado-- rota por debajo: se cumplia dentro de lo cargado, y
+       * lo cargado ya venia recortado.
+       *
+       * Cargar todo cuesta poco: 436 prestamos y unas 1.500 filas de margen.
+       * Y deja un solo sitio donde se filtra, que es lo que hace que no pueda
+       * volver a pasar.
+       */
       const p = new URLSearchParams({ type: "all_loans" });
-      months.forEach((m) => p.append("month", m));
-      years.forEach((y) => p.append("year", y));
-      branches.forEach((b) => p.append("branch", b));
       const res = await fetch(`/api/loan-validation?${p}`);
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
@@ -1032,7 +1046,9 @@ function AllLoansSection({
     } finally {
       setLoading(false);
     }
-  }, [months, years, branches]);
+    // Sin dependencias: la peticion no lleva filtros, asi que se hace UNA vez.
+    // Antes se repetia con cada cambio de mes, año o sucursal.
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1066,6 +1082,19 @@ function AllLoansSection({
   }, [data, filterLoanNumber, filters]);
 
   const chips = useMemo(() => activeChips(filters), [filters]);
+
+  /**
+   * Un año elegido del que no hay ni una fila cargada.
+   *
+   * Se dice, no se corrige: caer en silencio a otro año enseñaria cifras
+   * correctas de un periodo que nadie pidio. El 1 de enero el filtro vendra
+   * marcado con el año nuevo y esto sera lo unico que explique una tabla vacia.
+   */
+  const yearsLoaded = useMemo(
+    () => new Set((data?.rows ?? []).map((r) => String(r.year ?? ""))),
+    [data],
+  );
+  const yearsWithoutData = filters.year.filter((y) => y !== NO_VALUE && !yearsLoaded.has(y));
 
   const matchedRows = filteredRows.filter((r) => r.status === "match");
   const loanCount = filteredRows.length;
@@ -1182,8 +1211,19 @@ function AllLoansSection({
               </button>
             </span>
           ))}
+          {yearsWithoutData.length > 0 && (
+            <span
+              title="No loans are loaded for this year. The filter stays on it on purpose: silently falling back to another year would show correct figures for a period nobody asked for."
+              className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800"
+            >
+              No data for {yearsWithoutData.join(", ")}
+            </span>
+          )}
           {chips.length > 0 && (
-            <button onClick={() => setFilters(EMPTY_FILTERS)}
+            // Clear all devuelve el año en curso, no lo vacia: "todos los años"
+            // no es el estado con el que se entra ni el que se quiere al
+            // limpiar.
+            <button onClick={() => setFilters(initialFilters())}
                     className="text-xs text-gray-400 underline hover:text-gray-600">
               Clear all
             </button>
@@ -1337,9 +1377,17 @@ export function LoanValidationTab({
       {/* Filter bar */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs text-gray-500 font-medium">Filter:</span>
-        <ReportFilter label="Month"  options={allMonths}   selected={selMonths}   onChange={setSelMonths} />
-        <ReportFilter label="Year"   options={yearOptions} selected={selYears}    onChange={setSelYears} />
-        <ReportFilter label="Branch" options={allBranches} selected={selBranches} onChange={setSelBranches} />
+        {/* Solo en B2B. En All Loans estos tres viven en el panel de Filters,
+            junto a los otros once: dos controles para lo mismo, uno de los
+            cuales no puede ofrecer todas las opciones, es de donde salio el
+            fallo del año. */}
+        {activeType === "b2b" && (
+          <>
+            <ReportFilter label="Month"  options={allMonths}   selected={selMonths}   onChange={setSelMonths} />
+            <ReportFilter label="Year"   options={yearOptions} selected={selYears}    onChange={setSelYears} />
+            <ReportFilter label="Branch" options={allBranches} selected={selBranches} onChange={setSelBranches} />
+          </>
+        )}
         <input
           type="text"
           value={filterLoanNumber}
@@ -1399,9 +1447,6 @@ export function LoanValidationTab({
       {/* Active section */}
       {activeType === "all_loans" ? (
         <AllLoansSection
-          months={selMonths}
-          years={selYears}
-          branches={loanBranches}
           filterLoanNumber={filterLoanNumber}
         />
       ) : (
