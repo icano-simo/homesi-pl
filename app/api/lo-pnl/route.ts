@@ -277,14 +277,39 @@ export interface OfficerBlock {
   truncatedRows: number;
 
   // ── Total ──
+  /** block1Net + block2Total. La comision NO entra: ver la nota de block1Net. */
   total: number;
   /**
-   * Esta persona tiene comision en Compensafe Y nomina en 60105 Loan Officer
-   * Payroll. Las dos son fuentes distintas y no se pudo establecer si la
-   * segunda incluye a la primera, asi que el total PODRIA estar contando parte
-   * dos veces. Se marca en vez de decidirlo.
+   * Cobra en 60105 Loan Officer Payroll.
+   *
+   * Cuando es true, la comision de esta persona ya viaja dentro del bloque 2 y
+   * por eso no se resta aparte. `block1Commission` se enseña igualmente, como
+   * referencia de cuanto de ese pago fue por prestamos.
    */
-  commissionMayOverlapPayroll: boolean;
+  commissionInPayroll: boolean;
+  /**
+   * ⚠ TIENE COMISION Y NO TIENE NI UNA FILA EN 60105.
+   *
+   * Entonces ese pago NO esta en el P&L por esa via, y el bloque 2 se queda
+   * corto: el total sale MEJOR que la realidad, que es el error que este modulo
+   * no se puede permitir. No se corrige inventando un apunte -- se dice.
+   *
+   * ⚠ Y NO ES UN CASO RARO. Medido el 2026-09-14: de las 28 personas con
+   * comision, DIEZ no tienen ni una fila en 60105, y suman 468.184,75 -- el 47%
+   * de toda la comision del periodo.
+   *
+   *     steve.badovinac    195.774,86      silvio.arteaga    16.013,58
+   *     ana.pena           152.882,21      c.velasco          7.732,36
+   *     armando.tejeda      43.622,99      aimmee.buendia     4.000,00
+   *     mariano.claudio     40.273,44      julymar.castro     3.889,32
+   *                                        stephanie.garcia   2.500,00
+   *                                        susan.aguilar      1.495,99
+   *
+   * Steve Badovinac es el caso que lo resume: 195.774,86 de comision y cero en
+   * la nomina del P&L. Su coste real no se ve desde aqui, y el modulo tiene que
+   * decirlo en vez de enseñar un neto que parece bueno.
+   */
+  commissionOutsidePayroll: boolean;
 }
 
 export interface LoPnlResult {
@@ -296,8 +321,14 @@ export interface LoPnlResult {
   /** Sin el espejo de person_name_key la tasa baja de 34/46 a 31/46. */
   nameKeyAvailable: boolean;
   nameKeyNote: string | null;
-  /** Exposicion medida del posible doble conteo comision/nomina. */
-  commissionOverlapExposure: number;
+  /**
+   * Comision que NO aparece en la nomina del P&L, sumada.
+   *
+   * No es una advertencia generica: es cuanto dinero salio de verdad y este
+   * modulo no puede ver por la via de 60105. Por ese importe, los totales de
+   * esas personas salen mejores que la realidad.
+   */
+  commissionOutsidePayrollTotal: number;
 }
 
 // ─── Paginacion ───────────────────────────────────────────────────────────────
@@ -515,7 +546,39 @@ export async function GET(req: NextRequest) {
     const block1Other = loans.reduce((s, l) => s + l.other, 0);
     const block1Commission = loans.reduce((s, l) => s + (l.commission ?? 0), 0);
     const loansWithoutCommission = loans.filter((l) => l.commission == null).length;
-    const block1Net = block1Margin + block1Other - block1Commission;
+
+    /*
+     * ⚠ LA COMISION NO SE RESTA AQUI, Y ESTO SE MIDIO ANTES DE DECIDIRLO.
+     *
+     * La comision de Compensafe NO es un pago aparte: es el mismo dinero que
+     * sale por la nomina del P&L. Restarla del bloque 1 Y ADEMAS contar 60105 en
+     * el bloque 2 la contaria dos veces.
+     *
+     * Se intento identificar QUE filas de 60105 son comision, casando por
+     * importe exacto dentro de cada persona. No se puede de forma fiable,
+     * medido el 2026-09-14 sobre las 255 filas de 60105:
+     *
+     *     casan por importe unico    28 filas   153.231,81
+     *     NO casan                  145 filas   346.582,98
+     *     persona sin comision       32
+     *     persona sin resolver       49
+     *
+     * Donde casa, el desfase de fecha es limpio --0, 29 o 30 dias entre pay_date
+     * y journal_post_date, porque Compensafe fecha por cierre y el P&L por fecha
+     * de pago-- pero la cobertura es del 11%. Y los que mas filas tienen fallan
+     * enteros: cristhian.ramirez 0 de 23, jorge.zuzunaga 0 de 22, jose.moreyra
+     * 0 de 17, jose.zamora 0 de 17. Luis Silva casa 3 de 3 y es el caso bonito,
+     * no la regla.
+     *
+     * ASI QUE MANDA EL P&L, que es donde esta el dinero que salio de verdad:
+     * bloque 1 = margen + otros del prestamo, sin tocar la comision. La comision
+     * viaja al lado como cifra informativa, con su etiqueta, para poder mirarla
+     * sin que entre en la cuenta.
+     *
+     * Clasificar el 11% y adivinar el resto habria dado un total que resta mal,
+     * y eso es peor que dos cifras honestas.
+     */
+    const block1Net = block1Margin + block1Other;
 
     const payroll = nominaPorPersona.get(id) ?? [];
     const payrollFragile = nominaFragil.get(id) ?? [];
@@ -526,8 +589,7 @@ export async function GET(req: NextRequest) {
       payroll.length > 0 ? "located" : payrollFragile.length > 0 ? "fragile_only" : "not_located";
 
     const claves = persona?.keys ?? [normalizeName(nombre)];
-    const commissionMayOverlapPayroll =
-      block1Commission !== 0 && claves.some((k) => conNomina60105.has(k));
+    const cobraEn60105 = claves.some((k) => conNomina60105.has(k));
 
     officers.push({
       name: nombre,
@@ -551,7 +613,8 @@ export async function GET(req: NextRequest) {
       // que se SUMA. Restarlo invertiria el signo y daria un neto mejor que el
       // real, que es el unico error que este modulo no puede cometer.
       total: block1Net + block2Total,
-      commissionMayOverlapPayroll,
+      commissionInPayroll: cobraEn60105,
+      commissionOutsidePayroll: block1Commission !== 0 && !cobraEn60105,
     });
   }
 
@@ -587,7 +650,8 @@ export async function GET(req: NextRequest) {
       payrollStatus: "located",
       truncatedRows: [...filas, ...fragil].filter((r) => r.truncated).length,
       total: block2Total,
-      commissionMayOverlapPayroll: false,
+      commissionInPayroll: true,
+      commissionOutsidePayroll: false,
     });
   }
 
@@ -605,9 +669,13 @@ export async function GET(req: NextRequest) {
     })),
   );
 
-  /** Cuanta comision pertenece a gente que tambien cobra en 60105. */
-  const commissionOverlapExposure = officers
-    .filter((o) => o.commissionMayOverlapPayroll)
+  /**
+   * Comision de gente que NO cobra en 60105, o sea la que no esta en el P&L por
+   * esa via. Es el hueco del bloque 2: por ese importe, los totales salen
+   * MEJORES que la realidad.
+   */
+  const commissionOutsidePayrollTotal = officers
+    .filter((o) => o.commissionOutsidePayroll)
     .reduce((s, o) => s + o.block1Commission, 0);
 
   const result: LoPnlResult = {
@@ -620,7 +688,7 @@ export async function GET(req: NextRequest) {
     period: { month, year: year ?? null, all },
     nameKeyAvailable: censo.hasNameKey,
     nameKeyNote: censo.nameKeyNote,
-    commissionOverlapExposure,
+    commissionOutsidePayrollTotal,
   };
 
   return NextResponse.json(result);
