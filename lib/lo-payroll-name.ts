@@ -88,6 +88,41 @@
  * fallo de emparejamiento, es el hallazgo que este modulo existe para enseñar.
  */
 
+/*
+ * ── ⚠ "SIN RESOLVER" NO ES UNA MEDIDA DE CALIDAD ────────────────────────────
+ *
+ * Quien mida cuantas filas del P&L quedan sin persona va a encontrar un numero
+ * enorme y va a creer que el emparejador falla. No falla: LA MAYORIA DE ESAS
+ * FILAS NUNCA FUERON PERSONAS.
+ *
+ * Medido el 2026-09-14 sobre las 13.642 filas de `pl_transactions`:
+ *
+ *     forma                          filas    que es
+ *     ---------------------------------------------------------------------
+ *     sin forma de nombre            8.280    alquiler, publicidad, proveedores,
+ *                                             conceptos de gasto, transferencias
+ *     APELLIDO, NOMBRE               2.191    nomina
+ *     PREFIJO-Nombre Apellido        2.330    formas fragiles
+ *     "... FOR Apellido, Nombre"       540    formas fragiles
+ *     email                            301    su local part ES el person_code
+ *
+ *     sin resolver, en total         9.892    el 73%
+ *     PERO sin forma de nombre       8.280    el 61% del total, y el 84% de
+ *                                             lo "sin resolver"
+ *
+ * De las 5.362 filas que SI tienen forma de nombre, resuelven 3.750 -- el 70%.
+ * Esa es la cifra que mide algo; el 73% de arriba mide sobre todo cuantas
+ * lineas del P&L son de un proveedor.
+ *
+ * ⚠ LA CIFRA QUE IMPORTA NO ES NINGUNA DE LAS DOS, es la del modulo: de los 46
+ * loan officers con cierres, 35 tienen nomina localizada. Y de las 104 grafias
+ * de persona en las cuentas de compensacion, las 41 que no resuelven son TODAS
+ * de gente que no es loan officer -- asistentes, procesadores, operaciones.
+ * Ninguna nomina de loan officer queda sin emparejar.
+ *
+ * Perseguir las 9.892 seria perseguir diez mil filas que nunca fueron personas.
+ */
+
 /** Como queda un nombre despues de normalizarlo: "gian laino chegwin". */
 export type NameKey = string;
 
