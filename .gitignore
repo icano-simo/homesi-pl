@@ -33,3 +33,7 @@ migracion/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Autogenerados por next dev (Next 16.3+); desactivables con agentRules:false en next.config.ts
+AGENTS.md
+CLAUDE.md
