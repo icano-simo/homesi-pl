@@ -457,26 +457,54 @@ export default function LoPnlPage() {
                   </div>
                 )}
 
-                {!data.nameKeyAvailable && (
+                {data.splitByShape.length > 0 && (
                   /*
-                   * ⚠ ESTE AVISO DECIA MENOS DE LO QUE PASA, y se corrigio al ver
-                   * la pantalla con datos reales. Sin el espejo, la peor fila de
-                   * la tabla era "July Castro" con -248.533 y ningun cierre,
-                   * mientras "Julymar Mar Castro" salia aparte con 2 prestamos y
-                   * sin nomina. Son LA MISMA PERSONA partida en dos, y cada
-                   * mitad se lee como un hallazgo distinto y falso.
+                   * ⚠ ESTO ANTES COLGABA DE `!nameKeyAvailable`, Y POR ESO NO SE
+                   * VEIA CUANDO HACIA FALTA. El aviso describia exactamente la
+                   * fila partida, pero su condicion miraba la CAUSA que se
+                   * conocia entonces --que faltara el espejo--. El 2026-09-14,
+                   * con el espejo ya poblado, la tabla seguia enseñando "July
+                   * Castro" con -248.533 y ningun cierre junto a "Julymar Mar
+                   * Castro" con 2 prestamos y sin nomina, y el aviso callado.
                    *
-                   * No es solo "resuelve menos nombres": puede DUPLICAR a alguien
-                   * en la tabla, y eso cambia como se lee toda la pantalla.
+                   * Se partio por otra causa: una entrada suelta sin person_code
+                   * gana por la via `exact` y tapa a la persona real, asi que
+                   * `ends` no llega a probarse. Ver findSplitByShape.
+                   *
+                   * Un aviso ausente NO se lee como "no lo sabemos": se lee como
+                   * "aqui no hay nada raro". Por eso ahora cuelga del SINTOMA, que
+                   * es el mismo se parta por lo que se parta, y nombra las filas
+                   * en vez de describir la forma en abstracto.
                    */
                   <div>
-                    <span className="font-semibold text-amber-700">Name resolution is degraded, and it can split a person in two.</span>{" "}
+                    <span className="font-semibold text-amber-700">Two rows, one person — and the source does not know it.</span>{" "}
+                    {data.splitByShape.map((s) => (
+                      <span key={s.conPrestamos}>
+                        “{s.conPrestamos}” has closings and no payroll, while “{s.conNomina}” has payroll and
+                        no closings. Both names share {s.extremos[0]} … {s.extremos[1]}, so they are almost
+                        certainly the same person, split because their spellings could not be tied together.
+                        Each half reads as a finding that is not real: read the two rows together, not
+                        separately.{" "}
+                      </span>
+                    ))}
+                    Money is never moved to the wrong person, but a person can be counted as two. It is fixed
+                    upstream, not here.
+                  </div>
+                )}
+
+                {!data.nameKeyAvailable && (
+                  /*
+                   * El espejo ausente sigue mereciendo su propio aviso: no solo
+                   * parte filas --eso ya lo dice el de arriba, y mejor, porque las
+                   * nombra-- sino que baja la tasa de acierto de 34 a 31 sobre 46,
+                   * y eso no tiene sintoma visible en ninguna fila.
+                   */
+                  <div>
+                    <span className="font-semibold text-amber-700">Name resolution is degraded.</span>{" "}
                     The mirror of the source’s spelling table is not available
-                    {data.nameKeyNote ? ` (${data.nameKeyNote})` : ""}. When a person’s loan-file name and
-                    payroll name cannot be tied together, they appear as two rows — one with closings and
-                    “no payroll”, one with payroll and “no closings” — and each half reads as a finding that
-                    is not real. Money is never moved to the wrong person, but a person can be counted as two.
-                    Look for that shape before trusting an extreme row.
+                    {data.nameKeyNote ? ` (${data.nameKeyNote})` : ""}, so fewer names resolve than usual and
+                    more people fall to “no payroll” without that being true of them. Treat every extreme row
+                    as unconfirmed until it is back.
                   </div>
                 )}
 

@@ -316,6 +316,48 @@ function mismosExtremos(a: NameKey, b: NameKey): boolean {
  * Las vias se prueban de mas a menos fuerte y SE PARA EN LA PRIMERA QUE DA
  * EXACTAMENTE UNA PERSONA. Que una via mas debil encontrara luego otro candidato
  * no invalida un acierto exacto: son reglas ordenadas, no votos.
+ *
+ *
+ * ── LO SIGUIENTE QUE HAY QUE ARREGLAR AQUI ──────────────────────────────────
+ *
+ * ⚠ UNA SUELTA SIN `person_code` GANA POR `exact` Y TAPA A LA PERSONA REAL.
+ *
+ * Medido el 2026-09-14, ejecutando el modulo:
+ *
+ *     "Julymar Mar Castro" -> clave "julymar mar castro"
+ *        exact -> 1 candidato: (sin code)["julymar mar castro"]
+ *        VEREDICTO: metodo=exact, persona sin codigo
+ *
+ * `org.loan_officer_resolved` aporta esa grafia SIN codigo. `exact` la
+ * encuentra, da candidato unico, y la busqueda para ahi -- `ends` no llega a
+ * probarse nunca, pese a que resolveria bien contra "julymar castro" del
+ * espejo. La suelta no se habia fusionado con `julymar.castro` porque la regla
+ * de fusion exige compartir clave, y "julymar mar castro" no comparte ninguna
+ * con "julymar castro" ni "july castro".
+ *
+ * El resultado en pantalla: "July Castro" con -248.533 y cero cierres, y
+ * "Julymar Mar Castro" aparte con 2 prestamos y sin nomina. La misma persona,
+ * dos filas, y cada mitad se lee como un hallazgo. Lo mismo con Adriana Julieth
+ * Szczech contra `adriana.espinoza`.
+ *
+ * ⚠ PARAR EN LA PRIMERA VIA NO ES EL FALLO -- esa disciplina es la que evita
+ * que una regla laxa pise a una estricta. El fallo es que una persona SIN
+ * codigo puntue igual que una CON codigo: la primera es un nombre que nadie ha
+ * confirmado, la segunda es una identidad del origen.
+ *
+ * LA FORMA DEL ARREGLO: dentro de una misma via, preferir los candidatos con
+ * `personCode` cuando los haya, y caer a las sueltas solo si no hay ninguno.
+ * Sigue siendo "una sola persona o nada" -- si hay dos CON codigo es ambiguo
+ * igual.
+ *
+ * ⚠ Y HAY QUE MEDIRLO ANTES DE CREERLO. Esto cambia a quien resuelve cada via,
+ * asi que la cifra de referencia --34 de 46, cero ambiguos-- tiene que salir
+ * igual o mejor, y los 8 sin nomina de verdad --Heibel, Fowler, Tirio, DiToma,
+ * Ballon, Winter, Edwards, Holmes-- tienen que seguir sin nomina. Si alguno de
+ * esos ocho empieza a resolver, la regla nueva esta inventando.
+ *
+ * Mientras no este, `findSplitByShape` deja la fila partida a la vista en vez
+ * de dejarla pasar por dos hallazgos.
  */
 export function matchDescription(
   parsed: ParsedDescription,
@@ -392,4 +434,88 @@ export function findCollapsedPairs(
   return [...porCodigo.entries()]
     .filter(([, names]) => names.length > 1)
     .map(([personCode, names]) => ({ personCode, names: names.sort() }));
+}
+
+/** Una persona que la tabla esta enseñando como dos filas. */
+export interface SplitByShape {
+  /** La mitad con cierres y sin nomina. */
+  conPrestamos: string;
+  /** La mitad con nomina y sin cierres. */
+  conNomina: string;
+  /** Primer y ultimo token que comparten, que es lo que las delata. */
+  extremos: readonly [string, string];
+}
+
+/**
+ * La misma persona partida en dos filas, detectada POR LA FORMA DEL RESULTADO.
+ *
+ * ⚠ NACE DE UN AVISO QUE NO SE VEIA CUANDO HACIA FALTA. La pantalla ya advertia
+ * de esto, pero condicionado a que `person_name_key` no estuviera disponible.
+ * El 2026-09-14, con el espejo YA poblado --523 grafias, 111 personas-- la tabla
+ * seguia enseñando "July Castro" con -248.533 y ningun cierre junto a "Julymar
+ * Mar Castro" con 2 prestamos y sin nomina. La misma persona, partida, y el
+ * aviso callado porque su condicion miraba la causa que ya se habia arreglado.
+ *
+ * Un aviso ausente no se lee como "no lo sabemos": se lee como "aqui no hay
+ * nada raro". Por eso esto mira el SINTOMA y no la causa -- da igual por que se
+ * partio, la forma es la misma y es lo que el lector tiene delante.
+ *
+ * LA FORMA: alguien con cierres y sin nomina, junto a alguien con nomina y sin
+ * cierres, cuyas claves comparten primer y ultimo token. Ninguna persona real
+ * produce solo una de las dos mitades.
+ *
+ * ⚠ EXIGE CANDIDATO UNICO, igual que `matchDescription`. Con dos mitades
+ * posibles no se afirma ninguna: decir "puede que estas dos sean la misma" y
+ * equivocarse cuesta mas que callar, porque manda a revisar una fila correcta.
+ * Y por eso NO fusiona nada -- solo señala la forma para que quien lea la tabla
+ * sepa que esas dos filas no son dos hallazgos. Unirlas se hace en el origen.
+ *
+ * ⚠ NO SUSTITUYE A `findCollapsedPairs`. Aquella ve pares que el origen ya
+ * resuelve al mismo `person_code`; esta ve los que el origen NO resuelve, que
+ * es justo cuando no hay codigo con el que agrupar. Galo Rizzo sale por la
+ * primera, Julymar Castro solo por esta.
+ */
+/**
+ * ⚠ COMPARA CLAVES, NO NOMBRES MOSTRADOS, y la diferencia no es cosmetica.
+ *
+ * La primera version miraba `name` y no encontro nada: la fila de nomina de
+ * Julymar se muestra como "july castro" --su `displayName` del roster-- y
+ * "july" no comparte primer token con "julymar mar castro". El vinculo vive en
+ * las OTRAS grafias de la persona: `julymar.castro` tiene tambien "julymar
+ * castro", y esa si comparte extremos. Comparar lo que se enseña en vez de lo
+ * que se sabe daba cero hallazgos y parecia que no habia nada que hallar.
+ */
+export function findSplitByShape(
+  officers: readonly {
+    name: string;
+    loanCount: number;
+    payrollLocated: boolean;
+    /** Todas las grafias conocidas de esa fila, ya normalizadas. */
+    keys: readonly NameKey[];
+  }[],
+): SplitByShape[] {
+  const conPrestamos = officers.filter((o) => o.loanCount > 0 && !o.payrollLocated);
+  const conNomina = officers.filter((o) => o.loanCount === 0 && o.payrollLocated);
+
+  const salida: SplitByShape[] = [];
+  for (const a of conPrestamos) {
+    const clavesA = a.keys.filter((k) => tokens(k).length >= 2);
+    if (clavesA.length === 0) continue;
+
+    const hits = conNomina.filter((b) =>
+      b.keys.some((kb) => clavesA.some((ka) => mismosExtremos(kb, ka))),
+    );
+    if (hits.length !== 1) continue;
+
+    // Los extremos que se enseñan son los del par que casa, no los de una clave
+    // cualquiera: son la prueba que se le ofrece al lector.
+    const ka = clavesA.find((k) => hits[0].keys.some((kb) => mismosExtremos(kb, k)))!;
+    const t = tokens(ka);
+    salida.push({
+      conPrestamos: a.name,
+      conNomina: hits[0].name,
+      extremos: [t[0], t[t.length - 1]],
+    });
+  }
+  return salida;
 }

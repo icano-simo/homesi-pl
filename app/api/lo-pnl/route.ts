@@ -4,11 +4,13 @@ import { MARGIN_ALL_GL_LIST } from "@/lib/loan-detail-accounts";
 import { closePeriod } from "@/lib/close-period";
 import {
   findCollapsedPairs,
+  findSplitByShape,
   matchDescription,
   normalizeName,
   parseDescription,
   SHAPES_IN_TOTAL,
   type CollapsedPair,
+  type SplitByShape,
   type DescriptionShape,
   type KnownPerson,
   type MatchMethod,
@@ -320,6 +322,8 @@ export interface LoPnlResult {
   /** Nomina que no se pudo atribuir a nadie. Nunca se reparte ni se oculta. */
   unattributed: { rows: PayrollRow[]; total: number };
   collapsedPairs: CollapsedPair[];
+  /** La misma persona enseñada como dos filas. Ver findSplitByShape. */
+  splitByShape: SplitByShape[];
   period: { month: string | null; year: number | null; all: boolean };
   /** Sin el espejo de person_name_key la tasa baja de 34/46 a 31/46. */
   nameKeyAvailable: boolean;
@@ -710,6 +714,29 @@ export async function GET(req: NextRequest) {
     })),
   );
 
+  /*
+   * La misma persona partida en dos filas, vista por la forma del resultado y
+   * no por la causa. Se calcula sobre `officers` --el resultado ya montado-- a
+   * proposito: es lo que el lector tiene delante, y asi lo detecta se haya
+   * partido por lo que se haya partido.
+   */
+  const splitByShape = findSplitByShape(
+    officers.map((o) => {
+      // Las grafias de la persona, no su nombre mostrado: la mitad con nomina
+      // se enseña con el displayName del roster --"july castro"-- y es
+      // justamente el que NO comparte extremos con el de loan_officials.
+      const persona = o.personCode
+        ? censo.people.find((p) => p.personCode === o.personCode)
+        : undefined;
+      return {
+        name: o.name,
+        loanCount: o.loanCount,
+        payrollLocated: o.payrollStatus === "located",
+        keys: persona?.keys ?? [normalizeName(o.name)],
+      };
+    }),
+  );
+
   /**
    * Comision de gente sin NINGUNA fila de compensacion en el P&L: el hueco real.
    * Medido el 2026-09-14: dos personas, 17.509,57.
@@ -725,6 +752,7 @@ export async function GET(req: NextRequest) {
       total: sinAtribuir.reduce((s, r) => s + r.amount, 0),
     },
     collapsedPairs,
+    splitByShape,
     period: { month, year: year ?? null, all },
     nameKeyAvailable: censo.hasNameKey,
     nameKeyNote: censo.nameKeyNote,
