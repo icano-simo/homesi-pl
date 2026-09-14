@@ -280,34 +280,37 @@ export interface OfficerBlock {
   /** block1Net + block2Total. La comision NO entra: ver la nota de block1Net. */
   total: number;
   /**
-   * Cobra en 60105 Loan Officer Payroll.
+   * Cobra en alguna cuenta de compensacion del P&L.
    *
    * Cuando es true, la comision de esta persona ya viaja dentro del bloque 2 y
    * por eso no se resta aparte. `block1Commission` se enseña igualmente, como
    * referencia de cuanto de ese pago fue por prestamos.
+   *
+   * ⚠ "ALGUNA CUENTA", no 60105. Un branch manager que produce cobra en 60115
+   * Personal Production y un sales manager en 60117, no en la cuenta de loan
+   * officer. Preguntar solo por 60105 los deja a todos fuera.
    */
   commissionInPayroll: boolean;
   /**
-   * ⚠ TIENE COMISION Y NO TIENE NI UNA FILA EN 60105.
+   * ⚠ TIENE COMISION Y NINGUNA FILA EN NINGUNA CUENTA DE COMPENSACION.
    *
-   * Entonces ese pago NO esta en el P&L por esa via, y el bloque 2 se queda
-   * corto: el total sale MEJOR que la realidad, que es el error que este modulo
-   * no se puede permitir. No se corrige inventando un apunte -- se dice.
+   * Entonces ese pago no esta en el P&L, el bloque 2 se queda corto y el total
+   * sale MEJOR que la realidad, que es el error que este modulo no se puede
+   * permitir. No se corrige inventando un apunte -- se dice.
    *
-   * ⚠ Y NO ES UN CASO RARO. Medido el 2026-09-14: de las 28 personas con
-   * comision, DIEZ no tienen ni una fila en 60105, y suman 468.184,75 -- el 47%
-   * de toda la comision del periodo.
+   * MEDIDO el 2026-09-14, y son DOS personas con 17.509,57:
    *
-   *     steve.badovinac    195.774,86      silvio.arteaga    16.013,58
-   *     ana.pena           152.882,21      c.velasco          7.732,36
-   *     armando.tejeda      43.622,99      aimmee.buendia     4.000,00
-   *     mariano.claudio     40.273,44      julymar.castro     3.889,32
-   *                                        stephanie.garcia   2.500,00
-   *                                        susan.aguilar      1.495,99
+   *     silvio.arteaga   16.013,58
+   *     susan.aguilar     1.495,99
    *
-   * Steve Badovinac es el caso que lo resume: 195.774,86 de comision y cero en
-   * la nomina del P&L. Su coste real no se ve desde aqui, y el modulo tiene que
-   * decirlo en vez de enseñar un neto que parece bueno.
+   * Las dos tienen gasto suelto --el asiento de Salesforce-- pero ni sueldo, ni
+   * comision, ni impuestos. Ninguna de las 28 personas con comision se queda sin
+   * NI UNA fila en todo el P&L.
+   *
+   * ⚠ LA PRIMERA MEDICION DIJO DIEZ PERSONAS Y 468.184,75, y era falsa: pregunto
+   * solo por 60105. Ocho de aquellas diez son branch y sales managers que
+   * producen y cobran en su propia cuenta. Se deja escrito porque el numero malo
+   * era alarmante y plausible a la vez, que es la peor combinacion.
    */
   commissionOutsidePayroll: boolean;
 }
@@ -494,12 +497,45 @@ export async function GET(req: NextRequest) {
     porOficial.set(n, [...(porOficial.get(n) ?? []), o]);
   }
 
-  // Quien cobra en 60105 Loan Officer Payroll, para marcar el posible solape.
-  const conNomina60105 = new Set<string>();
+  /*
+   * Quien cobra en ALGUNA cuenta de compensacion.
+   *
+   * ⚠ NO SOLO 60105, y mirar solo esa fue un error que costo una cifra entera.
+   * La primera medicion del hueco pregunto "¿tiene filas en 60105?" y dio DIEZ
+   * personas con 468.184,75 de comision invisible. Era falso: ocho de las diez
+   * son branch managers y sales managers que producen, y cobran en SU cuenta.
+   * Medido el 2026-09-14:
+   *
+   *     steve.badovinac   60115 -156.338,45 · 60304 -20.000 · 60303 -5.000
+   *     ana.pena          60115 -127.949,06 · 60112 -22.526,61 · 60303 -20.000
+   *     julymar.castro    60115 -153.589,32 · 60304 -50.000 · 60112 -25.107,69
+   *     armando.tejeda    60112  -27.890,00 · 60115 -13.310,79
+   *     mariano.claudio   60117  -34.965,96 · 60303 -16.774,02
+   *     c.velasco         60118  -81.040,36
+   *     aimmee.buendia    60118   -6.484,14
+   *     stephanie.garcia  60112   -6.000,00 · 60115 -2.689,28
+   *
+   * El hueco de verdad son DOS personas y 17.509,57 -- ver commissionOutsidePayroll.
+   */
+  const CUENTAS_COMPENSACION = [
+    "60105", // Loan Officer Payroll
+    "60112", // BM Operating Entity - Salary
+    "60115", // BM Operating Entity - Personal Production
+    "60117", // Sales Manager payroll
+    "60118", // LO Assistant payroll
+    "60126", // BM-Regional Entity Payroll
+    "60303", // Guarantee
+    "60304", // Sign-On Bonus
+    "62301", // Vision
+    "62304", // Credit From Employee Payroll Deduct
+    "62305", // Employee Insurance
+    "64100", // Payroll Tax Expense
+  ];
+  const conNomina = new Set<string>();
   for (const t of sinPrestamo) {
-    if (t.gl_code !== "60105") continue;
+    if (!CUENTAS_COMPENSACION.includes((t.gl_code as string) ?? "")) continue;
     const p = parseDescription((t.check_description as string) ?? "");
-    if (p.key) conNomina60105.add(p.key);
+    if (p.key) conNomina.add(p.key);
   }
 
   const officers: OfficerBlock[] = [];
@@ -554,21 +590,26 @@ export async function GET(req: NextRequest) {
      * sale por la nomina del P&L. Restarla del bloque 1 Y ADEMAS contar 60105 en
      * el bloque 2 la contaria dos veces.
      *
-     * Se intento identificar QUE filas de 60105 son comision, casando por
-     * importe exacto dentro de cada persona. No se puede de forma fiable,
-     * medido el 2026-09-14 sobre las 255 filas de 60105:
+     * Se intento identificar QUE filas son comision, casando por importe exacto
+     * dentro de cada persona. No se puede de forma fiable. Medido el 2026-09-14,
+     * cuenta por cuenta, en filas que casan / no casan:
      *
-     *     casan por importe unico    28 filas   153.231,81
-     *     NO casan                  145 filas   346.582,98
-     *     persona sin comision       32
-     *     persona sin resolver       49
+     *     60105    28 / 146      60303     0 / 11
+     *     60112    16 /  69      60304     0 / 19
+     *     60115    17 /  37      60118     0 / 25
+     *     60117     4 /   8      64100     0 / 318
      *
-     * Donde casa, el desfase de fecha es limpio --0, 29 o 30 dias entre pay_date
-     * y journal_post_date, porque Compensafe fecha por cierre y el P&L por fecha
-     * de pago-- pero la cobertura es del 11%. Y los que mas filas tienen fallan
-     * enteros: cristhian.ramirez 0 de 23, jorge.zuzunaga 0 de 22, jose.moreyra
-     * 0 de 17, jose.zamora 0 de 17. Luis Silva casa 3 de 3 y es el caso bonito,
-     * no la regla.
+     * El solape esta en las cuatro cuentas de sueldo y produccion, no solo en
+     * 60105, y no esta en impuestos, seguros ni sign-on bonus. Pero casan 65
+     * filas de unas 700 resolubles.
+     *
+     * Donde casa, el desfase de fecha es limpio --0 dias a fin de mes, 25 a 30 a
+     * mitad de mes, porque Compensafe fecha por cierre y el P&L por fecha de
+     * pago-- y en un caso es casi perfecto: Steve Badovinac casa 10 de sus 11
+     * filas de 60115. Pero los que mas filas tienen fallan ENTEROS:
+     * cristhian.ramirez 0 de 23, jorge.zuzunaga 0 de 22, jose.moreyra 0 de 17,
+     * jose.zamora 0 de 17. Luis Silva casa 3 de 3 y es el caso bonito, no la
+     * regla.
      *
      * ASI QUE MANDA EL P&L, que es donde esta el dinero que salio de verdad:
      * bloque 1 = margen + otros del prestamo, sin tocar la comision. La comision
@@ -589,7 +630,7 @@ export async function GET(req: NextRequest) {
       payroll.length > 0 ? "located" : payrollFragile.length > 0 ? "fragile_only" : "not_located";
 
     const claves = persona?.keys ?? [normalizeName(nombre)];
-    const cobraEn60105 = claves.some((k) => conNomina60105.has(k));
+    const cobraEnNomina = claves.some((k) => conNomina.has(k));
 
     officers.push({
       name: nombre,
@@ -613,8 +654,8 @@ export async function GET(req: NextRequest) {
       // que se SUMA. Restarlo invertiria el signo y daria un neto mejor que el
       // real, que es el unico error que este modulo no puede cometer.
       total: block1Net + block2Total,
-      commissionInPayroll: cobraEn60105,
-      commissionOutsidePayroll: block1Commission !== 0 && !cobraEn60105,
+      commissionInPayroll: cobraEnNomina,
+      commissionOutsidePayroll: block1Commission !== 0 && !cobraEnNomina,
     });
   }
 
@@ -670,9 +711,8 @@ export async function GET(req: NextRequest) {
   );
 
   /**
-   * Comision de gente que NO cobra en 60105, o sea la que no esta en el P&L por
-   * esa via. Es el hueco del bloque 2: por ese importe, los totales salen
-   * MEJORES que la realidad.
+   * Comision de gente sin NINGUNA fila de compensacion en el P&L: el hueco real.
+   * Medido el 2026-09-14: dos personas, 17.509,57.
    */
   const commissionOutsidePayrollTotal = officers
     .filter((o) => o.commissionOutsidePayroll)
