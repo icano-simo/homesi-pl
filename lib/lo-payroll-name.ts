@@ -252,6 +252,33 @@ export type MatchMethod =
    * "Julymar Mar Castro" contra "julymar castro": un nombre intermedio que una
    * fuente escribe y otra no. Medido sobre las 111 personas de dim_person: cero
    * ambiguedades.
+   *
+   * ⚠ MIRA LOS DOS EXTREMOS Y NADA MAS, Y ESE LIMITE ES DELIBERADO. La
+   * tentacion al leer esto es generalizar --"que tolere cualquier token
+   * intermedio"-- y ahi es justo donde se rompe: una heuristica de texto no
+   * distingue un segundo nombre de una particula de apellido.
+   *
+   * El caso que lo decide es Hortencia De Anda. "De Anda" es un apellido
+   * compuesto, no un nombre intermedio: quedarse con los extremos da
+   * "hortencia anda", que no es el apellido de nadie. Aqui no hace daño
+   * --no casa con nadie, la fila cae a "sin localizar" y eso es honesto--
+   * pero enseña que la regla no entiende lo que mira. Con De, Del, La, Van o
+   * Mac el patron reaparece, y en esta plantilla reaparece seguido.
+   *
+   * Por eso los extremos y no el medio: son la unica parte del nombre que
+   * ninguna fuente reordena ni abrevia. Ampliar la regla exigiria saber cual
+   * de los tokens es apellido, y eso no se deduce del texto -- se le pregunta
+   * al origen, que es para lo que existe `hr_centralizado.person_name_key`.
+   * Una grafia que falte se añade alli, no se adivina aqui.
+   *
+   * ⚠ LO DE "CERO AMBIGUEDADES" ES DE ESTA POBLACION, NO UNA GARANTIA DEL
+   * METODO. Medido el 2026-09-14 sobre las 111 personas y las 523 grafias de
+   * `org.person_name_key`: emparejar por primer y ultimo token no funde a
+   * nadie, cero colisiones. Pero eso es una propiedad de 111 personas. Con el
+   * doble de gente, dos "maria ... rodriguez" distintas colisionan y nada
+   * avisa. Si algun dia esta via empieza a dar ambiguos, no es un fallo
+   * nuevo: es esta medicion caducando, y toca rehacerla ANTES de tocar la
+   * regla, no despues.
    */
   | "ends";
 
