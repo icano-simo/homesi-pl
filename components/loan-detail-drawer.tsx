@@ -87,6 +87,26 @@ const num = (v: number) =>
   v === 0 ? "text-slate-300 font-normal" : v < 0 ? "text-rose-600" : "text-[#001A40]";
 
 /**
+ * Que hay dentro de "Other revenue", CUENTA POR CUENTA Y CON SU NUMERO.
+ *
+ * El gl_code y no solo el nombre, porque es lo unico que permite cuadrar esto
+ * contra la contabilidad. Y porque ahi dentro hay cuentas que nadie espera:
+ * 55275 Processing Fees, 55276 Loan Setup y 55277 LPP son del rango 55xxx --
+ * costes-- y viven en `category_6 = 'Revenue'`. Son los "otros costos" que se
+ * veian sin poder senalarlos: -23.005,00 en total.
+ *
+ * Se lee de `lines`, que ya viene desglosado por gl_code, en vez de de
+ * `concepts`, que agrupa por category_7 y perderia justo el numero de cuenta.
+ */
+function otherRevenueDetail(l: LoanRow): string {
+  const rest = l.lines.filter((ln) => !ALL_MARGIN_ACCOUNTS.includes(ln.category_7));
+  if (rest.length === 0) return "No other revenue on this loan";
+  return rest
+    .map((ln) => `${ln.gl_code} ${ln.gl_name}  ${fmt(ln.amount)}`)
+    .join("\n");
+}
+
+/**
  * Item colour, from the effect on the net and nothing else. Same rule in both
  * blocks.
  *
@@ -343,17 +363,36 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   {marginCols.map((c) => (
                     <Th key={c} className={`text-right ${extra.includes(c) ? "bg-amber-50 text-amber-800" : ""}`}>{c}</Th>
                   ))}
-                  {/* Two different nets on one screen, so both say which they
-                      are — and now they must, because they are close. Margin
-                      net is the five margin accounts; Revenue net adds Fee,
-                      Processing and Origination Income. Measured over 2026:
-                      4.057.635,36 against 4.188.428,19. They used to differ by
-                      a factor of five, which made the labels a courtesy; at
-                      3% apart they are the only thing telling them apart. */}
-                  <Th className="text-right bg-[#A6DEFF]/20">Margin net</Th>
+                  {/* ── LA RESTA SE CIERRA DE IZQUIERDA A DERECHA ────────────
+                      Margin + Other revenue = Total revenue, en tres columnas
+                      contiguas.
+
+                      Faltaba la de en medio. Las columnas de margen sumaban una
+                      cosa, "Revenue net" decia otra, y los 338.457,24 de
+                      diferencia --que afectan a 471 de 481 prestamos-- no
+                      tenian columna: habia que creerse el salto. `otherConcepts`
+                      se calculaba desde el principio y no se pintaba en ningun
+                      sitio.
+
+                      Y los nombres estaban al reves de lo util: el numero que
+                      SI coincide con las Mini P&L Cards se llamaba "Revenue
+                      net" aqui y "Total revenue" alli, mientras que los dos que
+                      difieren --margen y total-- compartian la palabra "net".
+                      Ahora el nombre repetido es el del numero repetido. */}
+                  <Th className="text-right bg-[#A6DEFF]/20">
+                    Margin
+                    <span className="block font-normal normal-case text-[9px] text-slate-500">5 margin accounts</span>
+                  </Th>
                   <Th className="text-right bg-[#A6DEFF]/20">Margin bps</Th>
-                  <Th className="text-right">Revenue net</Th>
-                  <Th className="text-right">Revenue bps</Th>
+                  <Th className="text-right">
+                    Other revenue
+                    <span className="block font-normal normal-case text-[9px] text-slate-500">fees, processing, origination</span>
+                  </Th>
+                  <Th className="text-right">
+                    Total revenue
+                    <span className="block font-normal normal-case text-[9px] text-slate-500">margin + other</span>
+                  </Th>
+                  <Th className="text-right">Total bps</Th>
                 </tr>
               </thead>
               <tbody>
@@ -375,6 +414,10 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                     <Td className={`text-right font-mono tabular-nums font-bold ${num(l.margin_net)}`}>
                       {fmtBps(l.loan_amount ? (l.margin_net / l.loan_amount) * 10000 : null)}
                     </Td>
+                    {/* Derivado de la resta, no de una segunda suma: asi no
+                        puede discrepar del total que tiene al lado. */}
+                    <Amount v={l.net - l.margin_net} amount={l.loan_amount}
+                            title={otherRevenueDetail(l)} />
                     <Amount v={l.net} amount={l.loan_amount} bold />
                     <Td className={`text-right font-mono tabular-nums font-bold ${num(l.net)}`}>{fmtBps(l.net_bps)}</Td>
                   </tr>
@@ -404,6 +447,10 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.marginNet)}`}>
                     {fmtBps(totals.margin_bps)}
                   </Td>
+                  {/* La misma resta que en cada fila, para que el pie cierre
+                      igual que la linea de arriba. */}
+                  <Amount v={totals.net - totals.marginNet} amount={totals.volume} bold
+                          title={otherConcepts.length ? `Concepts outside margin: ${otherConcepts.join(", ")}` : undefined} />
                   <Amount v={totals.net} amount={totals.volume} bold />
                   <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net)}`}>
                     {fmtBps(totals.net_bps)}
@@ -668,10 +715,13 @@ function NetBanner({ net, netBps }: { net: number; netBps: number | null }) {
         loss ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"
       }`}
     >
-      {/* "NET MARGIN" was the wrong name for it: this is every revenue concept
-          netted, not the DM+RM margin the table now shows in its own column.
-          With both on screen the two names have to be different. */}
-      <span>REVENUE NET</span>
+      {/* EL MISMO NOMBRE QUE EN TABLE LIST, porque es el MISMO numero.
+          Se llamo "NET MARGIN" --falso, esto es todo el revenue-- y luego
+          "REVENUE NET", que era correcto pero distinto del nombre que la tabla
+          le daba a esta misma cifra. Que el numero que coincide entre las dos
+          vistas se llamara de dos formas, mientras los dos que NO coinciden
+          compartian la palabra "net", es lo que hacia parecer que no cuadraban. */}
+      <span>TOTAL REVENUE</span>
       <span>
         <span className={`font-mono font-bold tabular-nums ${loss ? "text-rose-700" : "text-emerald-300"}`}>
           {fmt(net)}
@@ -737,12 +787,14 @@ function Signal({ label }: { label: string }) {
   );
 }
 
-function Amount({ v, amount, flagged = false, bold = false }: {
+function Amount({ v, amount, flagged = false, bold = false, title }: {
   v: number; amount: number; flagged?: boolean; bold?: boolean;
+  /** Desglose de la celda. El aviso de `flagged` manda si los dos existen. */
+  title?: string;
 }) {
   return (
     <td className={`whitespace-nowrap px-2 py-1.5 text-right ${flagged ? "bg-amber-50" : ""}`}
-        title={flagged ? "This branch does not normally carry this account." : undefined}>
+        title={flagged ? "This branch does not normally carry this account." : title}>
       <span className={`font-mono tabular-nums text-xs ${bold ? "font-bold" : ""} ${num(v)}`}>{fmt(v)}</span>
       {v !== 0 && (
         <span className="ml-1 font-mono text-[10px] font-normal text-slate-400">{fmtBps(bpsOf(v, amount))}</span>

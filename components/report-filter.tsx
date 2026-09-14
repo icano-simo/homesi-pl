@@ -13,12 +13,28 @@ interface ReportFilterProps {
   options: string[];
   selected: string[];
   onChange: (v: string[]) => void;
+  /**
+   * Cuantas filas quedarian con cada opcion, del CONJUNTO COMPLETO.
+   *
+   * Sin esto, una lista larga es una lista de callejones sin salida: 55
+   * programas de los que 50 ya no aplican se ven igual que los 5 que si.
+   * `F30EEP (12)` y `C30 (0)` convierten la lista en informacion.
+   *
+   * ⚠ Del conjunto completo, NO de lo ya filtrado. Si los conteos --y las
+   * opciones-- salieran de lo filtrado, elegir una cosa vaciaria los demas
+   * desplegables y el usuario quedaria encerrado sin poder volver. Es la
+   * decision que ya se tomo en Metrics B2B.
+   */
+  counts?: Record<string, number>;
+  /** Caja de busqueda dentro del panel. Para listas de mas de ~15 valores. */
+  searchable?: boolean;
 }
 
-const PANEL_W = 200;
+const PANEL_W = 230;
 
-export function ReportFilter({ label, options, selected, onChange }: ReportFilterProps) {
+export function ReportFilter({ label, options, selected, onChange, counts, searchable }: ReportFilterProps) {
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -74,6 +90,11 @@ export function ReportFilter({ label, options, selected, onChange }: ReportFilte
     onChange(selected.includes(v) ? selected.filter(x => x !== v) : [...selected, v]);
   }
 
+  /** Lo que se pinta. La busqueda filtra la LISTA, nunca las opciones reales. */
+  const shown = q.trim()
+    ? options.filter((o) => o.toLowerCase().includes(q.trim().toLowerCase()))
+    : options;
+
   const active = selected.length > 0;
 
   return (
@@ -113,21 +134,34 @@ export function ReportFilter({ label, options, selected, onChange }: ReportFilte
             <p className="px-3 py-2 text-xs text-gray-400">No options available</p>
           ) : (
             <>
-              <div className="sticky top-0 flex items-center justify-between border-b border-gray-100 bg-white px-3 py-1.5">
-                <button
-                  onClick={() => onChange(options)}
-                  className="text-xs text-blue-600 hover:underline"
-                >
-                  Select all
-                </button>
-                <button
-                  onClick={() => onChange([])}
-                  className="text-xs text-gray-400 hover:text-gray-600 hover:underline"
-                >
-                  Deselect all
-                </button>
+              <div className="sticky top-0 border-b border-gray-100 bg-white">
+                <div className="flex items-center justify-between px-3 py-1.5">
+                  <button
+                    onClick={() => onChange(options)}
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    onClick={() => onChange([])}
+                    className="text-xs text-gray-400 hover:text-gray-600 hover:underline"
+                  >
+                    Deselect all
+                  </button>
+                </div>
+                {searchable && (
+                  <input
+                    autoFocus
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    placeholder="Search…"
+                    className="mb-1.5 ml-3 w-[calc(100%-1.5rem)] rounded border border-gray-200 px-2 py-1 text-xs placeholder-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-300"
+                  />
+                )}
               </div>
-              {options.map(opt => (
+              {shown.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-gray-400">No match</p>
+              ) : shown.map(opt => (
                 <label key={opt} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50">
                   <input
                     type="checkbox"
@@ -135,7 +169,15 @@ export function ReportFilter({ label, options, selected, onChange }: ReportFilte
                     onChange={() => toggle(opt)}
                     className="h-3.5 w-3.5 shrink-0 rounded border-gray-300 accent-blue-600"
                   />
-                  <span className="truncate text-gray-700">{opt}</span>
+                  <span className="flex-1 truncate text-gray-700">{opt}</span>
+                  {/* Un cero se atenua en vez de esconderse: que una opcion no
+                      tenga filas es informacion, y quitarla de la lista la
+                      volveria a convertir en un callejon invisible. */}
+                  {counts && (
+                    <span className={`shrink-0 font-mono text-[10px] ${counts[opt] ? "text-gray-400" : "text-gray-300"}`}>
+                      {counts[opt] ?? 0}
+                    </span>
+                  )}
                 </label>
               ))}
             </>

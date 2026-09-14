@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
-import { isB2BFeeExempt, resolveLoanBranchAlias } from "@/lib/loan-branch";
-import { MARGIN_RECEIVED_GL_CODES, MARGIN_RECEIVED_GL_LIST } from "@/lib/loan-detail-accounts";
+import { resolveLoanBranchAlias } from "@/lib/loan-branch";
+import {
+  MARGIN_ALL_GL_LIST,
+  MARGIN_BRANCH_GL_CODES,
+  MARGIN_DIVISION_GL_CODES,
+  marginGroupOf,
+} from "@/lib/loan-detail-accounts";
 
 export const dynamic = "force-dynamic";
 
-// On Demand and Processing were retired from the UI; the type keeps only what
-// is reachable.
-type ValType = "b2b" | "all_loans";
+/*
+ * Este endpoint ya no tiene modos.
+ *
+ * Tuvo cuatro --b2b, on_demand, processing, all_loans-- y cada uno se retiro de
+ * la interfaz por separado. El parametro `type` sobrevivio al ultimo de ellos
+ * apuntando a codigo que nadie alcanzaba, con `b2b` de valor por defecto: una
+ * llamada sin parametro habria entrado en la rama muerta.
+ *
+ * Se atiende una sola pregunta: de los prestamos de la lista maestra, cuales
+ * recibieron margen en alguna de las cinco cuentas y cuales no.
+ */
 
 export interface ValidationRow {
   loan_number: string;
@@ -15,19 +28,35 @@ export interface ValidationRow {
   loan_officer: string | null;
   branch: string | null;
   loan_program: string | null;
+  /** Origen del lead. Sin sufijo de fuente: hoy loan_officials, luego Encompass. */
+  lead_source: string | null;
+  /**
+   * De donde sale `lead_source`. La pantalla deriva de aqui su aviso, en vez de
+   * llevar una bandera que alguien tenga que acordarse de quitar.
+   */
+  lead_source_origin: "loan_officials_file" | "encompass";
   /**
    * How the loan came in: "Banked - Retail" or "Brokered".
    *
-   * A constant in the All Loans list, which filters to banked before this is
-   * built, and genuinely varying in B2B — 96 banked against 10 brokered. So the
-   * value travels for both and only B2B offers it as a filter: a filter with
-   * one option is a control that cannot do anything.
+   * Varia en los dos sub-tabs desde que All Loans dejo de filtrar a banked: 388
+   * banked y 48 brokered alli, 96 y 10 en B2B. Antes era constante en All Loans
+   * y por eso aquella pantalla enseñaba un letrero en vez de un desplegable.
+   *
+   * Ese letrero no hay que quitarlo: las opciones se derivan de las filas, asi
+   * que el filtro aparece solo donde hay mas de un canal. La regla se cumple
+   * sola, que era el motivo de derivarlas del dato.
    */
   loan_info_channel: string | null;
   month: string | null;
   year: number | null;
   loan_amount: number | null;
-  /** DM Margin (41309) only — never DM + RM. See rm_total. */
+  /**
+   * La SUMA de las cuatro cuentas que otorgan margen. El numerador de `bps`.
+   *
+   * Antes era DM Margin a secas. NO incluye 41305 LO Margin, que es margen
+   * cedido al loan officer y viaja en `lo_margin_ceded`: sumarlo daria bps
+   * negativos en prestamos que ganaron (710002042266 pasaria de 327,5 a -100,7).
+   */
   accounting_total: number;
   /**
    * The same DM figure, null when there is no DM booking at all.
@@ -48,10 +77,49 @@ export interface ValidationRow {
    * other than what they are labelled.
    */
   rm_total: number | null;
+  /** BM Margin (41306). La que salva 17 de las alertas banked. */
+  bm_total: number | null;
+  /** Brokered Origination Income (41870). La cuenta propia de los brokered. */
+  brokered_total: number | null;
+  /**
+   * LO Margin (41305): margen CEDIDO al loan officer.
+   *
+   * Se muestra y NUNCA se suma con las otras cuatro. 290 de sus 315 filas son
+   * negativas; es una distribucion de lo ganado, no un ingreso.
+   */
+  discount_total: number | null;
+  /** LO Margin (41305): un componente del margen de la sucursal, dentro de
+   *  branch_margin_total. NO es compensacion del loan officer. */
+  lo_margin_total: number | null;
+  /** Lo que cobra el loan officer, de comp.loan_commission. Null = sin fila. */
+  lo_commission: number | null;
+  lo_commission_bps: number | null;
+  /**
+   * Las dos preguntas, por separado.
+   *
+   * `status` es "match" solo cuando las dos son true. Estos dos dicen cual
+   * falla, que es lo que un solo numero escondia: 48 prestamos tienen margen de
+   * division y no de branch, y 47 al reves.
+   */
+  division_received: boolean;
+  branch_received: boolean;
+  /** DM + RM sumados. Null cuando no hay apunte en ninguna de las dos. */
+  division_total: number | null;
+  /** BM + Brokered Origination sumados. */
+  branch_margin_total: number | null;
+  /** bps de DIVISION sobre el importe del prestamo. */
   bps: number | null;
-  status: "match" | "missing" | "exempt";
-  tx_description: string | null;
-  tx_movement: number | null;
+  /** bps de BRANCH. Otra escala: mediana 350 contra 65. Nunca se promedian. */
+  branch_bps: number | null;
+  /*
+   * Sin "exempt". Era el tercer valor y solo lo producia la rama b2b: un
+   * prestamo de la 733 o la 776 sin success fee no era un hallazgo porque esas
+   * sucursales no lo pagan. Fuera la rama, ninguna fila puede salir exenta.
+   *
+   * La regla de negocio NO se pierde: esta escrita en lib/loan-branch.ts, que
+   * es donde hara falta cuando el usuario retome el tema.
+   */
+  status: "match" | "missing";
 }
 
 export interface SurplusRow {
@@ -63,10 +131,6 @@ export interface SurplusRow {
   year: number | null;
   branch: string | null;
   incomplete: boolean;
-  borrower_name: string | null;
-  loan_officer: string | null;
-  loan_amount: number | null;
-  surplus_reason: "loan_exists_not_flagged" | "loan_not_found" | "loan_number_unresolved" | null;
 }
 
 export interface ValidationResult {
@@ -75,8 +139,6 @@ export interface ValidationResult {
   summary: {
     match_count: number;
     missing_count: number;
-    /** Fee absent on a branch that does not pay it. Not a finding. */
-    exempt_count: number;
     surplus_count: number;
   };
 }
@@ -85,7 +147,6 @@ export async function GET(req: NextRequest) {
   const supabase = createServerClient();
   const { searchParams } = new URL(req.url);
 
-  const type = (searchParams.get("type") ?? "b2b") as ValType;
   const months = searchParams.getAll("month");
   const years = searchParams.getAll("year").map(Number).filter((n) => !isNaN(n));
   const branches = searchParams.getAll("branch");
@@ -96,7 +157,7 @@ export async function GET(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let loQuery: any = supabase
     .from("loan_officials")
-    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program, loan_info_channel")
+    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program, lead_source_lo, loan_info_channel")
     .order("loan_number");
 
   if (months.length > 0) loQuery = loQuery.in("month", months);
@@ -115,18 +176,20 @@ export async function GET(req: NextRequest) {
    * loan read as "missing in accounting".
    */
 
-  if (type === "b2b") loQuery = loQuery.eq("b2b", true);
-  // all_loans: no flag filter.
-  //
-  // Brokered loans are dropped from it: they do not earn margin the way banked
-  // loans do, so listing them as "missing in accounting" reports an absence
-  // that was never going to be there. Measured 2026-08-17: 48 brokered of 436.
-  //
-  // Filtered on the prefix, in JS, through the one predicate that owns the
-  // rule — see isBankedChannel. The `= "Banked - Retail"` this replaces agreed
-  // with the loan detail's own test only because a single banked value exists
-  // today; a second one would have entered one screen and not the other.
-  if (type === "all_loans") loQuery = loQuery.like("loan_info_channel", "Banked%");
+  /*
+   * Sin filtro de bandera Y SIN FILTRO DE CANAL.
+   *
+   * Los brokered estuvieron fuera con este motivo escrito: "no ganan margen
+   * como los banked, asi que listarlos como que falta en contabilidad reporta
+   * una ausencia que nunca iba a estar". Era cierto sobre la regla de entonces
+   * -- que solo miraba DM y RM, dos cuentas corporativas -- y dejo de serlo al
+   * ampliarla: un brokered gana por 41870 Brokered Origination Income, su
+   * cuenta propia, y 31 de los 48 la tienen.
+   *
+   * Excluirlos ya no evitaba un falso positivo: escondia 30 prestamos con
+   * margen contabilizado y 18 sin el, que son hallazgos de verdad y nadie
+   * estaba viendo.
+   */
 
   const { data: loanOfficialsAll, error: loError } = await loQuery;
   if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
@@ -144,16 +207,28 @@ export async function GET(req: NextRequest) {
     : (loanOfficialsAll ?? []);
 
   // ── 2. Determine transaction filter strategy ───────────────────────────────
-  // B2B, On Demand, Processing: match by check_description text regardless of GL code.
-  //
-  // all_loans: match by the margin GL codes — DM Margin (41309) OR RM Margin
-  // (41307). It was 41309 alone, which reported 15 loans as missing their
-  // margin when they had received it in RM: 45 alerts of which only 30 were
-  // real. See MARGIN_RECEIVED_GL_CODES for why this is a different definition
-  // of "margin" from the five accounts the Table List net uses, and why the two
-  // must not be unified.
-  const glCodes: readonly string[] | null = type === "all_loans" ? MARGIN_RECEIVED_GL_LIST : null;
-  const descFilter: string | null = type === "b2b" ? "B2B SUCCESS FEE" : null;
+  /*
+   * Las CUATRO cuentas que otorgan margen -- DM (41309), RM (41307),
+   * BM (41306) y Brokered Origination (41870) -- mas la de margen CEDIDO
+   * (41305), que se trae para poder enseñarla y nunca para sumarla.
+   *
+   * Empezo siendo 41309 a secas, luego 41309 y 41307. Cada ampliacion apago
+   * alertas sobre prestamos que si habian recibido margen, solo que en otra
+   * cuenta. Ver MARGIN_GRANTING_GL_CODES: alli esta la prueba de pertenencia
+   * --¿puede ser lo unico que un prestamo tenga?--, por que 41305, 41308 y
+   * 42109 quedan fuera, y por que esta definicion NO es la del neto de Table
+   * List aunque las dos se llamen margen.
+   */
+  const glCodes: readonly string[] = MARGIN_ALL_GL_LIST;
+
+  /*
+   * Sin descFilter. Los modos retirados emparejaban por TEXTO de
+   * check_description --"B2B SUCCESS FEE"-- en vez de por cuenta, porque
+   * aquellos conceptos no tienen cuenta propia. Ver la nota de memoria del
+   * success fee: eso esta bien asi y no se arregla creando una cuenta. Pero ya
+   * no queda modo que empareje por texto, y un filtro que siempre vale null es
+   * una rama que nadie puede tomar.
+   */
 
   // ── 3. Fetch pl_transactions matching the period + branch filter ─────────────
   // Paginate to avoid Supabase's default 1000-row cap.
@@ -163,8 +238,7 @@ export async function GET(req: NextRequest) {
     let q: any = supabase
       .from("pl_transactions")
       .select("loan_number, loan_number_incomplete, check_description, gl_code, movement, month, year, branch");
-    if (glCodes)         q = q.in("gl_code", glCodes as string[]);
-    if (descFilter)      q = q.ilike("check_description", `%${descFilter}%`);
+    q = q.in("gl_code", glCodes as string[]);
     if (months.length  > 0) q = q.in("month",  months);
     if (years.length   > 0) q = q.in("year",   years);
     // No branch filter. A loan's fee is matched by loan_number wherever it was
@@ -185,44 +259,112 @@ export async function GET(req: NextRequest) {
     txOffset += 1000;
   }
 
-  // ── 4. Aggregate transactions by loan_number ────────────────────────────────
-  const txByLoan = new Map<string, number>();
-  /**
-   * RM Margin kept apart, never added to DM.
+  /*
+   * ── 4. Aggregate transactions by loan_number ──────────────────────────────
    *
-   * They are alternative bookings of the same corporate fee, not two components
-   * of one figure, and 27 of the 388 loans carry both. Summed, the "DM Margin"
-   * column would silently stop being DM Margin and its bps would stop being the
-   * fee rate it is read as. So each keeps its own column and the check only asks
-   * whether either exists.
+   * Una entrada por cuenta, nunca una suma prematura. Cada cuenta conserva su
+   * columna porque son bookings ALTERNATIVOS del margen y no componentes de una
+   * cifra: un prestamo puede llevar DM y BM a la vez, y fundirlos haria que la
+   * columna "DM Margin" dejara de ser DM Margin sin avisar.
+   *
+   * Lo unico que se suma es `granted`, y se suma para los bps, que es la unica
+   * pregunta que pide un total.
    */
-  const rmByLoan = new Map<string, number>();
+  const byAccount = new Map<string, Record<string, number>>();
+  /**
+   * El grupo se decide POR LA SUCURSAL DEL APUNTE, no por una lista fija.
+   *
+   * 41870 Brokered Origination esta en los dos grupos: en una sucursal es
+   * margen de esa sucursal, en la 700 es de la division. Sus cuatro filas de la
+   * 700 suman exactamente 0,00 -- un traslado, no un ingreso -- y con una lista
+   * fija por columna habrian entrado en el margen de una sucursal que nunca los
+   * recibio. Ver marginGroupOf.
+   */
+  const groupTotals = new Map<string, { division: number; branch: number; nDiv: number; nBr: number }>();
   for (const tx of (transactions ?? []) as Array<Record<string, unknown>>) {
     const loanNum = (tx.loan_number as string | null)?.trim();
     if (!loanNum || tx.loan_number_incomplete) continue;
-    if (tx.gl_code === MARGIN_RECEIVED_GL_CODES.rm) {
-      rmByLoan.set(loanNum, (rmByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
-    } else {
-      txByLoan.set(loanNum, (txByLoan.get(loanNum) ?? 0) + ((tx.movement as number) ?? 0));
-    }
+    const gl = (tx.gl_code as string | null) ?? "";
+    const v = (tx.movement as number) ?? 0;
+    const a = byAccount.get(loanNum) ?? {};
+    a[gl] = (a[gl] ?? 0) + v;
+    byAccount.set(loanNum, a);
+
+    const grp = marginGroupOf(gl, tx.branch as string | null);
+    if (!grp) continue;
+    const g = groupTotals.get(loanNum) ?? { division: 0, branch: 0, nDiv: 0, nBr: 0 };
+    if (grp === "division") { g.division += v; g.nDiv++; } else { g.branch += v; g.nBr++; }
+    groupTotals.set(loanNum, g);
   }
 
-  // ── 4b. Branch-700 aggregation for B2B description / movement columns ─────────
-  const txB700ByLoan = new Map<string, { movement: number; description: string | null }>();
-  if (type === "b2b") {
-    for (const tx of (transactions ?? []) as Array<Record<string, unknown>>) {
-      const loanNum = (tx.loan_number as string | null)?.trim();
-      if (!loanNum || (tx.loan_number_incomplete as boolean) || (tx.branch as string) !== "700") continue;
-      const existing = txB700ByLoan.get(loanNum);
-      if (existing) {
-        existing.movement += (tx.movement as number) ?? 0;
-      } else {
-        txB700ByLoan.set(loanNum, {
-          movement: (tx.movement as number) ?? 0,
-          description: tx.check_description as string | null,
-        });
-      }
+  /**
+   * Lo contabilizado, EN DOS GRUPOS y nunca en uno.
+   *
+   * Division (DM + RM) es lo que se lleva la division; branch (BM + Brokered
+   * Origination) lo que se queda la sucursal. Cada uno con su existencia y su
+   * suma, porque cada uno puede faltar sin el otro: 48 prestamos tienen solo
+   * division y 47 solo branch. Ver MARGIN_DIVISION_GL_CODES.
+   *
+   * Dentro de cada grupo las cuentas SI se suman -- son bookings alternativos
+   * del mismo cobro. Entre grupos no, jamas: son dos cobros a dos
+   * destinatarios, y sus bps ni siquiera viven en la misma escala (mediana 65
+   * contra 350).
+   */
+  const marginOf = (loanNum: string) => {
+    const a = byAccount.get(loanNum) ?? {};
+    const g = groupTotals.get(loanNum);
+    return {
+      /** Existencia, no importe: un apunte de cero sigue siendo un apunte. */
+      division: { received: (g?.nDiv ?? 0) > 0, total: g?.division ?? 0 },
+      branch: { received: (g?.nBr ?? 0) > 0, total: g?.branch ?? 0 },
+      /** El desglose por cuenta, para el tooltip. No se suma aqui. */
+      dm: a[MARGIN_DIVISION_GL_CODES.dm],
+      rm: a[MARGIN_DIVISION_GL_CODES.rm],
+      bm: a[MARGIN_BRANCH_GL_CODES.bm],
+      discount: a[MARGIN_BRANCH_GL_CODES.discount],
+      loMargin: a[MARGIN_BRANCH_GL_CODES.loMargin],
+      brokered: a[MARGIN_BRANCH_GL_CODES.brokered],
+    };
+  };
+
+  /*
+   * Aqui vivia la agregacion de la sucursal 700, que alimentaba las columnas
+   * Description y Movement de la tabla de B2B. Solo corria con type === "b2b",
+   * asi que sus dos campos --tx_description y tx_movement-- salian siempre en
+   * null para todo lo demas. Se van los tres.
+   */
+
+  /*
+   * ── 4c. Lo que cobra el loan officer ──────────────────────────────────────
+   *
+   * De comp.loan_commission, el espejo de Compensafe. Otro schema, o sea otro
+   * cliente: `db.schema` se fija al construir y no se puede cambiar por
+   * consulta.
+   *
+   * ⚠ NO TIENE NADA QUE VER CON 41305 LO Margin pese al parecido de los
+   * nombres. Aquella es una cuenta contable, un componente del margen de la
+   * sucursal; esta es lo que se le paga a una persona. Que sus totales no se
+   * parezcan no es una discrepancia: son magnitudes de cosas distintas.
+   *
+   * ⚠ Y QUE FALLE NO PUEDE TUMBAR LA PANTALLA. Loan Validation funcionaba sin
+   * Compensafe; si el schema no esta expuesto o el sync no ha corrido, lo
+   * correcto es enseñar la validacion sin comisiones.
+   */
+  const commissionByLoan = new Map<string, { lo_pay: number | null; lo_effective_bps: number | null }>();
+  try {
+    const comp = createServerClient("comp");
+    const { data, error } = await comp
+      .from("loan_commission")
+      .select("loan_number,lo_pay,lo_effective_bps");
+    if (error) throw new Error(error.message);
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      commissionByLoan.set(r.loan_number as string, {
+        lo_pay: r.lo_pay == null ? null : Number(r.lo_pay),
+        lo_effective_bps: r.lo_effective_bps == null ? null : Number(r.lo_effective_bps),
+      });
     }
+  } catch (e) {
+    console.error("[loan-validation] comp.loan_commission no disponible:", e);
   }
 
   /**
@@ -239,23 +381,29 @@ export async function GET(req: NextRequest) {
   );
 
   // ── 5. Build validation rows (one per loan in loan_officials) ───────────────
-  const showBps = type === "all_loans";
   const rows: ValidationRow[] = (loanOfficials ?? []).map((lo: Record<string, unknown>) => {
     const loanNum = lo.loan_number as string;
-    const total = txByLoan.get(loanNum);
-    const rmTotal = rmByLoan.get(loanNum);
-    /**
-     * Margin was received if EITHER account carries it. Existence, not amount:
-     * the two are never compared and never added.
-     */
-    const gotMargin = total !== undefined || rmTotal !== undefined;
-    const accounting_total = total ?? 0;
+    const m = marginOf(loanNum);
+    const com = commissionByLoan.get(loanNum);
     const loan_amount = lo.loan_amount as number | null;
-    const bps =
-      showBps && total !== undefined && loan_amount
-        ? (accounting_total / loan_amount) * 10000
-        : null;
-    const b700 = txB700ByLoan.get(loanNum);
+    /**
+     * DOS PREGUNTAS, NO UNA. `status` dice si hay algo que mirar en este
+     * prestamo; cual de las dos falla lo dicen los dos booleanos.
+     *
+     * Un prestamo "correcto" es el que cobraron los dos. Con un solo numero,
+     * los 95 que tienen uno y no el otro pasaban como si no hubiera nada que
+     * ver -- y a uno de los dos destinatarios no le llego su margen.
+     *
+     * 41305 no entra en ninguna de las dos pruebas aunque se traiga: es margen
+     * cedido, y el unico prestamo que solo lo tiene lo tiene en negativo.
+     */
+    const gotMargin = m.division.received && m.branch.received;
+    const accounting_total = m.division.total;
+    /** Cada grupo sobre el importe del prestamo. Nunca uno sobre el otro. */
+    const bpsOf = (v: number, has: boolean) =>
+      has && loan_amount ? (v / loan_amount) * 10000 : null;
+    const bps = bpsOf(m.division.total, m.division.received);
+    const branch_bps = bpsOf(m.branch.total, m.branch.received);
     return {
       loan_number: loanNum,
       borrower_name: lo.borrower_name as string | null,
@@ -264,30 +412,69 @@ export async function GET(req: NextRequest) {
       // way. The value in the file stays available in loan_officials.
       branch: resolveLoanBranchAlias(lo.branch as string | null),
       loan_program: lo.loan_program as string | null,
+      /*
+       * Hoy sale de loan_officials, que viene del archivo que se subia. Cuando
+       * Loan Count pase a leer del espejo de BigQuery vendra de Encompass, asi
+       * que el nombre de la propiedad NO lleva el sufijo del origen: cambiar la
+       * fuente no debe obligar a tocar la pantalla.
+       *
+       * ⚠ Y NO ES EL MISMO DATO TODAVIA. Medido: 333 prestamos coinciden con
+       * Encompass y 103 no, porque el archivo trae valores que la fuente no usa
+       * -- Encompass Integration (47), vacio (46), B2B Strategy (4), Referral
+       * (3), External Referral (3). Son residuos de captura.
+       *
+       * El dia del cambio esos 103 pasan a tener el valor de Encompass, que
+       * sobre los cierres esta poblado al 100%. No es una perdida: es que el
+       * archivo traia ruido. El respaldo
+       * loan_officials_class_backup_20260913 los conserva.
+       */
+      lead_source: lo.lead_source_lo as string | null,
+      /**
+       * De donde sale `lead_source` en esta respuesta.
+       *
+       * Va en el payload y NO como bandera en la pantalla: el aviso de que el
+       * dato es del archivo tiene que desaparecer solo el dia que la consulta
+       * cambie de origen, no cuando alguien se acuerde de quitar un flag.
+       */
+      lead_source_origin: "loan_officials_file" as const,
       loan_info_channel: lo.loan_info_channel as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,
       loan_amount,
       accounting_total,
-      dm_total: total ?? null,
-      /** Null when the loan has no RM booking, so "none" and "zero" stay apart. */
-      rm_total: rmTotal ?? null,
-      bps,
-      /**
-       * Exempt is not a third kind of absence — it is the same absence, on a
-       * branch that does not pay the fee. 733 and 776 do not owe the B2B
-       * success fee, so no fee found there is correct and must not read as a
-       * finding; the validation exists to catch the branches that are charged
-       * and came back empty.
-       *
-       * Nothing about the detection changes. The check that already ran is the
-       * one that ran; this only decides how its answer is presented.
+      /*
+       * Una por cuenta, y todas anulables. Null = no hay apunte; 0 = lo hay y
+       * dice cero. Las dos cosas significan lo contrario y no pueden verse
+       * igual, que es el mismo criterio que ya se aplico a dm_total.
        */
-      status: gotMargin
-        ? "match"
-        : (type === "b2b" && isB2BFeeExempt(lo.branch as string | null)) ? "exempt" : "missing",
-      tx_description: b700?.description ?? null,
-      tx_movement: b700 != null ? b700.movement : null,
+      /** Desglose por cuenta, para el tooltip de cada columna. */
+      dm_total: m.dm ?? null,
+      rm_total: m.rm ?? null,
+      bm_total: m.bm ?? null,
+      discount_total: m.discount ?? null,
+      lo_margin_total: m.loMargin ?? null,
+      brokered_total: m.brokered ?? null,
+      /** Lo que cobra el loan officer, de Compensafe. Null = sin fila. */
+      lo_commission: com?.lo_pay ?? null,
+      lo_commission_bps: com?.lo_effective_bps ?? null,
+      /** ¿Se llevo la division su margen? Y ¿se quedo la sucursal el suyo? */
+      division_received: m.division.received,
+      branch_received: m.branch.received,
+      /** DM + RM. Null sin apunte, para distinguirlo de un apunte de cero. */
+      division_total: m.division.received ? m.division.total : null,
+      /** BM + Brokered Origination. */
+      branch_margin_total: m.branch.received ? m.branch.total : null,
+      bps,
+      branch_bps,
+      /**
+       * Dos valores, no tres. "exempt" solo tenia sentido frente al B2B success
+       * fee: la ausencia era la misma, pero en una sucursal que no lo paga.
+       *
+       * Aqui la pregunta es otra --¿recibio margen este prestamo?-- y a esa no
+       * hay sucursal exonerada: todas cobran margen. La exoneracion del success
+       * fee queda anotada en lib/loan-branch.ts, sin codigo que la aplique.
+       */
+      status: gotMargin ? "match" : "missing",
     };
   });
 
@@ -307,67 +494,30 @@ export async function GET(req: NextRequest) {
         year: tx.year as number | null,
         branch: tx.branch as string | null,
         incomplete,
-        borrower_name: null,
-        loan_officer: null,
-        loan_amount: null,
-        surplus_reason: null,
       });
     }
   }
 
-  // ── 7. Enrich surplus for flagged types ─────────────────────────────────────
-  if (type !== "all_loans" && surplus.length > 0) {
-    const completeLns = [
-      ...new Set(
-        surplus
-          .filter((s) => s.loan_number && !s.incomplete)
-          .map((s) => s.loan_number as string)
-      ),
-    ];
-
-    const enrichMap = new Map<
-      string,
-      { borrower_name: string | null; loan_officer: string | null; branch: string | null; loan_amount: number | null }
-    >();
-
-    if (completeLns.length > 0) {
-      const { data: enrichData } = await supabase
-        .from("loan_officials")
-        .select("loan_number, borrower_name, loan_officer, branch, loan_amount")
-        .in("loan_number", completeLns);
-
-      for (const row of (enrichData ?? []) as Array<Record<string, unknown>>) {
-        enrichMap.set(row.loan_number as string, {
-          borrower_name: row.borrower_name as string | null,
-          loan_officer: row.loan_officer as string | null,
-          branch: row.branch as string | null,
-          loan_amount: row.loan_amount as number | null,
-        });
-      }
-    }
-
-    for (const s of surplus) {
-      if (!s.loan_number || s.incomplete) {
-        s.surplus_reason = "loan_number_unresolved";
-      } else {
-        const enrich = enrichMap.get(s.loan_number);
-        if (enrich) {
-          s.borrower_name = enrich.borrower_name;
-          s.loan_officer = enrich.loan_officer;
-          if (!s.branch) s.branch = enrich.branch;
-          s.loan_amount = enrich.loan_amount;
-          s.surplus_reason = "loan_exists_not_flagged";
-        } else {
-          s.surplus_reason = "loan_not_found";
-        }
-      }
-    }
-  }
+  /*
+   * Aqui vivia el paso 7, que enriquecia los surplus con el nombre del
+   * prestatario, su loan officer y su importe, y les ponia un `surplus_reason`
+   * de tres valores.
+   *
+   * Su guarda era `if (type !== "all_loans")`, asi que NUNCA corrio en esta
+   * pantalla: los cuatro campos salian en null desde que all_loans fue el unico
+   * modo que quedaba, y la tabla de surplus --que no los pinta-- se veia igual.
+   * Una consulta mas a loan_officials por cada carga, para rellenar campos que
+   * nadie leia.
+   *
+   * Los tres motivos alimentaban el modo de tres cubos de SurplusSection, que
+   * se fue con la pestaña B2B por la misma razon: distinguir "existe pero no
+   * esta marcado" de "no esta en officials" solo tenia sentido con una bandera
+   * delante. Aqui la pregunta es una: el numero esta en la lista maestra o no.
+   */
 
   const summary = {
     match_count: rows.filter((r) => r.status === "match").length,
     missing_count: rows.filter((r) => r.status === "missing").length,
-    exempt_count: rows.filter((r) => r.status === "exempt").length,
     surplus_count: surplus.length,
   };
 

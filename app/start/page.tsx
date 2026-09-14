@@ -45,7 +45,7 @@ interface Step {
   /** Loud line under it. */
   warn?: string;
   /** Which counters this step shows, if any. */
-  counters?: ("conflicts" | "unassigned" | "noMargin" | "b2b")[];
+  counters?: ("conflicts" | "unassigned" | "noMargin")[];
 }
 
 const STEPS: Step[] = [
@@ -70,8 +70,8 @@ const STEPS: Step[] = [
 
   { n: 6, band: "loans", icon: BookOpen, href: "/loan-count",
     title: "Loan Count",
-    line: "Loans that received no margin in either account, and the B2B alerts.",
-    counters: ["noMargin", "b2b"] },
+    line: "Loans that received no margin in either account.",
+    counters: ["noMargin"] },
 
   { n: 7, band: "close", icon: TrendingUp, href: "/pl",
     title: "Reconcile Net Income",
@@ -86,7 +86,6 @@ type Counts = {
   conflicts: number | null;
   unassigned: number | null;
   noMargin: number | null;
-  b2b: number | null;
 };
 
 export default function StartPage() {
@@ -97,7 +96,7 @@ export default function StartPage() {
   const [monthOpts, setMonthOpts] = useState<string[]>([]);
   const [yearOpts, setYearOpts] = useState<string[]>([]);
 
-  const [counts, setCounts] = useState<Counts>({ conflicts: null, unassigned: null, noMargin: null, b2b: null });
+  const [counts, setCounts] = useState<Counts>({ conflicts: null, unassigned: null, noMargin: null });
   const [loading, setLoading] = useState(true);
   /** Rows in the selected period. Null while unknown. */
   const [periodRows, setPeriodRows] = useState<number | null>(null);
@@ -167,10 +166,7 @@ export default function StartPage() {
       // The loans side is scoped by period only: its branch means the branch of
       // the loan, which is a different question from the accounting branch the
       // global filter names — see /api/loan-validation.
-      j(`/api/loan-validation?summary=1&type=all_loans&${new URLSearchParams(
-        [...months.map((m) => ["month", m] as [string, string]), ...years.map((y) => ["year", y] as [string, string])],
-      )}`),
-      j(`/api/loan-validation?summary=1&type=b2b&${new URLSearchParams(
+      j(`/api/loan-validation?summary=1&${new URLSearchParams(
         [...months.map((m) => ["month", m] as [string, string]), ...years.map((y) => ["year", y] as [string, string])],
       )}`),
     ]).then((res) => {
@@ -181,7 +177,6 @@ export default function StartPage() {
         conflicts:  val(res[0])?.count ?? null,
         unassigned: val(res[1])?.count ?? null,
         noMargin:   val(res[2])?.summary?.missing_count ?? null,
-        b2b:        val(res[3])?.summary?.missing_count ?? null,
       });
       setLoading(false);
     });
@@ -202,7 +197,7 @@ export default function StartPage() {
   const label: Record<keyof Counts, string> = {
     // "no margin", not "no DM Margin": the check behind it accepts DM or RM,
     // and this counter reads that same endpoint rather than repeating the rule.
-    conflicts: "conflicts", unassigned: "unassigned", noMargin: "no margin", b2b: "B2B alerts",
+    conflicts: "conflicts", unassigned: "unassigned", noMargin: "no margin",
   };
 
   /**
@@ -214,12 +209,11 @@ export default function StartPage() {
    * a branch no loan belongs to. Passing it there returns nothing, which is a
    * regression this project already shipped once.
    *
-   * So the chip above says "branch 716" and these two do not obey it. Rather
-   * than leave that to be discovered, each says what it is scoped to.
+   * So the chip above says "branch 716" and this one does not obey it. Rather
+   * than leave that to be discovered, it says what it is scoped to.
    */
   const note: Partial<Record<keyof Counts, string>> = {
     noMargin: "period only",
-    b2b:      "period only",
   };
 
   return (

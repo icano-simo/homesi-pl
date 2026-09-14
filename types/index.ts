@@ -300,7 +300,18 @@ export interface TransactionColumnValues {
   source: string[];
 }
 
-/** Full filter options including cost centers (replaces /api/transactions/values). */
+/**
+ * Full filter options including cost centers. Lo sirve
+ * /api/transactions/filter-options.
+ *
+ * Este comentario decia "replaces /api/transactions/values" y la ruta
+ * reemplazada seguia ahi, sin un solo llamador, desde el commit inicial: la
+ * unica mencion de su nombre en todo el codigo era esta linea que anunciaba su
+ * jubilacion. Se borro el 2026-09-12. Se deja dicho porque una referencia a una
+ * ruta que ya no existe manda a buscar un archivo que no esta.
+ *
+ * TransactionColumnValues sobrevive: es la forma que esta interfaz extiende.
+ */
 export interface FilterOptionsResponse extends TransactionColumnValues {
   costCenters: Array<{ id: string; name: string }>;
 }
