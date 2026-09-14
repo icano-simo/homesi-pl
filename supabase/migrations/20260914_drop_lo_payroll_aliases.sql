@@ -1,0 +1,71 @@
+-- ============================================================================
+-- Borrar finance_division.lo_payroll_aliases
+-- ============================================================================
+--
+-- ⚠ NO APLICADO. Se entrega para revisar y correr a mano.
+--
+-- La tabla se creo el 2026-08-27 para emparejar a mano los nombres de nomina
+-- del P&L --"LAINO CHEGWIN, GIAN L"-- con los loan officers, porque entonces la
+-- unica regla automatica que habia acertaba 29 de 46 y sus fallos eran del tipo
+-- peor: emparejaba a dos personas escritas de dos maneras con la misma fila y
+-- el total salia 4.540,47 de mas.
+--
+-- Nunca se lleno. Se borra vacia.
+--
+--
+-- ── POR QUE SE BORRA, si alguien la echa de menos ───────────────────────────
+--
+-- La sustituye `hr_centralizado.person_name_key` (BigQuery, 523 grafias sobre
+-- 111 personas, siete fuentes) combinada con la normalizacion de
+-- lib/lo-payroll-name.ts. Medido el 2026-09-14 sobre los 46 loan officers de
+-- finance_division.loan_officials:
+--
+--     candidato unico mutuo (la regla que motivo esta tabla)   29 de 46
+--     normalizacion + contencion, sola                         31 de 46
+--     person_name_key, sola                                    28 de 46
+--     LAS DOS UNIDAS                                           34 de 46, y
+--                                                              CERO ambiguos
+--
+-- De los 12 que quedan fuera, ONCE NO TIENEN NOMINA EN NINGUNA CUENTA: no hay
+-- nada que emparejar. Siete de ellos no tienen ni una fila en las 13.642 del
+-- P&L --DiToma, Edwards, Heibel, Holmes, Fowler, Tirio, Winter-- y eso no es un
+-- fallo del emparejador: es el hallazgo que el modulo existe para enseñar.
+-- Brian Heibel cerro 20 prestamos por 7.592.544 y no costo una linea.
+--
+-- ASI QUE EL UNICO CASO QUE ESTA TABLA PODRIA ARREGLAR ES UNO: Frank Enrique
+-- Rodriguez. Y no debe arreglarlo, porque no es un problema de nomenclatura de
+-- nomina sino LA GRAFIA DUPLICADA DEL ORIGEN: loan_officials lo tiene como
+-- "Frank Rodriguez" y como "Frank Enrique Rodriguez", y el primero SI empareja.
+-- Una fila de alias aqui taparia el sintoma en esta pantalla y dejaria el
+-- prestamo partido en todas las demas. Se corrige en BigQuery.
+--
+-- ⚠ Y su apellido es un campo minado, lo que hace la fila manual aun peor idea:
+-- en la nomina conviven cinco personas con Rodriguez --Frank Rodriguez-Perez,
+-- Maryam Perez-Rodriguez, Aileen Perez-Rodriguez, Melquiades Rodriguez-Pinto y
+-- Daniel Rodriguez--. Un alias escrito a mano ahi se equivoca tarde o temprano,
+-- y al equivocarse mueve dinero de una persona a otra sin avisar.
+--
+--
+-- ── LA REGLA GENERAL QUE SALE DE ESTO ───────────────────────────────────────
+--
+-- Una tabla de equivalencias a mano es deuda: hay que mantenerla, cada grafia
+-- nueva de la fuente necesita una fila, y nadie se entera de que falta hasta que
+-- algo no resuelve. Ya lo dice el comentario de org.loan_officer_resolved: NO
+-- CREAR MAS TABLAS DE EQUIVALENCIAS. Esta es la que faltaba por retirar.
+
+begin;
+
+drop table if exists finance_division.lo_payroll_aliases;
+
+commit;
+
+-- ── COMPROBACION despues de aplicar ─────────────────────────────────────────
+--
+--   select count(*) from information_schema.tables
+--    where table_schema = 'finance_division' and table_name = 'lo_payroll_aliases';
+--   -- esperado: 0
+--
+-- Y que no quede codigo nombrandola, que es la otra mitad de borrar algo:
+--
+--   grep -rn "lo_payroll_aliases" --include=*.ts --include=*.tsx app components lib
+--   -- esperado: sin resultados

@@ -19,6 +19,11 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
+# Salida de scripts/verificacion/*.test.mjs. Este repo no tiene runner de
+# pruebas, asi que esos scripts compilan el archivo suelto aqui y lo corren con
+# node. Es un artefacto de la prueba, no del build.
+.tmp-test/
+
 # ── Misc ───────────────────────────────────────────────────────────────────────
 # ── Volcados y artefactos de migración ────────────────────────────────────────
 # Contienen datos financieros reales: nombres de prestatarios, números de
