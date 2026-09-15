@@ -100,6 +100,8 @@ export interface ClosedLoan {
    */
   personCode: string | null;
   branch: string | null;
+  /** `loan_info_channel` en el archivo. Verificado identico sobre los 433 en ambas fuentes. */
+  loanChannel: string | null;
   loanAmount: number | null;
   closingMonth: string | null;
   /** `Own Production` | `B2B` | `Affinity` | `Recruitment` | `NPPM`. */
@@ -203,7 +205,7 @@ export async function getClosedLoans(opts: {
       .from("loan_records_v2")
       .select(
         "loan_number,borrower_name,loan_officer,loan_officer_person_code,branch," +
-          "total_loan_amount,closing_month,strategy,is_b2b,lead_source",
+          "total_loan_amount,closing_month,strategy,is_b2b,lead_source,loan_channel",
       )
       .eq("is_closed", true)
       .eq("counts_for_division", true);
@@ -245,6 +247,7 @@ export async function getClosedLoans(opts: {
       loanOfficer: (r.loan_officer as string) ?? null,
       personCode: (r.loan_officer_person_code as string) ?? null,
       branch: (r.branch as string) ?? null,
+      loanChannel: (r.loan_channel as string) ?? null,
       loanAmount: r.total_loan_amount == null ? null : Number(r.total_loan_amount),
       closingMonth: (r.closing_month as string) ?? null,
       strategy: (r.strategy as string) ?? null,

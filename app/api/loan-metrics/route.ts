@@ -5,15 +5,18 @@ import {
   resolveBaseBranches,
   baseIsDivisionWide,
 } from "@/lib/loan-branch";
+import { getClosedLoans } from "@/lib/loan-source";
 
 export const dynamic = "force-dynamic";
 
 const PAGE = 1000;
 const IN_CHUNK = 500;
 
-const LO_SELECT =
-  "loan_number,loan_info_channel,loan_amount,branch,month,year," +
-  "b2b,processing,support_on_demand,affinity,recruitment";
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
+
 
 type OfficialRow = {
   loan_number: string;
@@ -87,52 +90,78 @@ function accumulate(m: MonthMetrics, o: OfficialRow) {
   if (o.recruitment)       m.recruitment++;
 }
 
-/** Paged read of loan_officials. Unbounded selects stop at 1000 rows on this
- *  project; the table is at 379 today and grows with every monthly upload. */
+/*
+ * Los prestamos, del espejo.
+ *
+ * ⚠ SE ADAPTA EN EL BORDE Y NO SE REESCRIBE LO DE ABAJO. Todo lo que sigue
+ * --normalizeLoanBranch, el bucket de canal, accumulate-- se queda intacto y
+ * sigue trabajando sobre `OfficialRow`. Reescribir esa logica al mismo tiempo
+ * que se cambia la fuente haria imposible saber cual de las dos cosas movio una
+ * cifra.
+ *
+ * ⚠ EL MAPEO SE VERIFICO CAMPO A CAMPO ANTES DE ESCRIBIRLO, sobre los 433
+ * prestamos que estan en las dos fuentes:
+ *
+ *     canal      loan_channel      vs loan_info_channel     0 diferencias
+ *     importe    total_loan_amount vs loan_amount           0 diferencias
+ *     affinity   strategy='Affinity' vs affinity            0 diferencias
+ *     sucursal   branch            vs branch                1 diferencia
+ *     recruit.   strategy='Recruitment' vs recruitment      2 diferencias
+ *
+ * Las tres que no son cero, una por una, porque una cifra que se mueve sin
+ * explicacion es peor que una cifra mal:
+ *
+ *   - 150002050394 (Anthony Robert DiToma): el archivo dice sucursal 150, el
+ *     espejo 733. El numero de prestamo empieza por 150, asi que el archivo
+ *     parece haberla tomado del prefijo. Un prestamo.
+ *   - 747002052489 (Gian Laino): el archivo lo marca recruitment y el espejo lo
+ *     clasifica B2B. Es EL MISMO prestamo del unico b2bDiscrepa, y eso lo
+ *     explica: quien lo clasifico a mano no dijo solo "no es B2B", dijo "es
+ *     Recruitment". La discrepancia es coherente en dos campos a la vez, o sea
+ *     una disputa de clasificacion de verdad.
+ *   - 710001998384 (Sergio Vermejo): el espejo lo clasifica Recruitment y el
+ *     archivo no. Es su unico cierre.
+ *
+ * Neto sobre `recruitment`: entra uno y sale otro. El total no se mueve, pero
+ * no son los mismos prestamos, y por eso queda escrito.
+ */
 async function fetchOfficials(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  supabase: any,
   years: number[],
   loanNumbers: string[] | null,
 ): Promise<OfficialRow[]> {
-  const build = () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = supabase.from("loan_officials").select(LO_SELECT);
-    if (years.length) q = q.in("year", years);
-    return q;
-  };
+  if (loanNumbers !== null && loanNumbers.length === 0) return [];
 
-  // NOTE: the branch filter is deliberately NOT applied in SQL. Branch names
-  // need normalizing first (Affinity → 716) and rows outside the division need
-  // excluding, and neither can be expressed as a column predicate. Filtering
-  // happens in memory, after normalizeLoanBranch.
-  const out: OfficialRow[] = [];
+  // 494 filas hoy: se traen enteras y se filtra en memoria. Es tambien donde el
+  // filtro de sucursal NO se aplica, por lo mismo de siempre -- necesita
+  // normalizeLoanBranch antes, y eso no se puede expresar como predicado.
+  const todos = await getClosedLoans();
+  const pedidos = loanNumbers === null ? null : new Set(loanNumbers);
 
-  const pageThrough = async (mod: (q: unknown) => unknown) => {
-    for (let from = 0; ; from += PAGE) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (mod(build()) as any)
-        .order("loan_number", { ascending: true })
-        .range(from, from + PAGE - 1);
-      if (error) throw new Error(error.message);
-      if (!data || data.length === 0) break;
-      out.push(...(data as OfficialRow[]));
-      if (data.length < PAGE) break;
-    }
-  };
-
-  if (loanNumbers === null) {
-    await pageThrough((q) => q);
-  } else {
-    if (loanNumbers.length === 0) return [];
-    // Chunked: a single .in() with thousands of loan numbers overruns the URL.
-    for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
-      const chunk = loanNumbers.slice(i, i + IN_CHUNK);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await pageThrough((q) => (q as any).in("loan_number", chunk));
-    }
-  }
-  return out;
+  return todos
+    .filter((l) => (pedidos ? pedidos.has(l.loanNumber) : true))
+    .map((l) => {
+      // `closing_month` es un date; abajo se agrupa por nombre de mes y año.
+      const [y, m] = (l.closingMonth ?? "").split("-");
+      const anio = Number(y) || null;
+      return {
+        loan_number: l.loanNumber,
+        loan_info_channel: l.loanChannel,
+        loan_amount: l.loanAmount,
+        branch: l.branch,
+        month: m ? MONTH_NAMES[Number(m) - 1] ?? null : null,
+        year: anio,
+        // Las tres manuales salen de loan_manual_flags, que no se toca. Sin
+        // fila de flags NO es "false" en el dato, pero aqui cuenta como no
+        // marcado, que es lo que hacia el archivo con sus columnas booleanas.
+        b2b: l.b2bManual === true,
+        processing: l.processing === true,
+        support_on_demand: l.supportOnDemand === true,
+        // Estas dos salen de `strategy`, no de columnas propias.
+        affinity: l.strategy === "Affinity",
+        recruitment: l.strategy === "Recruitment",
+      } satisfies OfficialRow;
+    })
+    .filter((o) => (years.length ? o.year !== null && years.includes(o.year) : true));
 }
 
 /** Paged read of the loan numbers a P&L filter selects. */
@@ -185,7 +214,7 @@ export async function GET(req: NextRequest) {
         ? await fetchLoanNumbers(supabase, years, branches, sources, ccIds)
         : null;
 
-      const raw = await fetchOfficials(supabase, years, loanNumbers);
+      const raw = await fetchOfficials(years, loanNumbers);
 
       // ONE row set. Everything below is an aggregate of `rows` — the count and
       // the amount for a month are accumulated from the same record in the same
@@ -259,7 +288,7 @@ export async function GET(req: NextRequest) {
     const loanNumbers = await fetchLoanNumbers(supabase, years, branches, sources, ccIds);
     if (loanNumbers.length === 0) return NextResponse.json(emptyMetrics());
 
-    const raw = await fetchOfficials(supabase, [], loanNumbers);
+    const raw = await fetchOfficials([], loanNumbers);
     const totals = emptyMetrics();
     for (const o of raw) {
       if (normalizeLoanBranch(o.branch) === null) continue;
