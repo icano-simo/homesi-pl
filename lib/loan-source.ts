@@ -146,13 +146,34 @@ export interface ClosedLoan {
   loanChannel: string | null;
   loanProgram: string | null;
   /**
-   * El BD asignado. Era `bd_owner`, una columna del archivo que se editaba a
-   * mano, y sale del espejo porque ademas esta al dia: comparados los 92 en que
-   * las dos fuentes lo traen, 86 coinciden y los 6 que no son reasignaciones
-   * que el archivo no recogio -- tiene tres semanas. Poblado en 183 de los 494
-   * cierres.
+   * ⚠ EL BD DEL REALTOR, NO EL DEL PRESTAMO. `realtor_bd` en BigQuery, de
+   * `app_b2b_metrics.realtor_owner`: se cruza por la clave del realtor.
+   *
+   * Estuvo saliendo en la columna "BD owner" de Loan Count y era falso en la
+   * mayoria de los 183 prestamos que mostraba. El 770002068892 enseñaba "Andres
+   * Zorro", que no lo trajo -- lleva a su realtor.
+   *
+   * Se conserva porque responde una pregunta legitima y distinta, que el modulo
+   * B2B y las alertas pueden necesitar. Lo que no puede es llamarse "BD owner":
+   * para eso esta `bdOwner`.
    */
-  bd: string | null;
+  realtorBd: string | null;
+  /** Quien es dueño de la oportunidad en Salesforce. Puede no ser una persona. */
+  opportunityOwner: string | null;
+  /**
+   * El BD DEL PRESTAMO: `opportunity_owner`, pero solo cuando esa persona es un
+   * Business Developer.
+   *
+   * ⚠ SE APOYA EN `owner_es_bd`, QUE CALCULA EL ORIGEN, y no en comparar
+   * `owner_title`. Hoy coinciden exacto --126 cierres, las mismas siete
+   * personas-- pero comparar el titulo aqui seria inferir la logica de BigQuery
+   * desde una foto: el dia que contemple un titulo nuevo o un roster de BD
+   * activos, la cadena se quedaria atras SIN FALLAR.
+   *
+   * Null cuando el dueño no es BD. Son 282 de "sf integrations" --la
+   * integracion, no una persona-- y 86 de otros roles.
+   */
+  bdOwner: string | null;
   loanAmount: number | null;
   closingMonth: string | null;
   /** `Own Production` | `B2B` | `Affinity` | `Recruitment` | `NPPM`. */
@@ -330,7 +351,7 @@ export async function getClosedLoans(opts: {
       .from("loan_records_v2")
       .select(
         "loan_number,borrower_name,loan_officer,loan_officer_person_code,branch," +
-          "total_loan_amount,closing_month,strategy,is_b2b,lead_source,loan_channel,loan_program,bd",
+          "total_loan_amount,closing_month,strategy,is_b2b,lead_source,loan_channel,loan_program,bd,opportunity_owner,owner_es_bd",
       )
       .eq("is_closed", true)
       .eq("counts_for_division", true);
@@ -374,7 +395,12 @@ export async function getClosedLoans(opts: {
       branch: (r.branch as string) ?? null,
       loanChannel: (r.loan_channel as string) ?? null,
       loanProgram: (r.loan_program as string) ?? null,
-      bd: (r.bd as string) ?? null,
+      realtorBd: (r.bd as string) ?? null,
+      opportunityOwner: (r.opportunity_owner as string) ?? null,
+      // Solo cuando el origen dice que es BD. Null y false se tratan igual: sin
+      // sincronizar todavia no es lo mismo que "no es BD", pero afirmar un BD
+      // que no se ha confirmado es peor que dejar la celda vacia.
+      bdOwner: r.owner_es_bd === true ? ((r.opportunity_owner as string) ?? null) : null,
       loanAmount: r.total_loan_amount == null ? null : Number(r.total_loan_amount),
       closingMonth: (r.closing_month as string) ?? null,
       strategy: (r.strategy as string) ?? null,

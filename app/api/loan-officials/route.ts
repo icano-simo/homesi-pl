@@ -49,7 +49,7 @@ const MONTH_NAMES = [
  *                Salesforce clasifica B2B -- el mismo prestamo del unico
  *                b2bDiscrepa, o sea alguien que miro y dijo otra cosa.
  *   lead_source  sale de Encompass. El archivo traia 103 residuos de captura.
- *   bd_owner     sale de `bd` en el espejo.
+ *   bd_owner     sale de `opportunity_owner` cuando `owner_es_bd`, no de `bd`.
  *
  * Dejarlas editables contra una tabla que no las guarda seria escribir en el
  * vacio; darles una columna nueva seria crear una segunda opinion sobre algo
@@ -93,10 +93,21 @@ export async function GET(req: NextRequest) {
         affinity: l.strategy === "Affinity",
         recruitment: l.strategy === "Recruitment",
         lead_source_lo: l.leadSource,
-        /* Era una columna editable del archivo; sale del espejo y ademas al dia:
-           de los 92 comparables coinciden 86, y los 6 que no son reasignaciones
-           que el archivo no recogio. */
-        bd_owner: l.bd,
+        /*
+         * ⚠ EL BD DEL PRESTAMO, y antes salia el del REALTOR. La columna sacaba
+         * `bd` --realtor_bd, el BD asignado al realtor y cruzado por su clave--
+         * y era falso en la mayoria de los 183 prestamos que mostraba: el
+         * 770002068892 enseñaba "Andres Zorro", que no lo trajo.
+         *
+         * Ahora es `opportunity_owner` filtrado por `owner_es_bd`. Pasa de 183
+         * valores a 126, y los 126 si son del prestamo.
+         *
+         * ⚠ VALE NULL EN TODOS HASTA QUE EL SYNC TRAIGA `owner_es_bd`. La
+         * columna esta aplicada en Supabase y el spec va en simo-sync#27; entre
+         * una cosa y otra la celda sale vacia, que es preferible a seguir
+         * afirmando un BD que no es el del prestamo.
+         */
+        bd_owner: l.bdOwner,
 
         /** Salesforce dice B2B y nadie lo ha clasificado. Cola de trabajo. */
         b2b_unclassified: l.b2bSinClasificar,
