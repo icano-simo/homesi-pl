@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { MARGIN_ALL_GL_LIST } from "@/lib/loan-detail-accounts";
 import { closePeriod } from "@/lib/close-period";
+import { getClosedLoans } from "@/lib/loan-source";
 import {
   findCollapsedPairs,
   findSplitByShape,
@@ -373,15 +374,29 @@ export async function GET(req: NextRequest) {
   const month = all ? null : searchParams.get("month") ?? def.month;
   const year = all ? null : Number(searchParams.get("year") ?? def.year);
 
-  // ── 1. Los prestamos del periodo ───────────────────────────────────────────
-  const officials = await paginar<Record<string, unknown>>(() => {
-    let q = supabase
-      .from("loan_officials")
-      .select("loan_number,loan_officer,branch,loan_amount,month,year");
-    if (month) q = q.eq("month", month);
-    if (year) q = q.eq("year", year);
-    return q;
-  });
+  /*
+   * ── 1. Los prestamos del periodo, del espejo ──────────────────────────────
+   *
+   * Deja de leerse `finance_division.loan_officials`. Ese archivo se sube a
+   * mano y llevaba tres semanas parado: 436 prestamos contra 494 cierres en el
+   * espejo. Para ESTE modulo la diferencia no era cosmetica -- Compensafe habia
+   * pagado comision por 54 prestamos que el archivo no tenia, 125.521,22, asi
+   * que el bloque 1 estaba corto en volumen, margen Y comision a la vez, sin
+   * ningun sintoma. Un loan officer podia parecer que no se paga solo
+   * simplemente porque no se veian sus cierres.
+   *
+   * ⚠ SE ADAPTA EN EL BORDE: la fila conserva las mismas claves, asi que nada
+   * de lo que sigue cambia. El filtro de "que cuenta" --is_closed AND
+   * counts_for_division-- vive en lib/loan-source y no se reescribe aqui.
+   */
+  const officials = (await getClosedLoans({ month, year })).map((l) => ({
+    loan_number: l.loanNumber,
+    loan_officer: l.loanOfficer,
+    branch: l.branch,
+    loan_amount: l.loanAmount,
+    month,
+    year,
+  }));
 
   const loanNumbers = [
     ...new Set(officials.map((o) => (o.loan_number as string)?.trim()).filter(Boolean)),
