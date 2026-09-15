@@ -742,6 +742,41 @@ function AllLoansSection() {
             <MetricCard label="Avg branch BPS" value={avgBranchBPS != null ? fmtBPS(avgBranchBPS) : "—"} />
           </div>
 
+          {/*
+            * ⚠ HASTA DONDE LLEGA LA CONTABILIDAD, JUNTO A LAS CIFRAS Y NO EN UNA
+            * NOTA AL PIE.
+            *
+            * El espejo se sincroniza a diario y el P&L se carga al cerrar el
+            * mes, asi que el mes o dos mas recientes siempre tienen cierres sin
+            * contabilidad. Quien mire agosto tiene que entender POR QUE no hay
+            * margen antes de sacar conclusiones, no despues de buscarlo.
+            *
+            * Esos cierres NO cuentan como "missing" -- lo que falta es el P&L
+            * del periodo, no el margen -- pero tampoco se esconden: sus
+            * cierres, su volumen y sus clasificaciones son validos.
+            *
+            * El rotulo sale de `pl_loaded_through`, que el endpoint DERIVA del
+            * dato. Cuando alguien cargue agosto avanza solo y los pendientes se
+            * evaluan sin que nadie toque nada.
+            */}
+          {data.summary.pl_loaded_through && (
+            <p className="text-[11px] text-gray-500">
+              P&amp;L loaded through{" "}
+              <span className="font-medium text-gray-700">{data.summary.pl_loaded_through}</span>.
+              {data.summary.pending_pl_count > 0 && (
+                <>
+                  {" "}
+                  <span className="font-medium text-amber-700">
+                    {data.summary.pending_pl_count} closings after that date are not counted as
+                    missing
+                  </span>{" "}
+                  — their margin cannot be checked until the P&amp;L for their month is loaded. The
+                  loans are real; the accounting is not there yet.
+                </>
+              )}
+            </p>
+          )}
+
           <DetailView rows={filteredRows} />
 
           {showSurplus && <SurplusSection rows={data.surplus} />}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
+import { getClosedLoans } from "@/lib/loan-source";
 import {
   ALL_MARGIN_ACCOUNTS,
   isBankedChannel,
@@ -10,6 +11,11 @@ import {
 } from "@/lib/loan-detail-accounts";
 
 export const dynamic = "force-dynamic";
+
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
 
 const PAGE = 1000;
 const IN_CHUNK = 500;
@@ -131,13 +137,25 @@ export async function GET(req: NextRequest) {
     const effectiveBranches = resolveBaseBranches(branches);
     const inScope = (b: string) => !effectiveBranches || effectiveBranches.includes(b);
 
-    const rawLoans = await page(() =>
-      supabase
-        .from("loan_officials")
-        .select("loan_number,borrower_name,loan_officer,branch,loan_amount,loan_program,loan_info_channel,b2b,processing,support_on_demand,month,year")
-        .eq("month", month)
-        .eq("year", year),
-    );
+    /*
+     * Los prestamos del periodo, del espejo. Se adapta en el borde: la fila
+     * conserva las mismas claves para que nada de lo que sigue --el filtro de
+     * canal, normalizeLoanBranch, los conceptos-- tenga que cambiar.
+     */
+    const rawLoans = (await getClosedLoans({ month, year })).map((l) => ({
+      loan_number: l.loanNumber,
+      borrower_name: l.borrowerName,
+      loan_officer: l.loanOfficer,
+      branch: l.branch,
+      loan_amount: l.loanAmount,
+      loan_program: l.loanProgram,
+      loan_info_channel: l.loanChannel,
+      b2b: l.b2bManual === true,
+      processing: l.processing === true,
+      support_on_demand: l.supportOnDemand === true,
+      month,
+      year,
+    }));
 
     // Banked only. Brokered loans earn through a different mechanism and
     // mixing them dilutes every bps in the window against volume this margin
@@ -420,13 +438,29 @@ export async function GET(req: NextRequest) {
 
     // Every period of those loans, so the window can say which one each belongs
     // to instead of asserting it belongs to none.
+    /*
+     * En que periodo vive cada uno de esos numeros, para poder decir a cual
+     * pertenece en vez de afirmar que no pertenece a ninguno.
+     *
+     * Sin filtro de periodo a proposito: la pregunta es justamente "¿de que mes
+     * es este prestamo?", asi que acotarla al mes de la ventana la responderia
+     * siempre que no.
+     */
     const originRows = strayNumbers.length
-      ? await page(() =>
-          supabase
-            .from("loan_officials")
-            .select("loan_number,branch,month,year,loan_info_channel,loan_program,loan_officer")
-            .in("loan_number", strayNumbers),
-        )
+      ? (await getClosedLoans())
+          .filter((l) => strayNumbers.includes(l.loanNumber))
+          .map((l) => {
+            const [y, m] = (l.closingMonth ?? "").split("-");
+            return {
+              loan_number: l.loanNumber,
+              branch: l.branch,
+              month: m ? MONTH_NAMES[Number(m) - 1] ?? null : null,
+              year: Number(y) || null,
+              loan_info_channel: l.loanChannel,
+              loan_program: l.loanProgram,
+              loan_officer: l.loanOfficer,
+            };
+          })
       : [];
 
     /**

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { resolveLoanBranchAlias } from "@/lib/loan-branch";
+import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   MARGIN_ALL_GL_LIST,
   MARGIN_BRANCH_GL_CODES,
@@ -9,6 +10,11 @@ import {
 } from "@/lib/loan-detail-accounts";
 
 export const dynamic = "force-dynamic";
+
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
 
 /*
  * Este endpoint ya no tiene modos.
@@ -28,7 +34,7 @@ export interface ValidationRow {
   loan_officer: string | null;
   branch: string | null;
   loan_program: string | null;
-  /** Origen del lead. Sin sufijo de fuente: hoy loan_officials, luego Encompass. */
+  /** Origen del lead. Sin sufijo de fuente: sale de Encompass via el espejo. */
   lead_source: string | null;
   /**
    * De donde sale `lead_source`. La pantalla deriva de aqui su aviso, en vez de
@@ -140,6 +146,10 @@ export interface ValidationResult {
     match_count: number;
     missing_count: number;
     surplus_count: number;
+    /** Cierres reales cuyo mes aun no tiene P&L. Fuera de match y de missing. */
+    pending_pl_count: number;
+    /** Hasta donde llega el P&L, derivado del dato: "July 2026". */
+    pl_loaded_through: string | null;
   };
 }
 
@@ -153,15 +163,36 @@ export async function GET(req: NextRequest) {
   /** Only the tallies, for the roadmap — see the early return at the end. */
   const summaryOnly = searchParams.get("summary") === "1";
 
-  // ── 1. Fetch loan_officials with the appropriate flag filter ────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let loQuery: any = supabase
-    .from("loan_officials")
-    .select("loan_number, borrower_name, loan_officer, branch, loan_amount, month, year, loan_program, lead_source_lo, loan_info_channel")
-    .order("loan_number");
-
-  if (months.length > 0) loQuery = loQuery.in("month", months);
-  if (years.length > 0) loQuery = loQuery.in("year", years);
+  /*
+   * ── 1. Los prestamos, del espejo ──────────────────────────────────────────
+   *
+   * Deja de leerse el archivo. La forma de la fila se mantiene --las mismas
+   * claves con los mismos nombres-- para que el resto de la ruta no cambie:
+   * cambiar fuente y logica a la vez haria imposible saber cual movio una cifra.
+   *
+   * `month` y `year` salen de `closing_month`, que es un date en el espejo y
+   * eran dos columnas sueltas en el archivo.
+   */
+  const [cerrados, plCoverage] = await Promise.all([getClosedLoans(), getPlCoverage()]);
+  const loRows = cerrados
+    .map((l) => {
+      const [y, m] = (l.closingMonth ?? "").split("-");
+      return {
+        loan_number: l.loanNumber,
+        borrower_name: l.borrowerName,
+        loan_officer: l.loanOfficer,
+        branch: l.branch,
+        loan_amount: l.loanAmount,
+        month: m ? MONTH_NAMES[Number(m) - 1] ?? null : null,
+        year: Number(y) || null,
+        loan_program: l.loanProgram,
+        lead_source_lo: l.leadSource,
+        loan_info_channel: l.loanChannel,
+      };
+    })
+    .filter((r) => (months.length > 0 ? r.month !== null && months.includes(r.month) : true))
+    .filter((r) => (years.length > 0 ? r.year !== null && years.includes(r.year) : true))
+    .sort((a, b) => a.loan_number.localeCompare(b.loan_number));
   /**
    * The branch filter narrows the MASTER LIST — the branch that produced the
    * loan — and no longer the accounting side. Applied in JS just below, not
@@ -191,8 +222,7 @@ export async function GET(req: NextRequest) {
    * estaba viendo.
    */
 
-  const { data: loanOfficialsAll, error: loError } = await loQuery;
-  if (loError) return NextResponse.json({ error: loError.message }, { status: 500 });
+  const loanOfficialsAll = loRows;
 
   /**
    * The loans this screen is about: the master list of the period, narrowed to
@@ -413,20 +443,21 @@ export async function GET(req: NextRequest) {
       branch: resolveLoanBranchAlias(lo.branch as string | null),
       loan_program: lo.loan_program as string | null,
       /*
-       * Hoy sale de loan_officials, que viene del archivo que se subia. Cuando
-       * Loan Count pase a leer del espejo de BigQuery vendra de Encompass, asi
-       * que el nombre de la propiedad NO lleva el sufijo del origen: cambiar la
-       * fuente no debe obligar a tocar la pantalla.
+       * YA SALE DE ENCOMPASS, via el espejo. El dia del cambio es hoy.
        *
-       * ⚠ Y NO ES EL MISMO DATO TODAVIA. Medido: 333 prestamos coinciden con
-       * Encompass y 103 no, porque el archivo trae valores que la fuente no usa
+       * El nombre de la propiedad nunca llevo el sufijo del origen, y por eso
+       * cambiar la fuente no ha obligado a tocar la pantalla: el aviso de que el
+       * dato venia del archivo cuelga de `lead_source_origin` y se apaga solo.
+       *
+       * Lo que se retira, medido antes de hacerlo: 333 prestamos coincidian con
+       * Encompass y 103 NO, porque el archivo traia valores que la fuente no usa
        * -- Encompass Integration (47), vacio (46), B2B Strategy (4), Referral
-       * (3), External Referral (3). Son residuos de captura.
+       * (3), External Referral (3). Residuos de captura.
        *
-       * El dia del cambio esos 103 pasan a tener el valor de Encompass, que
-       * sobre los cierres esta poblado al 100%. No es una perdida: es que el
-       * archivo traia ruido. El respaldo
-       * loan_officials_class_backup_20260913 los conserva.
+       * No es una perdida: es que el archivo traia ruido y la fuente esta
+       * poblada al 100% sobre los cierres. El respaldo
+       * loan_officials_class_backup_20260913 conserva los valores viejos para
+       * quien necesite ver que decia el archivo.
        */
       lead_source: lo.lead_source_lo as string | null,
       /**
@@ -436,7 +467,7 @@ export async function GET(req: NextRequest) {
        * dato es del archivo tiene que desaparecer solo el dia que la consulta
        * cambie de origen, no cuando alguien se acuerde de quitar un flag.
        */
-      lead_source_origin: "loan_officials_file" as const,
+      lead_source_origin: "encompass" as const,
       loan_info_channel: lo.loan_info_channel as string | null,
       month: lo.month as string | null,
       year: lo.year as number | null,
@@ -515,10 +546,37 @@ export async function GET(req: NextRequest) {
    * delante. Aqui la pregunta es una: el numero esta en la lista maestra o no.
    */
 
+  /*
+   * ⚠ LOS CIERRES CUYO MES NO TIENE P&L NO CUENTAN COMO "MISSING".
+   *
+   * El espejo se sincroniza a diario y el P&L se carga al cerrar el mes, asi
+   * que el mes o dos mas recientes siempre tienen cierres sin contabilidad.
+   * Medido el 2026-09-15: pl_transactions llega a July 2026 y el espejo trae 47
+   * cierres de agosto y 14 de septiembre.
+   *
+   * Contarlos como "les falta margen" seria afirmar un hallazgo que no se ha
+   * podido medir: lo que falta es el P&L del periodo, no el margen. Es lo mismo
+   * que este modulo ya evita en otros sitios -- "no localizado" no es "cero".
+   *
+   * NO se esconden ni se filtran: sus cierres son reales y su conteo, volumen y
+   * clasificaciones valen. Salen aparte, con su propio recuento, igual que las
+   * formas fragiles del modulo de LO.
+   *
+   * La cobertura se DERIVA del dato, no se cablea -- ver getPlCoverage. El dia
+   * que alguien cargue agosto, esos 47 pasan a evaluarse solos.
+   */
+  const sinPlDelPeriodo = rows.filter((r) => !plPeriodLoaded(plCoverage, r.month, r.year));
+  const sinPl = new Set(sinPlDelPeriodo.map((r) => r.loan_number));
+  const evaluables = rows.filter((r) => !sinPl.has(r.loan_number));
+
   const summary = {
-    match_count: rows.filter((r) => r.status === "match").length,
-    missing_count: rows.filter((r) => r.status === "missing").length,
+    match_count: evaluables.filter((r) => r.status === "match").length,
+    missing_count: evaluables.filter((r) => r.status === "missing").length,
     surplus_count: surplus.length,
+    /** Cierres reales que todavia no se pueden evaluar. Fuera de los otros dos. */
+    pending_pl_count: sinPlDelPeriodo.length,
+    /** "July 2026". La pantalla lo enseña junto al filtro de periodo. */
+    pl_loaded_through: plCoverage.label,
   };
 
   // The same tallies this endpoint already computes, without the rows and the

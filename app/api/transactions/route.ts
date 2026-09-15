@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { getClosedLoans } from "@/lib/loan-source";
 import type { TransactionFilters, TransactionsResponse } from "@/types";
 
 const PAGE_SIZE = 100;
@@ -19,19 +20,28 @@ async function enrichWithLoanTags(supabase: ReturnType<typeof createServerClient
   const loanNumbers = [...new Set(rows.map((r) => r.loan_number as string | null).filter((n): n is string => !!n))];
   if (loanNumbers.length === 0) return rows;
 
-  const { data: officials } = await supabase
-    .from("loan_officials")
-    .select("loan_number,b2b,processing,support_on_demand,affinity,recruitment")
-    .in("loan_number", loanNumbers);
+  /*
+   * Las etiquetas, del espejo. Antes salian de columnas del archivo; ahora las
+   * tres manuales vienen de loan_manual_flags --que no se toca-- y affinity y
+   * recruitment de `strategy`, que es donde Salesforce las dice.
+   *
+   * Solo se etiquetan prestamos CERRADOS que cuentan para la division, que es
+   * lo mismo que hacia el archivo: no traia otros.
+   */
+  const pedidos = new Set(loanNumbers);
+  const cerrados = (await getClosedLoans()).filter((l) => pedidos.has(l.loanNumber));
 
   const tagMap = new Map<string, LoanTags>();
-  for (const lo of officials ?? []) {
-    tagMap.set(lo.loan_number as string, {
-      b2b: lo.b2b as boolean,
-      processing: lo.processing as boolean,
-      support_on_demand: lo.support_on_demand as boolean,
-      affinity: lo.affinity as boolean,
-      recruitment: lo.recruitment as boolean,
+  for (const l of cerrados) {
+    tagMap.set(l.loanNumber, {
+      // Sin fila de flags cuenta como no marcado, igual que el booleano del
+      // archivo: aqui la ausencia y el "no" se ven igual porque la etiqueta es
+      // una marca, no una afirmacion sobre el prestamo.
+      b2b: l.b2bManual === true,
+      processing: l.processing === true,
+      support_on_demand: l.supportOnDemand === true,
+      affinity: l.strategy === "Affinity",
+      recruitment: l.strategy === "Recruitment",
     });
   }
 

@@ -1,7 +1,7 @@
 import { readSheetRaw } from "@/lib/excel-utils";
-import type { LoanOfficial } from "@/types";
+import type { LoanOfficialFileRow } from "@/types";
 
-type ParsedLoanRow = Omit<LoanOfficial, "id" | "created_at" | "updated_at">;
+type ParsedLoanRow = Omit<LoanOfficialFileRow, "id" | "created_at" | "updated_at">;
 
 function trimStr(v: unknown): string {
   if (v === null || v === undefined) return "";

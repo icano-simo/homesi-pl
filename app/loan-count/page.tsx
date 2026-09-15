@@ -8,12 +8,40 @@ import { resolveLoanBranchAlias } from "@/lib/loan-branch";
 import type { LoanOfficial } from "@/types";
 import { LoanValidationTab } from "./loan-validation-tab";
 
+/**
+ * Las tres que son una opinion de alguien de la casa.
+ *
+ * Viven en `loan_manual_flags`, se llavean por `loan_number` y son lo unico que
+ * esta pantalla escribe.
+ */
 const BOOL_FIELDS: { key: keyof LoanOfficial; label: string }[] = [
-  { key: "affinity",          label: "Affinity" },
   { key: "b2b",               label: "B2B" },
   { key: "support_on_demand", label: "Support on demand" },
   { key: "processing",        label: "Processing" },
-  { key: "recruitment",       label: "Recruitment" },
+];
+
+/**
+ * Las que AFIRMA EL ORIGEN. Se enseñan y no se editan.
+ *
+ * ⚠ ERAN CASILLAS Y HAN DEJADO DE SERLO, y conviene saber por que antes de
+ * echarlas de menos. `affinity` y `recruitment` salen de `strategy`, que es la
+ * clasificacion de Salesforce; `lead_source` sale de Encompass. Medido sobre los
+ * 433 prestamos presentes en el archivo y en el espejo: affinity daba CERO
+ * diferencias con la casilla que se editaba a mano -- nadie la estaba usando
+ * para decir nada distinto.
+ *
+ * Darles una casilla contra `loan_manual_flags` seria escribir en el vacio: esa
+ * tabla no tiene columna para ellas. Darsela con columna nueva seria crear una
+ * segunda opinion sobre algo que el origen ya afirma, que es el patron que este
+ * modulo lleva tiempo desmontando.
+ *
+ * Donde SI hubo dos opiniones no se pierde nada: recruitment tenia dos
+ * diferencias y las dos salen ahora como discrepancia marcada, que se ve mas
+ * que una casilla que alguien cambio una vez.
+ */
+const DERIVED_FIELDS: { key: keyof LoanOfficial; label: string; origen: string }[] = [
+  { key: "affinity",    label: "Affinity",    origen: "Salesforce strategy" },
+  { key: "recruitment", label: "Recruitment", origen: "Salesforce strategy" },
 ];
 
 const CSV_COLUMNS = [
@@ -238,21 +266,21 @@ export default function LoanCountPage() {
   }, [pendingChanges]);
 
   async function handleUpdate(loan: LoanOfficial, field: keyof LoanOfficial, newValue: boolean | string | null) {
-    setSaving((prev) => ({ ...prev, [loan.id]: true }));
+    setSaving((prev) => ({ ...prev, [loan.loan_number]: true }));
     setSaveErr("");
     try {
-      const res = await fetch(`/api/loan-officials/${loan.id}`, {
+      const res = await fetch(`/api/loan-officials/${loan.loan_number}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [field]: newValue }),
       });
       const json = await res.json();
       if (!res.ok) { setSaveErr(json.error ?? "Failed to save"); return; }
-      setLoans((prev) => prev.map((l) => l.id === loan.id ? { ...l, ...json } : l));
+      setLoans((prev) => prev.map((l) => l.loan_number === loan.loan_number ? { ...l, ...json } : l));
     } catch (err) {
       setSaveErr(String(err));
     } finally {
-      setSaving((prev) => ({ ...prev, [loan.id]: false }));
+      setSaving((prev) => ({ ...prev, [loan.loan_number]: false }));
     }
   }
 
@@ -274,8 +302,8 @@ export default function LoanCountPage() {
         })
       );
       setLoans((prev) => {
-        const byId = new Map(updates.map((u) => [u.id, u]));
-        return prev.map((l) => byId.get(l.id) ?? l);
+        const byId = new Map(updates.map((u) => [u.loan_number, u]));
+        return prev.map((l) => byId.get(l.loan_number) ?? l);
       });
       setPendingChanges({});
     } catch (err) {
@@ -570,6 +598,27 @@ export default function LoanCountPage() {
               </>
             )}
           </div>
+
+          {/*
+            * ⚠ TRES CLASIFICACIONES QUE EXISTEN Y NO APLICAN.
+            *
+            * `loan_manual_flags` tiene 247 filas y solo 244 cuentan aqui. Las
+            * tres que faltan son HELOC de segundo gravamen --una de Luis Silva,
+            * dos de Haydee Tito-Pace-- que `counts_for_division` excluye porque
+            * le suman al loan officer y no a la division.
+            *
+            * Se dice en voz alta porque un 247 que pasa a 244 sin explicacion es
+            * como se pierde la confianza en un numero: quien los contara por su
+            * cuenta encontraria tres de menos y no sabria si faltan o sobran.
+            * Su clasificacion no se ha perdido ni esta mal; el prestamo es el
+            * que no cuenta.
+            */}
+          <p className="text-[11px] text-gray-500">
+            Three manual classifications are not shown here: they belong to
+            second-lien HELOCs, which count towards the loan officer but not
+            towards the division. The classifications are intact — the loans are
+            out of scope, not the labels.
+          </p>
         </div>
       )}
 
@@ -638,18 +687,69 @@ export default function LoanCountPage() {
                     {f.label}
                   </th>
                 ))}
+                {/* Las derivadas van al lado y en gris: se leen igual, no se
+                    tocan, y la diferencia tiene que verse sin pasar el raton. */}
+                {DERIVED_FIELDS.map((f) => (
+                  <th
+                    key={f.key}
+                    className="px-3 py-2.5 font-normal text-center whitespace-nowrap text-gray-400"
+                    title={"From " + f.origen + " — not set by hand"}
+                  >
+                    {f.label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {displayedLoans.map((loan) => {
-                const pending = pendingChanges[loan.id];
+                const pending = pendingChanges[loan.loan_number];
                 return (
-                <tr key={loan.id} className={`border-b border-gray-50 hover:bg-gray-50/60 ${pending ? "bg-amber-50/30" : ""}`}>
+                <tr key={loan.loan_number} className={`border-b border-gray-50 hover:bg-gray-50/60 ${pending ? "bg-amber-50/30" : ""}`}>
                   <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
                     {loan.month ?? "—"}{loan.year ? ` ${loan.year}` : ""}
                   </td>
                   <td className="px-3 py-2 font-mono text-gray-800 whitespace-nowrap">
                     {loan.loan_number}
+                    {/*
+                      * ⚠ DOS MARCAS DISTINTAS, Y LA DIFERENCIA ES EL PUNTO.
+                      *
+                      * "unreviewed" son 16 prestamos que Salesforce clasifica
+                      * B2B y que NADIE ha mirado: no hay dos opiniones, hay una.
+                      * Es cola de trabajo, y se vacia sola segun se clasifiquen.
+                      *
+                      * "disputed" es que alguien SI miro y dijo lo contrario.
+                      * Sobre los 494 hay 23, y el caso que lo explica es
+                      * 747002052489 de Gian Laino: el archivo lo marcaba
+                      * recruitment y Salesforce dice B2B -- coherente en dos
+                      * campos a la vez, o sea una disputa de clasificacion de
+                      * verdad y no un despiste de captura.
+                      *
+                      * Enseñarlas igual enterraria la segunda entre las
+                      * primeras, que es justo al reves de lo que valen: una
+                      * pide trabajo, la otra pide criterio.
+                      */}
+                    {loan.b2b_disputed && (
+                      <span
+                        className="ml-1.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-700"
+                        title={
+                          "Two opinions disagree. Salesforce classifies this loan as " +
+                          (loan.b2b_salesforce ? "B2B" : "not B2B") +
+                          "; someone here marked it as " +
+                          (loan.b2b ? "B2B" : "not B2B") +
+                          ". Somebody looked and said otherwise — worth reading before changing."
+                        }
+                      >
+                        disputed
+                      </span>
+                    )}
+                    {loan.b2b_unclassified && (
+                      <span
+                        className="ml-1.5 rounded bg-sky-100 px-1 py-0.5 text-[10px] font-medium text-sky-700"
+                        title="Salesforce classifies this loan as B2B and nobody has reviewed it yet. Not a disagreement — a queue."
+                      >
+                        unreviewed
+                      </span>
+                    )}
                   </td>
                   <td className="max-w-[180px] truncate px-3 py-2 font-medium text-gray-800">
                     {loan.borrower_name ?? "—"}
@@ -658,11 +758,11 @@ export default function LoanCountPage() {
                     {loan.loan_officer ?? "—"}
                   </td>
                   <td className="max-w-[120px] px-3 py-2 text-gray-600">
-                    <TextCell
-                      value={loan.lead_source_lo}
-                      onSave={(v) => handleUpdate(loan, "lead_source_lo", v)}
-                      disabled={!!saving[loan.id] || isSavingAll}
-                    />
+                    {/* Ya no se edita: sale de Encompass. Editarlo escribiria
+                        en una columna que ninguna pantalla lee. */}
+                    <span title="From Encompass — not set by hand">
+                      {loan.lead_source_lo ?? "—"}
+                    </span>
                   </td>
                   <td className="max-w-[150px] truncate px-3 py-2 text-gray-600" title={loan.loan_program ?? undefined}>
                     {loan.loan_program ?? "—"}
@@ -681,12 +781,18 @@ export default function LoanCountPage() {
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {fmt(loan.loan_amount)}
                   </td>
-                  <td className="max-w-[120px] px-3 py-2 text-gray-600">
-                    <TextCell
-                      value={loan.bd_owner}
-                      onSave={(v) => handleUpdate(loan, "bd_owner", v)}
-                      disabled={!!saving[loan.id] || isSavingAll}
-                    />
+                  <td className="max-w-[120px] truncate px-3 py-2 text-gray-600">
+                    {/*
+                      * Deja de editarse y sale del espejo. Se midio antes de
+                      * darlo por equivalente: de los 92 cierres donde las dos
+                      * fuentes lo traen, 86 coinciden y los 6 que no son
+                      * reasignaciones que el archivo no recogio -- lleva tres
+                      * semanas parado. O sea que el espejo no solo lo tiene:
+                      * lo tiene mejor.
+                      */}
+                    <span title="From the mirror — not set by hand">
+                      {loan.bd_owner ?? "—"}
+                    </span>
                   </td>
                   {BOOL_FIELDS.map((f) => (
                     <td key={f.key} className="px-3 py-2 text-center">
@@ -695,11 +801,16 @@ export default function LoanCountPage() {
                         onChange={(v) => {
                           setPendingChanges((prev) => ({
                             ...prev,
-                            [loan.id]: { ...(prev[loan.id] ?? {}), [f.key]: v },
+                            [loan.loan_number]: { ...(prev[loan.loan_number] ?? {}), [f.key]: v },
                           }));
                         }}
                         disabled={isSavingAll}
                       />
+                    </td>
+                  ))}
+                  {DERIVED_FIELDS.map((f) => (
+                    <td key={f.key} className="px-3 py-2 text-center text-gray-400">
+                      {loan[f.key] ? "Yes" : "—"}
                     </td>
                   ))}
                 </tr>
