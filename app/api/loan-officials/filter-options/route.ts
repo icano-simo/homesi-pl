@@ -1,34 +1,42 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase-server";
+import { getClosedLoans } from "@/lib/loan-source";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const supabase = createServerClient();
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
 
-  // Paginated for the same reason the list is: an option missing from a
-  // dropdown because the fetch stopped at 1000 rows looks exactly like a filter
-  // that does not work.
-  const PAGE = 1000;
-  const data: Array<{ month: string | null; year: number | null }> = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data: rows, error } = await supabase
-      .from("loan_officials")
-      .select("month,year")
-      .order("year")
-      .order("month")
-      .range(from, from + PAGE - 1);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    if (!rows || rows.length === 0) break;
-    data.push(...rows);
-    if (rows.length < PAGE) break;
+/*
+ * Los periodos que la pantalla puede ofrecer.
+ *
+ * Del espejo, y eso tiene una consecuencia visible: aparecen August y September
+ * 2026, que el archivo no tenia. Sin esto, la pantalla habria seguido sin
+ * ofrecer los dos meses mas recientes -- y un mes que falta en un desplegable no
+ * se lee como "no esta cargado", se lee como "no hubo cierres".
+ *
+ * Ya no hace falta paginar a mano: getClosedLoans lo hace, por la misma razon
+ * que lo hacia esta ruta -- una opcion que falta porque el fetch se corto a las
+ * 1000 filas es indistinguible de un filtro que no funciona.
+ */
+export async function GET() {
+  const cerrados = await getClosedLoans();
+
+  const meses = new Set<string>();
+  const anios = new Set<number>();
+  for (const l of cerrados) {
+    const [y, m] = (l.closingMonth ?? "").split("-");
+    const mes = m ? MONTH_NAMES[Number(m) - 1] : null;
+    if (mes) meses.add(mes);
+    if (Number(y)) anios.add(Number(y));
   }
 
-  const months = [...new Set((data ?? []).map((r: { month: string | null }) => r.month).filter(Boolean))] as string[];
-  const years = [...new Set((data ?? []).map((r: { year: number | null }) => r.year).filter((y) => y != null))] as number[];
+  // En orden de calendario, no de aparicion: el desplegable los enseña asi.
+  const months = MONTH_NAMES.filter((m) => meses.has(m));
+  const years = [...anios].sort((a, b) => a - b);
 
-  // Ya no devuelve branches: su unico consumidor era el desplegable Branch de la
-  // barra de Loan Validation, que se fue con la pestaña B2B. Devolverlo sin que
-  // nadie lo lea es traer una columna mas de 436 filas para tirarla.
+  // No devuelve branches: su unico consumidor era el desplegable Branch de la
+  // barra de Loan Validation, que se fue con la pestaña B2B.
   return NextResponse.json({ months, years });
 }

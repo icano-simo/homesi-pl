@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase-server";
+import { getClosedLoans } from "@/lib/loan-source";
+
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
 
 export type LoanOfficialSearchResult = {
   loan_number: string;
@@ -19,25 +24,35 @@ export async function GET(req: NextRequest) {
     return NextResponse.json([]);
   }
 
-  const supabase = createServerClient();
+  /*
+   * Busca en el espejo, no en el archivo. Importa aqui mas que en otras rutas:
+   * esta es la que usa el buscador de Transactions para resolver un numero de
+   * prestamo a mano, y contra el archivo NO ENCONTRARIA los cierres de agosto y
+   * septiembre -- devolveria "no existe" de prestamos que si existen, que es
+   * peor que no tener buscador.
+   */
+  const cerrados = await getClosedLoans();
 
-  let query = supabase
-    .from("loan_officials")
-    .select("loan_number,borrower_name,loan_officer,month,year")
-    .limit(limit);
+  const coincide = (l: { loanNumber: string; borrowerName: string | null }) => {
+    if (prefix) return l.loanNumber.toLowerCase().startsWith(prefix.toLowerCase());
+    if (/^\d+$/.test(q)) return l.loanNumber.toLowerCase().startsWith(q.toLowerCase());
+    return (l.borrowerName ?? "").toLowerCase().includes(q.toLowerCase());
+  };
 
-  if (prefix) {
-    // Prefix match: used for ambiguous candidates
-    query = query.ilike("loan_number", `${prefix}%`);
-  } else if (/^\d+$/.test(q)) {
-    // Numeric query → search by loan_number prefix
-    query = query.ilike("loan_number", `${q}%`);
-  } else {
-    // Text query → search by borrower name
-    query = query.ilike("borrower_name", `%${q}%`);
-  }
+  const out: LoanOfficialSearchResult[] = cerrados
+    .filter(coincide)
+    .sort((a, b) => a.loanNumber.localeCompare(b.loanNumber))
+    .slice(0, limit)
+    .map((l) => {
+      const [y, m] = (l.closingMonth ?? "").split("-");
+      return {
+        loan_number: l.loanNumber,
+        borrower_name: l.borrowerName,
+        loan_officer: l.loanOfficer,
+        month: m ? MONTH_NAMES[Number(m) - 1] ?? null : null,
+        year: Number(y) || null,
+      };
+    });
 
-  const { data, error } = await query.order("loan_number");
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json((data ?? []) as LoanOfficialSearchResult[]);
+  return NextResponse.json(out);
 }

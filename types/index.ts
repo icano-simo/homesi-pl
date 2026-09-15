@@ -426,7 +426,19 @@ export interface SplitRuleWithDetails extends SplitRule {
 
 // ─── Loan Officials ───────────────────────────────────────────────────────────
 
-export interface LoanOfficial {
+/**
+ * Una fila del ARCHIVO que se sube a mano, tal como vive en
+ * `finance_division.loan_officials`.
+ *
+ * ⚠ ESTO YA NO ALIMENTA NINGUNA PANTALLA. El archivo se conserva como respaldo
+ * --el espejo depende de que Salesforce sincronice, y eso estuvo parado tres
+ * dias este mes-- y solo lo escriben la subida y el borrado de un periodo. Lo
+ * que las pantallas leen es `LoanOfficial`, que sale del espejo.
+ *
+ * Existe aparte precisamente para que las dos formas no se confundan: tienen
+ * columnas distintas y responden preguntas distintas.
+ */
+export interface LoanOfficialFileRow {
   id: string;
   loan_number: string;
   borrower_name: string | null;
@@ -451,6 +463,59 @@ export interface LoanOfficial {
   year: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Un prestamo cerrado tal como lo enseña la pantalla de clasificacion.
+ *
+ * ⚠ YA NO ES UNA FILA DE `finance_division.loan_officials`, pese al nombre. Sale
+ * del espejo --activity_report.loan_records_v2-- cruzado con las clasificaciones
+ * manuales. El nombre se conserva porque lo usan varias pantallas y renombrarlo
+ * es un cambio aparte.
+ *
+ * ⚠ SIN `id`. La identidad es `loan_number`, y eso no es cosmetico: el archivo
+ * tenia un uuid por fila y el espejo no, asi que los cierres que el archivo no
+ * traia --61 el 2026-09-15-- no tenian forma de ser nombrados. Con loan_number
+ * se pueden clasificar como cualquier otro.
+ *
+ * Fuera tambien `manually_edited_fields`: era una lista de columnas tocadas a
+ * mano dentro del archivo, y las clasificaciones ya no viven ahi.
+ */
+export interface LoanOfficial {
+  /** La identidad. No hay id. */
+  loan_number: string;
+  borrower_name: string | null;
+  loan_officer: string | null;
+  loan_info_channel: string | null;
+  branch: string | null;
+  loan_amount: number | null;
+  loan_program: string | null;
+  month: string | null;
+  year: number | null;
+
+  /**
+   * Las tres que se editan, en `loan_manual_flags`.
+   *
+   * NULL es "nadie lo ha mirado" y NO es `false`: 247 de los 494 cierres tienen
+   * fila de clasificacion, el resto no. Un false donde deberia haber null
+   * convierte una ausencia en una afirmacion.
+   */
+  b2b: boolean | null;
+  processing: boolean | null;
+  support_on_demand: boolean | null;
+
+  /** Lo que afirma el origen. Se lee, no se edita. */
+  strategy: string | null;
+  affinity: boolean;
+  recruitment: boolean;
+  /** De Encompass. Conserva el nombre viejo para no tocar cinco pantallas. */
+  lead_source_lo: string | null;
+
+  /** Salesforce dice B2B y nadie lo ha clasificado todavia. Cola de trabajo. */
+  b2b_unclassified: boolean;
+  /** Hay clasificacion manual y afirma lo contrario que Salesforce. */
+  b2b_disputed: boolean;
+  b2b_salesforce: boolean;
 }
 
 export interface UploadLoanCountResponse {
