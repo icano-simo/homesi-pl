@@ -108,6 +108,12 @@ export async function GET(req: NextRequest) {
          * afirmando un BD que no es el del prestamo.
          */
         bd_owner: l.bdOwner,
+        /*
+         * Por que esta vacio, cuando lo esta. "no_bd" es que se comprobo y no
+         * lo es; "sin_titulo" es que no se pudo comprobar -- el directorio de
+         * RRHH no tiene el cargo. Se pintan igual y NO se cuentan igual.
+         */
+        bd_owner_status: l.bdOwnerStatus,
 
         /** Salesforce dice B2B y nadie lo ha clasificado. Cola de trabajo. */
         b2b_unclassified: l.b2bSinClasificar,
