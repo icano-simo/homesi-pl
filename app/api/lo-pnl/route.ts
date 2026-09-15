@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { MARGIN_ALL_GL_LIST } from "@/lib/loan-detail-accounts";
 import { closePeriod } from "@/lib/close-period";
-import { getClosedLoans } from "@/lib/loan-source";
+import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   findCollapsedPairs,
   findSplitByShape,
@@ -18,6 +18,11 @@ import {
 } from "@/lib/lo-payroll-name";
 
 export const dynamic = "force-dynamic";
+
+const MESES_NOMBRE = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
 
 /*
  * ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +233,26 @@ export interface LoanRow {
   commission: number | null;
   /** margin + other - commission. Null si la comision no se conoce. */
   net: number | null;
+  /**
+   * Su mes de cierre no tiene P&L cargado todavia.
+   *
+   * ⚠ ESO NO ES "NO TIENE P&L": ES P&L PARCIAL, y la distincion es la que
+   * decide como se trata. El coste de originacion se contabiliza al ABRIR el
+   * expediente y el margen al CERRAR el mes, asi que un cierre de agosto ya
+   * puede llevar semanas con coste apuntado en julio mientras su ingreso no ha
+   * llegado.
+   *
+   * Medido el 2026-09-15 sobre los 61 cierres de agosto y septiembre: CATORCE
+   * ya tienen filas, todas de julio y todas coste -- U/W - TALX 1.984,49 en doce
+   * prestamos y Loan Setup 375,00 en tres, 2.359,49 en total, repartido entre
+   * diez loan officers.
+   *
+   * Por eso NO se excluyen enteros del bloque 1: eso borraria un coste real que
+   * ya ocurrio. Y por eso tampoco se dejan dentro del neto: mostrarian coste sin
+   * su ingreso, que se lee como perdida de alguien que todavia no ha cobrado.
+   * Van aparte, con su coste a la vista.
+   */
+  plPending: boolean;
   lines: LoanLine[];
 }
 
@@ -267,6 +292,23 @@ export interface OfficerBlock {
   block1Commission: number;
   /** Prestamos cuya comision no cruzo. Se dice; no se cuenta como cero. */
   loansWithoutCommission: number;
+  /**
+   * Cierres cuyo mes no tiene P&L cargado. FUERA de block1Net y del total.
+   *
+   * ⚠ EL CONTADOR TIENE QUE DECIR LAS DOS COSAS, no solo cuantos son:
+   * "2 closings pending P&L - 593 already booked, margin not yet loaded".
+   * Uno que solo diga "2 pendientes" esconde que ya hay coste real apuntado, y
+   * entonces el lector supone que no hay nada y se lleva una sorpresa cuando
+   * cargue el mes.
+   */
+  loansPendingPl: number;
+  /**
+   * Coste de originacion YA contabilizado de esos cierres. Negativo.
+   *
+   * No es cero casi nunca: U/W - TALX y Loan Setup se apuntan al abrir el
+   * expediente. Medido el 2026-09-15: 2.359,49 entre diez loan officers.
+   */
+  pendingPlBooked: number;
   block1Net: number;
 
   // ── Bloque 2 ──
@@ -389,13 +431,30 @@ export async function GET(req: NextRequest) {
    * de lo que sigue cambia. El filtro de "que cuenta" --is_closed AND
    * counts_for_division-- vive en lib/loan-source y no se reescribe aqui.
    */
-  const officials = (await getClosedLoans({ month, year })).map((l) => ({
+  const [cerrados, plCoverage] = await Promise.all([
+    getClosedLoans({ month, year }),
+    getPlCoverage(),
+  ]);
+
+  /*
+   * El mes real de cierre de cada prestamo, que NO es el `month` de la consulta:
+   * con `all=1` ese viene null, y hace falta para saber si su P&L esta cargado.
+   */
+  const cierreMes = new Map<string, string | null>();
+  const cierreAnio = new Map<string, number | null>();
+  for (const l of cerrados) {
+    const [y, m] = (l.closingMonth ?? "").split("-");
+    cierreMes.set(l.loanNumber, m ? MESES_NOMBRE[Number(m) - 1] ?? null : null);
+    cierreAnio.set(l.loanNumber, Number(y) || null);
+  }
+
+  const officials = cerrados.map((l) => ({
     loan_number: l.loanNumber,
     loan_officer: l.loanOfficer,
     branch: l.branch,
     loan_amount: l.loanAmount,
-    month,
-    year,
+    month: cierreMes.get(l.loanNumber) ?? null,
+    year: cierreAnio.get(l.loanNumber) ?? null,
   }));
 
   const loanNumbers = [
@@ -553,14 +612,47 @@ export async function GET(req: NextRequest) {
         other,
         commission,
         net: commission == null ? null : margin + other - commission,
+        // Su mes de cierre no tiene P&L. Puede tener coste apuntado igual: ver
+        // la nota en LoanRow.plPending.
+        plPending: !plPeriodLoaded(plCoverage, cierreMes.get(ln) ?? null, cierreAnio.get(ln) ?? null),
         lines: detail,
       };
     });
 
-    const block1Margin = loans.reduce((s, l) => s + l.margin, 0);
-    const block1Other = loans.reduce((s, l) => s + l.other, 0);
-    const block1Commission = loans.reduce((s, l) => s + (l.commission ?? 0), 0);
-    const loansWithoutCommission = loans.filter((l) => l.commission == null).length;
+    /*
+     * ⚠ LOS CIERRES CUYO MES NO TIENE P&L NO ENTRAN EN EL BLOQUE 1, y esto no
+     * es lo mismo que decir que no tienen P&L.
+     *
+     * El coste de originacion --U/W - TALX, Loan Setup-- se contabiliza al
+     * ABRIR el expediente; el margen, al cerrar el mes. Asi que un cierre de
+     * agosto puede llevar ya un coste apuntado en julio mientras su ingreso
+     * todavia no ha llegado. Medido el 2026-09-15: de los 61 cierres de agosto y
+     * septiembre, CATORCE ya tienen filas --2.359,49 de coste, entre diez loan
+     * officers-- y los otros 47 ninguna.
+     *
+     * Las dos salidas obvias mienten, cada una en un sentido:
+     *
+     *   excluirlos enteros   borra 2.359,49 de coste que SI ocurrio
+     *   dejarlos en el neto  enseña coste sin su ingreso, y eso se lee como
+     *                        que esa persona pierde dinero
+     *
+     * Por eso van APARTE: fuera del neto, con su conteo y con su coste ya
+     * contabilizado a la vista. No se borra nada y no se mezcla nada.
+     *
+     * ⚠ SUS CIERRES Y SU VOLUMEN SI CUENTAN. El prestamo se cerro y su importe
+     * es real; lo unico que falta es el margen. Sacarlos tambien de loanCount
+     * diria que esa persona cerro menos de lo que cerro.
+     */
+    const evaluables = loans.filter((l) => !l.plPending);
+    const pendientes = loans.filter((l) => l.plPending);
+
+    const block1Margin = evaluables.reduce((s, l) => s + l.margin, 0);
+    const block1Other = evaluables.reduce((s, l) => s + l.other, 0);
+    const block1Commission = evaluables.reduce((s, l) => s + (l.commission ?? 0), 0);
+    const loansWithoutCommission = evaluables.filter((l) => l.commission == null).length;
+
+    /** Coste ya apuntado de los pendientes. Negativo, y no entra en el total. */
+    const pendingPlBooked = pendientes.reduce((s, l) => s + l.margin + l.other, 0);
 
     /*
      * ⚠ LA COMISION NO SE RESTA AQUI, Y ESTO SE MIDIO ANTES DE DECIDIRLO.
@@ -662,6 +754,8 @@ export async function GET(req: NextRequest) {
       personCode: persona?.personCode ?? null,
       branch: (filas[0]?.branch as string | null) ?? null,
       loans,
+      loansPendingPl: pendientes.length,
+      pendingPlBooked,
       loanCount: loans.length,
       volume: loans.reduce((s, l) => s + (l.loan_amount ?? 0), 0),
       block1Margin,
@@ -703,6 +797,9 @@ export async function GET(req: NextRequest) {
       branch: null,
       loans: [],
       loanCount: 0,
+      // Sin cierres no puede haber ninguno pendiente de P&L.
+      loansPendingPl: 0,
+      pendingPlBooked: 0,
       volume: 0,
       block1Margin: 0,
       block1Other: 0,
