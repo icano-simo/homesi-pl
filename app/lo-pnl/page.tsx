@@ -343,10 +343,19 @@ export default function LoPnlPage() {
                               no payroll
                             </Marca>
                           )}
+                          {/*
+                            * "counted", no "found", y la palabra es la marca.
+                            * Susan Aguilar y Silvio Arteaga SI tienen filas de
+                            * nomina --3 y 2-- pero por formas fragiles que
+                            * quedan fuera del total. "No encontrada" seria
+                            * falso de ellas; "no contada" es cierto de las
+                            * tres, y es lo que el lector necesita saber: el
+                            * total miente sobre esta persona.
+                            */}
                           {o.commissionOutsidePayroll && (
                             <Marca tono="ambar"
-                              title="Has commission in Compensafe but no row in any compensation account. Their cost is understated here.">
-                              comp not in payroll
+                              title="Commission was recorded for this person, but no payroll is counted in their total — either none was found, or what was found came through description shapes too weak to include. Their cost here is understated.">
+                              no payroll counted
                             </Marca>
                           )}
                           {o.payrollStatus === "fragile_only" && (
@@ -437,9 +446,10 @@ export default function LoPnlPage() {
 
                 {fueraDeNomina.length > 0 && (
                   <div>
-                    <span className="font-semibold text-gray-700">Commission outside payroll.</span>{" "}
-                    {fueraDeNomina.map((o) => o.name).join(", ")} earned commission but has no row in any
-                    compensation account, so their cost here is understated by{" "}
+                    <span className="font-semibold text-gray-700">Commission recorded, no payroll counted.</span>{" "}
+                    {fueraDeNomina.map((o) => o.name).join(", ")} earned commission, but nothing reaches
+                    their payroll total — either no row carries their name, or the rows that do came through
+                    description shapes too weak to include. Their cost here is understated by{" "}
                     {usdExacto(Math.abs(data.commissionOutsidePayrollTotal))}.
                   </div>
                 )}

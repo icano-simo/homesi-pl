@@ -501,46 +501,6 @@ export async function GET(req: NextRequest) {
     porOficial.set(n, [...(porOficial.get(n) ?? []), o]);
   }
 
-  /*
-   * Quien cobra en ALGUNA cuenta de compensacion.
-   *
-   * ⚠ NO SOLO 60105, y mirar solo esa fue un error que costo una cifra entera.
-   * La primera medicion del hueco pregunto "¿tiene filas en 60105?" y dio DIEZ
-   * personas con 468.184,75 de comision invisible. Era falso: ocho de las diez
-   * son branch managers y sales managers que producen, y cobran en SU cuenta.
-   * Medido el 2026-09-14:
-   *
-   *     steve.badovinac   60115 -156.338,45 · 60304 -20.000 · 60303 -5.000
-   *     ana.pena          60115 -127.949,06 · 60112 -22.526,61 · 60303 -20.000
-   *     julymar.castro    60115 -153.589,32 · 60304 -50.000 · 60112 -25.107,69
-   *     armando.tejeda    60112  -27.890,00 · 60115 -13.310,79
-   *     mariano.claudio   60117  -34.965,96 · 60303 -16.774,02
-   *     c.velasco         60118  -81.040,36
-   *     aimmee.buendia    60118   -6.484,14
-   *     stephanie.garcia  60112   -6.000,00 · 60115 -2.689,28
-   *
-   * El hueco de verdad son DOS personas y 17.509,57 -- ver commissionOutsidePayroll.
-   */
-  const CUENTAS_COMPENSACION = [
-    "60105", // Loan Officer Payroll
-    "60112", // BM Operating Entity - Salary
-    "60115", // BM Operating Entity - Personal Production
-    "60117", // Sales Manager payroll
-    "60118", // LO Assistant payroll
-    "60126", // BM-Regional Entity Payroll
-    "60303", // Guarantee
-    "60304", // Sign-On Bonus
-    "62301", // Vision
-    "62304", // Credit From Employee Payroll Deduct
-    "62305", // Employee Insurance
-    "64100", // Payroll Tax Expense
-  ];
-  const conNomina = new Set<string>();
-  for (const t of sinPrestamo) {
-    if (!CUENTAS_COMPENSACION.includes((t.gl_code as string) ?? "")) continue;
-    const p = parseDescription((t.check_description as string) ?? "");
-    if (p.key) conNomina.add(p.key);
-  }
 
   const officers: OfficerBlock[] = [];
   const usados = new Set<string>();
@@ -633,8 +593,54 @@ export async function GET(req: NextRequest) {
     const payrollStatus: PayrollStatus =
       payroll.length > 0 ? "located" : payrollFragile.length > 0 ? "fragile_only" : "not_located";
 
-    const claves = persona?.keys ?? [normalizeName(nombre)];
-    const cobraEnNomina = claves.some((k) => conNomina.has(k));
+    /*
+     * ─────────────────────────────────────────────────────────────────────────
+     * ⚠ SI NECESITAS SABER SI ALGUIEN TIENE NOMINA, PREGUNTASELO A
+     *   `payrollStatus`. CUALQUIER OTRO CAMINO VA A FALLAR DONDE EL
+     *   EMPAREJADOR ACIERTA.
+     * ─────────────────────────────────────────────────────────────────────────
+     *
+     * Esta linea ha estado mal DOS VECES, y las dos por el mismo motivo: un
+     * atajo escrito al lado de la logica buena, que no sabe lo que ella sabe.
+     *
+     *   1ª. "¿tiene filas en 60105?" -- dio DIEZ personas con 468.184,75 de
+     *       comision invisible. Falso: ocho eran branch managers y sales
+     *       managers que cobran en SU cuenta (60112, 60115, 60117, 60118,
+     *       60126, 60303, 60304, 62301, 62304, 62305, 64100). Se arreglo
+     *       ampliando a las doce cuentas.
+     *
+     *   2ª. Un `Set` con las claves crudas de esas doce cuentas, y
+     *       `conNomina.has(k)`. Eso es igualdad exacta: sin `contained`, sin
+     *       `ends`, sin censo. Medido el 2026-09-14, marcaba a NUEVE personas
+     *       declarando 139.415 de comision sin nomina, y SEIS eran falsas --
+     *       136.419 de esos 139.415, el 98%.
+     *
+     *       Gian Laino cobra como "LAINO CHEGWIN, GIAN L", clave
+     *       "gian laino chegwin", que no esta literal entre sus claves del
+     *       censo. El Set decia que no cobraba. Tiene 177 filas de nomina y
+     *       -125.642. El emparejador lo resuelve por `contained` sin dudar.
+     *
+     * Por eso ahora se DERIVA de `payrollStatus`, que sale del mismo
+     * emparejador que decide todo lo demas. No hay una segunda respuesta a esta
+     * pregunta, y no debe haberla: el arreglo lo puede deshacer el proximo que
+     * necesite la respuesta rapido y escriba otro atajo.
+     *
+     * ⚠ `fragile_only` CUENTA COMO SIN NOMINA, y es deliberado. Susan Aguilar
+     * (3 filas, 126,00) y Silvio Arteaga (2 filas, 252,00) SI tienen filas,
+     * pero por formas de descripcion fragiles que quedan FUERA del total. La
+     * marca no dice "no la encontramos" sino "no esta contada", que es lo que
+     * hace verdadera la advertencia: su coste en el total esta subestimado
+     * igual que el de quien no tiene ninguna.
+     *
+     * ⚠ NO ES EXACTAMENTE LO MISMO QUE "cobra en una cuenta de compensacion",
+     * y se midio antes de cambiarlo. El bloque 2 cuenta lo que cuesta la
+     * persona salga de donde salga --equipo, licencias--, asi que las dos
+     * definiciones difieren en 56 de los 127 officers. Pero los 56 tienen
+     * comision CERO, asi que el marcado sale identico: los mismos tres. Es una
+     * propiedad de estos datos, no del metodo; si algun dia alguien con
+     * comision solo tuviera un Zoom atribuido, habria que volver a mirarlo.
+     */
+    const cobraEnNomina = payrollStatus === "located";
 
     officers.push({
       name: nombre,
