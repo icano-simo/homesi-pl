@@ -111,18 +111,33 @@ export interface ClosedLoan {
   supportOnDemand: boolean | null;
   processing: boolean | null;
   /**
-   * Los dos b2b dicen cosas distintas sobre este prestamo.
+   * DOS OPINIONES OPUESTAS sobre el mismo prestamo.
    *
    * ⚠ EXIGE QUE HAYA CLASIFICACION MANUAL. Sin fila de flags no hay con que
    * discrepar: que nadie lo haya clasificado no es lo mismo que haberlo
-   * clasificado como "no". Por eso salen 23 y no 39.
+   * clasificado como "no". Por eso son 23 y no 39 sobre los 494.
    *
-   * La diferencia son los 17 que solo marca Salesforce: de esos, 16 no tienen
-   * fila de flags en absoluto -- nadie los miro nunca -- y uno si. Contarlos
-   * como discrepancia mandaria a revisar 16 prestamos donde no hay dos
-   * opiniones, solo una.
+   * ⚠ Y EL CASO QUE MAS VALE ES UNO SOLO. De los 17 que solo marca Salesforce,
+   * DIECISEIS no tienen fila de flags --nadie los miro nunca, ver
+   * `b2bSinClasificar`-- y UNO si la tiene, con b2b=false. Ese unico prestamo
+   * es el unico donde alguien miro y dijo que no: vale mas que los dieciseis
+   * juntos, porque es la unica contradiccion de verdad. Mezclarlo con ellos lo
+   * entierra.
    */
   b2bDiscrepa: boolean;
+  /**
+   * Salesforce dice B2B y NADIE lo ha clasificado a mano todavia.
+   *
+   * No es una discrepancia -- no hay dos opiniones, hay una -- pero tampoco es
+   * un prestamo resuelto: es COLA DE TRABAJO, y es justo lo que la casilla de
+   * clasificacion existe para atender. Son 16 sobre los 494.
+   *
+   * Si desaparecieran dentro de "ninguno" nadie sabria que hay dieciseis
+   * prestamos que Salesforce considera B2B y que no ha revisado ni una persona.
+   * Cuando se clasifiquen pasaran a `b2bDiscrepa` o a acuerdo, y esta categoria
+   * se vaciara sola.
+   */
+  b2bSinClasificar: boolean;
   /**
    * El origen del lead, de Encompass.
    *
@@ -239,6 +254,7 @@ export async function getClosedLoans(opts: {
       processing: f ? f.processing === true : null,
       // Sin fila de flags no hay con que discrepar: null no es "no".
       b2bDiscrepa: b2bManual !== null && b2bManual !== b2bSalesforce,
+      b2bSinClasificar: b2bSalesforce && b2bManual === null,
       leadSource: (r.lead_source as string) ?? null,
     };
   });
