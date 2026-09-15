@@ -196,6 +196,80 @@ export interface ClosedLoan {
 
 type Fila = Record<string, unknown>;
 
+/** Hasta donde llega la contabilidad. Null cuando no hay ni una fila. */
+export interface PlCoverage {
+  month: string | null;
+  year: number | null;
+  /** "July 2026", o null. Para el rotulo de la pantalla. */
+  label: string | null;
+}
+
+/**
+ * El ultimo periodo con filas en `pl_transactions`.
+ *
+ * ⚠ SE DERIVA DEL DATO Y NO SE CABLEA, y ese es el punto entero. El espejo se
+ * sincroniza a diario y el P&L se carga al cerrar el mes, asi que el mes o dos
+ * mas recientes SIEMPRE van a tener cierres sin contabilidad. No es un estado
+ * transitorio que se pueda esperar a que pase: es estructural de haber
+ * conectado una fuente viva a una contabilidad mensual.
+ *
+ * Una constante aqui mentiria dentro de un mes. Derivado, el dia que alguien
+ * cargue agosto los 47 cierres pasan a evaluarse solos y el rotulo avanza sin
+ * que nadie toque nada.
+ *
+ * ⚠ LO QUE ESTO NO ES: una razon para esconder el mes. Agosto tiene 47 cierres
+ * reales y septiembre 14, y su conteo, su volumen y sus clasificaciones son
+ * validos. Lo unico que falta es el margen. Ocultar el mes entero por una
+ * columna ausente pierde todo lo demas.
+ *
+ * Se resuelve con un `count` por mes en vez de leyendo las 13.642 filas: son
+ * doce consultas de cabecera en el peor caso y ninguna trae datos.
+ */
+export async function getPlCoverage(): Promise<PlCoverage> {
+  const fd = createServerClient();
+
+  const { data: ultimo } = await fd
+    .from("pl_transactions")
+    .select("year")
+    .not("year", "is", null)
+    .order("year", { ascending: false })
+    .limit(1);
+  const year = (ultimo?.[0]?.year as number) ?? null;
+  if (!year) return { month: null, year: null, label: null };
+
+  // De diciembre hacia atras: el primero con filas es el ultimo cargado.
+  for (let i = MESES.length - 1; i >= 0; i--) {
+    const { count } = await fd
+      .from("pl_transactions")
+      .select("*", { count: "exact", head: true })
+      .eq("year", year)
+      .eq("month", MESES[i]);
+    if ((count ?? 0) > 0) {
+      return { month: MESES[i], year, label: `${MESES[i]} ${year}` };
+    }
+  }
+  return { month: null, year, label: null };
+}
+
+/**
+ * ¿La contabilidad de este periodo esta cargada?
+ *
+ * Un cierre posterior a la cobertura del P&L no puede tener margen, asi que
+ * contarlo como "sin margen" seria afirmar un hallazgo que no se ha podido
+ * medir. Quien pregunte esto NO debe recorrer `pl_transactions` por su cuenta:
+ * la regla vive aqui por lo mismo que el filtro de "que cuenta".
+ */
+export function plPeriodLoaded(
+  cobertura: PlCoverage,
+  month: string | null,
+  year: number | null,
+): boolean {
+  if (!cobertura.month || !cobertura.year) return false;
+  if (!month || !year) return false;
+  if (year !== cobertura.year) return year < cobertura.year;
+  return MESES.indexOf(month) <= MESES.indexOf(cobertura.month);
+}
+
 const MESES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",

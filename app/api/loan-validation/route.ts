@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { resolveLoanBranchAlias } from "@/lib/loan-branch";
-import { getClosedLoans } from "@/lib/loan-source";
+import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   MARGIN_ALL_GL_LIST,
   MARGIN_BRANCH_GL_CODES,
@@ -146,6 +146,10 @@ export interface ValidationResult {
     match_count: number;
     missing_count: number;
     surplus_count: number;
+    /** Cierres reales cuyo mes aun no tiene P&L. Fuera de match y de missing. */
+    pending_pl_count: number;
+    /** Hasta donde llega el P&L, derivado del dato: "July 2026". */
+    pl_loaded_through: string | null;
   };
 }
 
@@ -169,7 +173,7 @@ export async function GET(req: NextRequest) {
    * `month` y `year` salen de `closing_month`, que es un date en el espejo y
    * eran dos columnas sueltas en el archivo.
    */
-  const cerrados = await getClosedLoans();
+  const [cerrados, plCoverage] = await Promise.all([getClosedLoans(), getPlCoverage()]);
   const loRows = cerrados
     .map((l) => {
       const [y, m] = (l.closingMonth ?? "").split("-");
@@ -542,10 +546,37 @@ export async function GET(req: NextRequest) {
    * delante. Aqui la pregunta es una: el numero esta en la lista maestra o no.
    */
 
+  /*
+   * ⚠ LOS CIERRES CUYO MES NO TIENE P&L NO CUENTAN COMO "MISSING".
+   *
+   * El espejo se sincroniza a diario y el P&L se carga al cerrar el mes, asi
+   * que el mes o dos mas recientes siempre tienen cierres sin contabilidad.
+   * Medido el 2026-09-15: pl_transactions llega a July 2026 y el espejo trae 47
+   * cierres de agosto y 14 de septiembre.
+   *
+   * Contarlos como "les falta margen" seria afirmar un hallazgo que no se ha
+   * podido medir: lo que falta es el P&L del periodo, no el margen. Es lo mismo
+   * que este modulo ya evita en otros sitios -- "no localizado" no es "cero".
+   *
+   * NO se esconden ni se filtran: sus cierres son reales y su conteo, volumen y
+   * clasificaciones valen. Salen aparte, con su propio recuento, igual que las
+   * formas fragiles del modulo de LO.
+   *
+   * La cobertura se DERIVA del dato, no se cablea -- ver getPlCoverage. El dia
+   * que alguien cargue agosto, esos 47 pasan a evaluarse solos.
+   */
+  const sinPlDelPeriodo = rows.filter((r) => !plPeriodLoaded(plCoverage, r.month, r.year));
+  const sinPl = new Set(sinPlDelPeriodo.map((r) => r.loan_number));
+  const evaluables = rows.filter((r) => !sinPl.has(r.loan_number));
+
   const summary = {
-    match_count: rows.filter((r) => r.status === "match").length,
-    missing_count: rows.filter((r) => r.status === "missing").length,
+    match_count: evaluables.filter((r) => r.status === "match").length,
+    missing_count: evaluables.filter((r) => r.status === "missing").length,
     surplus_count: surplus.length,
+    /** Cierres reales que todavia no se pueden evaluar. Fuera de los otros dos. */
+    pending_pl_count: sinPlDelPeriodo.length,
+    /** "July 2026". La pantalla lo enseña junto al filtro de periodo. */
+    pl_loaded_through: plCoverage.label,
   };
 
   // The same tallies this endpoint already computes, without the rows and the
