@@ -88,13 +88,29 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-gray-50">
           <tr className="text-left text-gray-500 border-b border-gray-200">
+            {/*
+              * ⚠ LAS CABECERAS DECIAN "Margin / Other / Loan net" SIN DECIR DE
+              * QUE HABLABAN, que es el mismo problema que la tabla de arriba
+              * tenia: tres columnas de dinero y ninguna explicando la siguiente.
+              *
+              * Aqui SI se detalla por prestamo --es donde tiene sentido-- pero
+              * cada columna dice que pregunta contesta.
+              */}
             <th className="px-3 py-1.5 font-medium">Loan</th>
-            <th className="px-3 py-1.5 font-medium">Period</th>
-            <th className="px-3 py-1.5 font-medium text-right">Amount</th>
-            <th className="px-3 py-1.5 font-medium text-right">Margin</th>
-            <th className="px-3 py-1.5 font-medium text-right">Other</th>
-            <th className="px-3 py-1.5 font-medium text-right">Loan net</th>
-            <th className="px-3 py-1.5 font-medium text-right">LO commission</th>
+            <th className="px-3 py-1.5 font-medium">Closed</th>
+            <th className="px-3 py-1.5 font-medium text-right">Loan amount</th>
+            <th className="px-3 py-1.5 font-medium text-right" title="The five margin accounts, same definition as Loan Validation.">
+              Margin earned
+            </th>
+            <th className="px-3 py-1.5 font-medium text-right" title="Everything else booked against this loan: lender credits, cures, processing fees.">
+              Other loan costs
+            </th>
+            <th className="px-3 py-1.5 font-medium text-right" title="Margin earned plus other loan costs. What this one loan left.">
+              What it left
+            </th>
+            <th className="px-3 py-1.5 font-medium text-right" title="Paid to the loan officer for this loan, from Compensafe.">
+              Paid to the LO
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -357,16 +373,28 @@ export default function LoPnlPage() {
                   <th className="px-3 py-2 font-medium">Loan Officer</th>
                   <th className="px-3 py-2 font-medium text-right">Loans</th>
                   <th className="px-3 py-2 font-medium text-right">Volume</th>
-                  <th className="px-3 py-2 font-medium text-right" title="Margin plus other loan income and costs, for the loans they closed.">
+                  {/*
+                    * ⚠ LAS CUATRO SE LEEN COMO UNA CUENTA, DE IZQUIERDA A
+                    * DERECHA, Y CADA UNA SE RECONSTRUYE DE LAS DE AL LADO.
+                    *
+                    * Antes habia tres columnas de dinero y ninguna decia de
+                    * donde salia la siguiente: Gian Laino producia 22.469,
+                    * costaba 16.919, y el neto ponia 5.551 sin que se viera la
+                    * resta. Los signos van en la cabecera porque son parte de
+                    * la cuenta, no decoracion.
+                    */}
+                  <th className="px-3 py-2 font-medium text-right" title="What their closed loans left: margin plus other loan income and costs.">
                     Produced
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="Paid to this person per loan, from Compensafe. Shown for reference: it is NOT subtracted here, because the same money is already inside payroll.">
-                    Paid on loans
+                  <th className="px-3 py-2 font-medium text-right" title="What they were paid for closing them, from Compensafe. This comes out of payroll, it is not on top of it.">
+                    − Commission
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="Everything paid to this person that does not hang off a loan: salary, bonus, taxes, insurance, equipment.">
-                    Cost
+                  <th className="px-3 py-2 font-medium text-right" title="The rest of their payroll: salary, bonus, taxes, insurance, equipment. Payroll minus the commission above.">
+                    − Other cost
                   </th>
-                  <th className="px-3 py-2 font-medium text-right">Net</th>
+                  <th className="px-3 py-2 font-medium text-right" title="Produced minus commission minus other cost.">
+                    = Net
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -434,7 +462,7 @@ export default function LoPnlPage() {
                           {o.loanCount > 0 && o.payrollStatus === "not_located" && (
                             <Marca tono="ambar"
                               title="No payroll row anywhere in the P&L carries this name. This is not a zero: it is an absence, and it is the finding this module exists to surface.">
-                              no payroll
+                              no payroll found for this person
                             </Marca>
                           )}
                           {/*
@@ -449,36 +477,52 @@ export default function LoPnlPage() {
                           {o.commissionOutsidePayroll && (
                             <Marca tono="ambar"
                               title="Commission was recorded for this person, but no payroll is counted in their total — either none was found, or what was found came through description shapes too weak to include. Their cost here is understated.">
-                              no payroll counted
+                              commission recorded, no payroll counted
                             </Marca>
                           )}
                           {o.payrollStatus === "fragile_only" && (
                             <Marca title="Only found through less reliable description shapes. Shown in the detail, outside the total.">
-                              weak match
+                              payroll matched with low confidence
                             </Marca>
                           )}
                           {o.loanCount === 0 && (
-                            <Marca title="Payroll but no closings in this period.">no closings</Marca>
+                            <Marca title="This person has payroll but closed no loans in this period.">payroll, no closings</Marca>
                           )}
                           {o.truncatedRows > 0 && (
                             <Marca title={`${o.truncatedRows} row(s) arrived at the 35-character limit, so the name may be cut.`}>
-                              {o.truncatedRows} truncated
+                              {o.truncatedRows} cost line{o.truncatedRows === 1 ? "" : "s"} could not be matched to a person
                             </Marca>
                           )}
                         </td>
                         <td className="px-3 py-1.5 text-right text-gray-600">{o.loanCount || "—"}</td>
                         <td className="px-3 py-1.5 text-right text-gray-600">{o.volume ? usd(o.volume) : "—"}</td>
-                        <td className="px-3 py-1.5 text-right">{o.loanCount ? usd(o.block1Net) : "—"}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-500">
-                          {o.block1Commission ? usd(o.block1Commission) : "—"}
+                        <td className="px-3 py-1.5 text-right">{o.loanCount ? usd(o.produced) : "—"}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-600">
+                          {o.commission ? usd(o.commission) : "—"}
                         </td>
                         <td className="px-3 py-1.5 text-right">
-                          {o.payrollStatus === "not_located"
-                            ? <span className="text-amber-600" title="Not located — not the same as zero.">—</span>
-                            : usd(o.block2Total)}
+                          {o.payrollStatus === "not_located" ? (
+                            <span className="text-amber-600" title="No payroll found for this person. Not the same as a zero.">—</span>
+                          ) : o.commissionExceedsPayroll ? (
+                            /*
+                              * ⚠ NEGATIVO SE MARCA, NO SE PINTA. Leido literal
+                              * diria que sus otros costes le devolvieron dinero.
+                              * Salta en cuatro personas y solo tres llevaban la
+                              * marca vieja: la cuarta es Haydee Tito-Pace, con
+                              * 1.292 de nomina contra 32.179 de comision.
+                              */
+                            <span
+                              className="font-medium text-amber-700"
+                              title="The commission is larger than the payroll located for this person, so this figure goes negative. Causes vary — the period's P&L may not be loaded, payroll may not be attributed, or the commission may be crossed wrong."
+                            >
+                              {usd(o.otherCost)}
+                            </span>
+                          ) : (
+                            usd(o.otherCost)
+                          )}
                         </td>
-                        <td className={`px-3 py-1.5 text-right font-semibold ${colorNeto(o.total)}`}>
-                          {usd(o.total)}
+                        <td className={`px-3 py-1.5 text-right font-semibold ${colorNeto(o.net)}`}>
+                          {usd(o.net)}
                         </td>
                       </tr>
                       {abre && <Detalle o={o} />}
