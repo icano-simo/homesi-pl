@@ -513,12 +513,25 @@ export interface LoanOfficial {
   /**
    * El BD asignado, de `bd` en el espejo. Se lee, no se edita.
    *
-   * Era una columna editable del archivo. Se midio antes de sustituirla: de los
-   * 92 cierres donde las dos fuentes lo traen, 86 coinciden y los 6 que no son
-   * reasignaciones que el archivo no recogio. El espejo no solo lo tiene, lo
-   * tiene al dia. Poblado en 183 de los 494.
+   * ⚠ ANTES SALIA EL BD DEL REALTOR y era falso en la mayoria de los 183
+   * prestamos que mostraba: `bd` del espejo se cruza por la clave del realtor,
+   * no por el prestamo. Ahora es `opportunity_owner` filtrado por
+   * `owner_es_bd`: 126 cierres, siete personas.
    */
   bd_owner: string | null;
+  /**
+   * Por que `bd_owner` esta vacio, cuando lo esta.
+   *
+   *   "bd"          es Business Developer.        126
+   *   "no_bd"       SE COMPROBO y no lo es.       359
+   *   "sin_titulo"  NO SE PUDO comprobar.           9
+   *
+   * ⚠ LOS DOS ULTIMOS PINTAN IGUAL Y NO SE CUENTAN IGUAL. De los 359 se sabe
+   * que no son BD; de los 9 no se sabe nada -- su `owner_title` esta vacio en el
+   * directorio de RRHH, asi que el origen no puede decidirlo. Sumarlos
+   * convierte una ausencia de dato en una afirmacion.
+   */
+  bd_owner_status: "bd" | "no_bd" | "sin_titulo";
 
   /** Salesforce dice B2B y nadie lo ha clasificado todavia. Cola de trabajo. */
   b2b_unclassified: boolean;

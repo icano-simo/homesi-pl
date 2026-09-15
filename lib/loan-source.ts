@@ -170,10 +170,38 @@ export interface ClosedLoan {
    * desde una foto: el dia que contemple un titulo nuevo o un roster de BD
    * activos, la cadena se quedaria atras SIN FALLAR.
    *
-   * Null cuando el dueño no es BD. Son 282 de "sf integrations" --la
-   * integracion, no una persona-- y 86 de otros roles.
+   * Null cuando el dueño no es BD, Y TAMBIEN cuando no se ha podido comprobar.
+   * Para distinguirlo, `bdOwnerStatus`.
    */
   bdOwner: string | null;
+  /**
+   * ⚠ POR QUE `bdOwner` ESTA VACIO. Tres motivos distintos, y confundirlos
+   * cuesta una cifra.
+   *
+   *   "bd"          el dueño es Business Developer. 126 cierres.
+   *   "no_bd"       SE COMPROBO y no lo es. 359 -- de ellos 282 son
+   *                 "sf integrations", que ni siquiera es una persona.
+   *   "sin_titulo"  NO SE PUDO COMPROBAR: el origen no sabe que cargo tiene,
+   *                 asi que `owner_es_bd` viene null. 9 cierres.
+   *
+   * ⚠ "no_bd" Y "sin_titulo" SE PINTAN IGUAL --celda vacia-- Y NO SON LO MISMO.
+   * Quien cuente BD no puede sumar los 9 a los 359: de los 359 se sabe que no
+   * lo son; de los 9 no se sabe nada. Meterlos juntos convierte una ausencia de
+   * dato en una afirmacion, que es el error que este modulo lleva toda su vida
+   * evitando.
+   *
+   * Medido tras el sync de las 16:41 del 2026-09-15: 126 / 359 / 9 = 494.
+   *
+   * ⚠ LOS NUEVE SON TODOS DE ANA ZEGARRA, y su `owner_title` esta VACIO en el
+   * directorio de RRHH. No es fallo del sync ni del spec: sin titulo,
+   * `owner_es_bd` no puede decidirse y BigQuery devuelve null correctamente. Es
+   * un hueco del directorio y se arregla alli, no aqui.
+   *
+   * Y no es la primera vez que aparece: ya salio en una correccion de nombre en
+   * `org.roster_override` y entre quienes mas cierran sin cobrar por 60105. Tres
+   * sintomas distintos de la misma ficha incompleta.
+   */
+  bdOwnerStatus: "bd" | "no_bd" | "sin_titulo";
   loanAmount: number | null;
   closingMonth: string | null;
   /** `Own Production` | `B2B` | `Affinity` | `Recruitment` | `NPPM`. */
@@ -397,10 +425,12 @@ export async function getClosedLoans(opts: {
       loanProgram: (r.loan_program as string) ?? null,
       realtorBd: (r.bd as string) ?? null,
       opportunityOwner: (r.opportunity_owner as string) ?? null,
-      // Solo cuando el origen dice que es BD. Null y false se tratan igual: sin
-      // sincronizar todavia no es lo mismo que "no es BD", pero afirmar un BD
-      // que no se ha confirmado es peor que dejar la celda vacia.
+      // Solo cuando el origen AFIRMA que es BD. Un null --que no se ha podido
+      // comprobar-- deja la celda vacia igual que un false, pero se distingue
+      // en `bdOwnerStatus`: pintarlos igual esta bien, contarlos igual no.
       bdOwner: r.owner_es_bd === true ? ((r.opportunity_owner as string) ?? null) : null,
+      bdOwnerStatus:
+        r.owner_es_bd === true ? "bd" : r.owner_es_bd === false ? "no_bd" : "sin_titulo",
       loanAmount: r.total_loan_amount == null ? null : Number(r.total_loan_amount),
       closingMonth: (r.closing_month as string) ?? null,
       strategy: (r.strategy as string) ?? null,

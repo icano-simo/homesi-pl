@@ -790,8 +790,28 @@ export default function LoanCountPage() {
                       * semanas parado. O sea que el espejo no solo lo tiene:
                       * lo tiene mejor.
                       */}
-                    <span title="From the mirror — not set by hand">
-                      {loan.bd_owner ?? "—"}
+                    {/*
+                      * La celda vacia tiene dos motivos y el tooltip los
+                      * distingue. "no_bd" es que se comprobo; "sin_titulo" es
+                      * que no se pudo -- el directorio de RRHH no tiene el cargo
+                      * de esa persona, y hoy son los 9 cierres de Ana Zegarra.
+                      *
+                      * Se pintan igual porque la columna contesta "quien es el
+                      * BD de este prestamo" y en los dos casos la respuesta es
+                      * "aqui no hay ninguno". Lo que no puede es contarlos
+                      * juntos, y por eso el estado viaja aparte.
+                      */}
+                    <span
+                      title={
+                        loan.bd_owner_status === "bd"
+                          ? "Opportunity owner, who is a Business Developer"
+                          : loan.bd_owner_status === "no_bd"
+                          ? "The opportunity owner is not a Business Developer"
+                          : "Cannot be determined — this person has no title in the HR directory"
+                      }
+                      className={loan.bd_owner_status === "sin_titulo" ? "text-gray-300 italic" : undefined}
+                    >
+                      {loan.bd_owner ?? (loan.bd_owner_status === "sin_titulo" ? "?" : "—")}
                     </span>
                   </td>
                   {BOOL_FIELDS.map((f) => (
