@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, AlertTriangle, Info } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
-import type { LoPnlResult, OfficerBlock, LoanRow, PayrollRow } from "@/app/api/lo-pnl/route";
+import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
  * ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +179,37 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
   );
 }
 
+/**
+ * Las cuatro secciones, en el orden en que se leen.
+ *
+ * ⚠ "Role unknown" VA EL ULTIMO Y NO ES RESIDUAL: son 22 personas con 76
+ * cierres y 446.928 de neto. Pero su problema es de DATOS --no estan en el
+ * roster de RRHH-- y no de negocio, asi que mezclarlo arriba confunde sobre que
+ * se esta mirando. Su cabecera dice por que estan ahi.
+ */
+const SECCIONES: { key: OfficerGroup; label: string; hint: string }[] = [
+  {
+    key: "producer",
+    label: "Producers",
+    hint: "They close loans. This is the group the module is about: does this person pay for themselves?",
+  },
+  {
+    key: "support",
+    label: "Support",
+    hint: "Assistants, processors and support staff. They have a real cost and close no loans — that is their job, not a finding.",
+  },
+  {
+    key: "nppm",
+    label: "NPPM",
+    hint: "Non-producing production managers tied to realtors. A different figure and a different question.",
+  },
+  {
+    key: "unknown",
+    label: "Role unknown",
+    hint: "Not found in the HR roster, so there is no role to show. Former staff and people who were never in HR.",
+  },
+];
+
 function Detalle({ o }: { o: OfficerBlock }) {
   return (
     <tr className="bg-gray-50/60">
@@ -214,6 +245,27 @@ export default function LoPnlPage() {
   const [error, setError] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
   const [notaAbierta, setNotaAbierta] = useState(false);
+  /*
+   * ⚠ SOLO "producer" ABIERTO, Y LOS OTROS TRES PLEGADOS PERO PRESENTES.
+   *
+   * Pestañas habrian escondido que los otros grupos existen, y los 62 de
+   * support con -410.170 SON parte del P&L de la sucursal. Apilado y plegado
+   * resuelve las dos cosas: no ocupan media pantalla y su total se ve sin
+   * abrirlos.
+   *
+   * Y apilado permite la lectura que con pestañas se pierde: cuanto produce la
+   * sucursal contra cuanto cuesta el soporte que no produce.
+   */
+  const [gruposAbiertos, setGruposAbiertos] = useState<Set<OfficerGroup>>(
+    () => new Set<OfficerGroup>(["producer"]),
+  );
+  const alternarGrupo = (g: OfficerGroup) =>
+    setGruposAbiertos((prev) => {
+      const n = new Set(prev);
+      if (n.has(g)) n.delete(g);
+      else n.add(g);
+      return n;
+    });
 
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
@@ -318,7 +370,49 @@ export default function LoPnlPage() {
                 </tr>
               </thead>
               <tbody>
-                {officers.map((o) => {
+                {SECCIONES.map((sec) => {
+                  const miembros = officers.filter((o) => o.group === sec.key);
+                  if (miembros.length === 0) return null;
+                  const seccionAbierta = gruposAbiertos.has(sec.key);
+                  const netoSeccion = miembros.reduce((s, o) => s + o.total, 0);
+                  const cierresSeccion = miembros.reduce((s, o) => s + o.loanCount, 0);
+
+                  return (
+                    <Fragment key={sec.key}>
+                      {/*
+                        * ⚠ LA CABECERA PLEGADA LLEVA CONTEO **Y** NETO. Una que
+                        * solo dijera "Support (62)" esconderia los -410.170, y
+                        * entonces plegar dejaria de ser una comodidad para
+                        * pasar a ocultar dinero.
+                        */}
+                      <tr
+                        onClick={() => alternarGrupo(sec.key)}
+                        className="cursor-pointer border-b border-gray-200 bg-gray-50/80 hover:bg-gray-100"
+                      >
+                        <td className="px-3 py-2" colSpan={3}>
+                          <span className="inline-flex items-center gap-1.5">
+                            {seccionAbierta
+                              ? <ChevronDown size={13} className="text-gray-500" />
+                              : <ChevronRight size={13} className="text-gray-500" />}
+                            <span className="font-semibold text-gray-800">{sec.label}</span>
+                            <span className="text-gray-500">({miembros.length})</span>
+                            {cierresSeccion > 0 && (
+                              <span className="text-[11px] text-gray-400">
+                                · {cierresSeccion} closing{cierresSeccion === 1 ? "" : "s"}
+                              </span>
+                            )}
+                          </span>
+                          <p className="mt-0.5 pl-[19px] text-[11px] font-normal text-gray-500">{sec.hint}</p>
+                        </td>
+                        <td className="px-3 py-2 text-right" colSpan={3} />
+                        <td className="px-3 py-2 text-right">
+                          <span className={`font-semibold ${netoSeccion < 0 ? "text-red-600" : "text-gray-800"}`}>
+                            {usd(netoSeccion)}
+                          </span>
+                        </td>
+                      </tr>
+
+                      {seccionAbierta && miembros.map((o) => {
                   const id = o.personCode ?? o.name;
                   const abre = abierto === id;
                   return (
@@ -388,6 +482,9 @@ export default function LoPnlPage() {
                         </td>
                       </tr>
                       {abre && <Detalle o={o} />}
+                    </Fragment>
+                  );
+                      })}
                     </Fragment>
                   );
                 })}
