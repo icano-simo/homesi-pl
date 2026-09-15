@@ -48,7 +48,9 @@ export async function POST(req: NextRequest) {
     if (!force && !replaceId) {
       const dupeResult = await checkDuplicateUpload(supabase, "addback", rows);
       if (dupeResult.found) {
-        return NextResponse.json({ duplicate: true, info: dupeResult.info }, { status: 409 });
+        // Todos los candidatos, no el que mas solapa: elegir por la app dejaba
+        // los demas fuera sin decirlo. Ver check-duplicate-upload.
+        return NextResponse.json({ duplicate: true, candidates: dupeResult.candidates }, { status: 409 });
       }
     }
     // ── 3b. Persist the manual assignments BEFORE anything is deleted ─────

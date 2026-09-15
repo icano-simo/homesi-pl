@@ -30,13 +30,26 @@ export function enrichTransactions(
 
   let uncategorizedCount = 0;
   let unknownBranchCount = 0;
+  /*
+   * ⚠ QUE sucursales no existen, no solo CUANTAS filas. Un "142 unknown branch"
+   * no se puede resolver; un "70000, 70300, 71000" se lee de un vistazo y dice
+   * exactamente que paso -- el export de Blast trae dos ceros de mas.
+   *
+   * Ese fallo entra sin fallar: el upload dice "completed" y el P&L sale vacio,
+   * asi que el unico sintoma es una pantalla en blanco y nadie sabe por que. Ya
+   * costo dos correcciones a mano, julio y agosto.
+   */
+  const unknownBranches = new Set<string>();
 
   const transactions: EnrichedTransaction[] = rows.map((row) => {
     const glEntry = glMap.get(row.gl_code);
     const branchEntry = branchMap.get(row.branch);
 
     if (!glEntry) uncategorizedCount++;
-    if (!branchEntry) unknownBranchCount++;
+    if (!branchEntry) {
+      unknownBranchCount++;
+      if (row.branch) unknownBranches.add(row.branch);
+    }
 
     return {
       ...row,
@@ -60,5 +73,5 @@ export function enrichTransactions(
     };
   });
 
-  return { transactions, uncategorizedCount, unknownBranchCount };
+  return { transactions, uncategorizedCount, unknownBranchCount, unknownBranches: [...unknownBranches].sort() };
 }

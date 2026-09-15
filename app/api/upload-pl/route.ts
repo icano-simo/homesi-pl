@@ -86,7 +86,9 @@ export async function POST(req: NextRequest) {
     if (!force && !replaceId) {
       const dupeResult = await checkDuplicateUpload(supabase, "original", rows);
       if (dupeResult.found) {
-        return NextResponse.json({ duplicate: true, info: dupeResult.info }, { status: 409 });
+        // Todos los candidatos, no el que mas solapa: elegir por la app dejaba
+        // los demas fuera sin decirlo. Ver check-duplicate-upload.
+        return NextResponse.json({ duplicate: true, candidates: dupeResult.candidates }, { status: 409 });
       }
     }
 
@@ -123,7 +125,7 @@ export async function POST(req: NextRequest) {
     ]);
 
     // ── 7. Enrich rows with category / region data (pure function) ────────
-    const { transactions, uncategorizedCount, unknownBranchCount } =
+    const { transactions, uncategorizedCount, unknownBranchCount, unknownBranches } =
       enrichTransactions(rows, glMappings ?? [], branches ?? [], id);
 
     // ── 6. Batch-insert in chunks to stay within payload limits ───────────
@@ -207,6 +209,7 @@ export async function POST(req: NextRequest) {
       rowCount: rows.length,
       uncategorizedCount,
       unknownBranchCount,
+      unknownBranches,
       parseWarnings: warnings.length,
     };
     if (manualSummary) response.manualAssignments = manualSummary;

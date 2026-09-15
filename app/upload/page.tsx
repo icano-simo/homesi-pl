@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, X, Trash2, RefreshCw } from "lucide-react";
 import type { UploadPLResponse, AddbacksUploadResponse, OffshoreAllocationsUploadResponse, UploadLoanCountResponse, ManualAssignmentSummary, RelinkSummary } from "@/types";
-import type { DuplicateInfo } from "@/lib/check-duplicate-upload";
+import { describirPeriodos, type DuplicateInfo } from "@/lib/check-duplicate-upload";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
 
@@ -115,62 +115,173 @@ function ManualAssignmentBlock({ ma }: { ma: ManualAssignmentSummary }) {
 
 // ─── Duplicate dialog ─────────────────────────────────────────────────────────
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ELEGIR QUE UPLOAD SE REEMPLAZA
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ EL NOMBRE DE UN ARCHIVO NO DICE LO QUE HAY DENTRO, y este dialogo decide un
+ * borrado. Medido el 2026-09-15 sobre los uploads reales:
+ *
+ *     isabella.cano 20082026...    1.326 filas · SOLO July 2026  ·  32 manuales
+ *     kelly.ovalle 27072026...    11.092 filas · ONCE meses      · 571 manuales
+ *                                              (Aug 2025 - Jun 2026)
+ *     Offshore jan july.xlsx         740 filas · siete meses     ·  32 manuales
+ *
+ * Elegir "kelly.ovalle 27072026120837383.xlsx" por error se lleva once meses y
+ * 571 asignaciones de golpe, y nada en ese nombre lo insinua.
+ *
+ * ⚠ Y ANTES NO SE PODIA ELEGIR: el backend devolvia UN candidato --el que mas
+ * filas solapaba-- y la pantalla enseñaba su nombre. Con varios uploads
+ * solapando, los demas se descartaban sin que nadie lo supiera.
+ *
+ * Ahora cada opcion dice sus periodos, sus filas y sus asignaciones manuales, y
+ * los de UN SOLO periodo van primero porque son los seguros de reemplazar.
+ *
+ * ⚠ NO SE BLOQUEA NINGUNO. Puede haber una razon legitima para rehacer una
+ * carga de once meses. Lo que faltaba era informacion, no una prohibicion -- por
+ * eso los multi-periodo piden una confirmacion aparte en vez de estar
+ * deshabilitados.
+ */
 function DuplicateDialog({
-  info,
+  candidates,
   onReplace,
   onForce,
   onCancel,
 }: {
-  info: DuplicateInfo;
-  onReplace: () => void;
+  candidates: DuplicateInfo[];
+  onReplace: (uploadId: string) => void;
   onForce: () => void;
   onCancel: () => void;
 }) {
+  /** El multi-periodo que espera confirmacion reforzada. */
+  const [confirmando, setConfirmando] = useState<DuplicateInfo | null>(null);
+
+  if (confirmando) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+        <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 shadow-xl">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={18} className="shrink-0 text-red-500" />
+            <h3 className="text-base font-semibold text-gray-900">
+              This upload covers {confirmando.periods.length} periods
+            </h3>
+          </div>
+
+          {/*
+            * ⚠ NO ES UN "¿SEGURO?" GENERICO. Dice la cifra, los meses uno a uno
+            * y cuantas asignaciones hay detras. Un aviso que no nombra lo que
+            * se pierde se contesta que si sin leerlo.
+            */}
+          <p className="mt-3 text-sm text-gray-700">
+            Replacing <span className="font-medium">{confirmando.file_name}</span> will delete{" "}
+            <span className="font-semibold text-red-700">
+              {confirmando.rows.toLocaleString()} rows across {confirmando.periods.length} months
+            </span>
+            {confirmando.manualAssignments > 0 && (
+              <>
+                , with{" "}
+                <span className="font-semibold text-red-700">
+                  {confirmando.manualAssignments.toLocaleString()} manual assignments
+                </span>{" "}
+                that will be backed up and re-applied — those that no longer match are left for review
+              </>
+            )}
+            .
+          </p>
+
+          <div className="mt-3 max-h-40 overflow-auto rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+            <p className="text-[11px] font-medium text-gray-500">Periods that will be deleted</p>
+            <p className="mt-1 text-xs text-gray-700">{confirmando.periods.join(" · ")}</p>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <button
+              onClick={() => onReplace(confirmando.upload_id)}
+              className="w-full rounded-xl border border-red-300 bg-red-600 px-4 py-3 text-sm font-medium text-white hover:bg-red-700"
+            >
+              Yes, replace all {confirmando.periods.length} periods
+            </button>
+            <button
+              onClick={() => setConfirmando(null)}
+              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-500 hover:bg-gray-50"
+            >
+              Back
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-xl">
+      <div className="w-full max-w-xl rounded-2xl border border-gray-200 bg-white p-6 shadow-xl">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2">
             <AlertCircle size={18} className="shrink-0 text-gray-500" />
-            <h3 className="text-base font-semibold text-gray-900">Possible duplicate upload</h3>
+            <h3 className="text-base font-semibold text-gray-900">
+              {candidates.length === 1 ? "Possible duplicate upload" : `${candidates.length} existing uploads overlap`}
+            </h3>
           </div>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
         </div>
 
-        <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm space-y-1.5">
-          <p className="font-medium text-gray-800">Existing upload found:</p>
-          <p className="text-gray-700">
-            <span className="font-medium">{info.file_name}</span>
-          </p>
-          <p className="text-gray-600 text-xs">
-            Uploaded: {new Date(info.uploaded_at).toLocaleString()} ·{" "}
-            {info.row_count != null ? `${info.row_count.toLocaleString()} rows` : "unknown rows"}
-          </p>
-          {info.overlap.length > 0 && (
-            <p className="text-gray-600 text-xs">
-              Overlapping periods: {info.overlap.join(", ")}
-            </p>
-          )}
-        </div>
-
-        <p className="mt-4 text-sm text-gray-600">
-          Choose how to proceed:
+        <p className="mt-3 text-sm text-gray-600">
+          {candidates.length === 1
+            ? "This period already has data. Replacing deletes the upload below first."
+            : "Pick which one to replace, or keep them all. Single-period uploads are listed first."}
         </p>
 
-        <div className="mt-3 space-y-2">
-          <button
-            onClick={onReplace}
-            className="flex w-full items-center justify-between rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
-          >
-            <span>Replace existing</span>
-            <span className="text-xs font-normal text-red-500">Deletes the old upload first</span>
-          </button>
+        <div className="mt-3 max-h-80 space-y-2 overflow-auto">
+          {candidates.map((c) => {
+            const multi = c.periods.length > 1;
+            return (
+              <button
+                key={c.upload_id}
+                onClick={() => (multi ? setConfirmando(c) : onReplace(c.upload_id))}
+                className={`w-full rounded-xl border px-4 py-3 text-left transition-colors ${
+                  multi
+                    ? "border-amber-200 bg-amber-50/50 hover:bg-amber-50"
+                    : "border-gray-200 bg-white hover:bg-gray-50"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="truncate text-sm font-medium text-gray-800" title={c.file_name}>
+                    {c.file_name}
+                  </span>
+                  {multi && (
+                    <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                      {c.periods.length} periods
+                    </span>
+                  )}
+                </div>
+                {/*
+                  * Los periodos primero y en grande: son lo que se borra, y es
+                  * el dato que el nombre del archivo no da.
+                  */}
+                <div className="mt-1 text-xs font-medium text-gray-700">
+                  {describirPeriodos(c.periods)}
+                </div>
+                <div className="mt-0.5 text-[11px] text-gray-500">
+                  {c.rows.toLocaleString()} rows ·{" "}
+                  {c.manualAssignments > 0
+                    ? `${c.manualAssignments.toLocaleString()} manual assignments to re-apply`
+                    : "no manual assignments"}{" "}
+                  · uploaded {new Date(c.uploaded_at).toLocaleDateString()}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 space-y-2 border-t border-gray-100 pt-3">
           <button
             onClick={onForce}
             className="flex w-full items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
           >
             <span>Upload anyway</span>
-            <span className="text-xs font-normal text-gray-400">Keep both uploads</span>
+            <span className="text-xs font-normal text-gray-400">Keep everything, add this file</span>
           </button>
           <button
             onClick={onCancel}
@@ -201,7 +312,7 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
   const [result, setResult] = useState<UploadPLResponse | AddbacksUploadResponse | OffshoreAllocationsUploadResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [pendingDupe, setPendingDupe] = useState<DuplicateInfo | null>(null);
+  const [pendingDupe, setPendingDupe] = useState<DuplicateInfo[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function handleFile(f: File | null) {
@@ -229,7 +340,7 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
       const json = await res.json();
       if (res.status === 409 && json.duplicate) {
         setStatus("idle");
-        setPendingDupe(json.info as DuplicateInfo);
+        setPendingDupe(json.candidates as DuplicateInfo[]);
         return;
       }
       if (!res.ok) {
@@ -263,8 +374,8 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
     <div className="space-y-4">
       {pendingDupe && (
         <DuplicateDialog
-          info={pendingDupe}
-          onReplace={() => doUpload(`${endpoint}?replace_id=${pendingDupe.upload_id}`)}
+          candidates={pendingDupe}
+          onReplace={(uploadId) => doUpload(`${endpoint}?replace_id=${uploadId}`)}
           onForce={() => doUpload(`${endpoint}?force=true`)}
           onCancel={() => { setPendingDupe(null); setStatus("idle"); }}
         />
@@ -351,9 +462,39 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
               {result.parseWarnings} row(s) had parse warnings and were skipped.
             </p>
           )}
-          {(result.uncategorizedCount > 0 || result.unknownBranchCount > 0) && (
+          {/*
+            * ⚠ UNA SUCURSAL FUERA DEL CATALOGO NO ES UN AVISO GRIS MAS.
+            *
+            * Es el fallo que mas cuesta de esta app: el archivo entra, el upload
+            * dice "completed", y el P&L sale VACIO porque ningun filtro
+            * encuentra esas filas. No falla nada, asi que el unico sintoma es
+            * una pantalla en blanco y nadie sabe por que. Ha pasado dos veces
+            * --julio y agosto-- y las dos se arreglo a mano por SQL.
+            *
+            * Por eso va en rojo, aparte del aviso de categorias, Y NOMBRA LAS
+            * SUCURSALES: "142 unknown branch" no se puede resolver, "70000,
+            * 70300, 71000" dice exactamente que paso.
+            */}
+          {"unknownBranches" in result && result.unknownBranches?.length > 0 && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs">
+              <p className="font-semibold text-red-700">
+                {result.unknownBranchCount.toLocaleString()} row
+                {result.unknownBranchCount === 1 ? "" : "s"} loaded with a branch that is not in the
+                catalogue — they will not appear in the P&amp;L.
+              </p>
+              <p className="mt-1 text-red-700">
+                Branch{result.unknownBranches.length === 1 ? "" : "es"} not found:{" "}
+                <span className="font-mono font-semibold">{result.unknownBranches.join(", ")}</span>
+              </p>
+              <p className="mt-1 text-red-600">
+                If they look like a real branch with extra digits, the export format changed. If
+                they are new branches, add them under Settings → Branches.
+              </p>
+            </div>
+          )}
+          {result.uncategorizedCount > 0 && (
             <p className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-              Some rows are uncategorized. Review GL Mapping and Branches in Settings.
+              Some rows are uncategorized. Review GL Mapping in Settings.
             </p>
           )}
           {result.manualAssignments && <ManualAssignmentBlock ma={result.manualAssignments} />}

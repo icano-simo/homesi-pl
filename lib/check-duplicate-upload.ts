@@ -7,11 +7,38 @@ export type DuplicateInfo = {
   uploaded_at: string;
   row_count: number | null;
   overlap: string[]; // e.g. ["January 2025", "February 2025"]
+  /**
+   * TODOS los periodos que contiene el upload, no solo los que solapan.
+   *
+   * ⚠ ES LO QUE SE VA A BORRAR, y esa es la diferencia que importa. `overlap`
+   * dice en que se pisa con el archivo nuevo; esto dice cuanto se lleva por
+   * delante el Replace. Un upload puede solapar en UN mes y contener ONCE.
+   */
+  periods: string[];
+  /** Cuantas filas tiene de verdad, contadas y no estimadas. */
+  rows: number;
+  /**
+   * Asignaciones manuales que el Replace intentara reaplicar.
+   *
+   * No se pierden sin mas --hay respaldo y reaplicacion-- pero las que no
+   * vuelvan a cruzar quedan para revisar, asi que el numero es lo que dice
+   * cuanto trabajo hay detras de ese boton.
+   */
+  manualAssignments: number;
 };
 
 export type DuplicateCheckResult =
   | { found: false }
-  | { found: true; info: DuplicateInfo };
+  /**
+   * ⚠ DEVUELVE TODOS LOS CANDIDATOS, NO EL "MEJOR".
+   *
+   * Antes elegia uno --el que mas filas solapaba-- y la pantalla enseñaba solo
+   * su nombre. Con varios candidatos eso descarta los demas en silencio, y el
+   * nombre de un archivo no dice lo que hay dentro: "kelly.ovalle
+   * 27072026120837383.xlsx" son 11.092 filas de ONCE meses con 571 asignaciones
+   * manuales, y nada en ese nombre lo insinua.
+   */
+  | { found: true; candidates: DuplicateInfo[] };
 
 /**
  * Checks whether an existing upload of the same source type covers any of the
@@ -53,27 +80,105 @@ export async function checkDuplicateUpload(
 
   if (countByUpload.size === 0) return { found: false };
 
-  // Take the upload with the most overlapping rows (most likely the duplicate)
-  const bestId = [...countByUpload.entries()].sort((a, b) => b[1] - a[1])[0][0];
-
-  const { data: upload } = await supabase
+  const { data: uploads } = await supabase
     .from("pl_uploads")
     .select("id,file_name,uploaded_at,row_count")
-    .eq("id", bestId)
-    .single();
+    .in("id", [...countByUpload.keys()]);
 
-  if (!upload) return { found: false };
+  if (!uploads || uploads.length === 0) return { found: false };
 
-  return {
-    found: true,
-    info: {
-      upload_id: upload.id,
-      file_name: upload.file_name,
-      uploaded_at: upload.uploaded_at,
-      row_count: upload.row_count,
-      overlap: [...(overlapByUpload.get(bestId) ?? [])].sort(),
-    },
+  /*
+   * Por cada candidato, lo que el Replace se llevaria.
+   *
+   * ⚠ SE CUENTA, NO SE ESTIMA. El `select` de arriba lleva `.limit(2000)`, que
+   * basta para saber QUE uploads solapan pero no CUANTAS filas tienen: un
+   * upload de 11.092 filas entra ahi truncado. Enseñar una cifra corta en el
+   * dialogo que decide un borrado es peor que no enseñarla.
+   */
+  const candidates: DuplicateInfo[] = [];
+  for (const u of uploads as Array<{ id: string; file_name: string; uploaded_at: string; row_count: number | null }>) {
+    const { count: rows } = await supabase
+      .from("pl_transactions")
+      .select("*", { count: "exact", head: true })
+      .eq("upload_id", u.id);
+
+    const { count: manuales } = await supabase
+      .from("pl_transactions")
+      .select("*", { count: "exact", head: true })
+      .eq("upload_id", u.id)
+      .in("assignment_origin", ["manual", "conflict_resolved"]);
+
+    // Los periodos que contiene. Paginado: un upload grande pasa de 1000 filas
+    // y sin rango se cortaria justo donde estan los meses mas antiguos.
+    const periodos = new Set<string>();
+    for (let desde = 0; ; desde += 1000) {
+      const { data } = await supabase
+        .from("pl_transactions")
+        .select("month,year")
+        .eq("upload_id", u.id)
+        .order("id", { ascending: true })
+        .range(desde, desde + 999);
+      if (!data || data.length === 0) break;
+      for (const r of data as Array<{ month: string | null; year: number | null }>) {
+        if (r.month && r.year) periodos.add(`${r.month} ${r.year}`);
+      }
+      if (data.length < 1000) break;
+    }
+
+    candidates.push({
+      upload_id: u.id,
+      file_name: u.file_name,
+      uploaded_at: u.uploaded_at,
+      row_count: u.row_count,
+      overlap: [...(overlapByUpload.get(u.id) ?? [])].sort(),
+      periods: [...periodos].sort(ordenarPeriodos),
+      rows: rows ?? 0,
+      manualAssignments: manuales ?? 0,
+    });
+  }
+
+  /*
+   * ⚠ LOS DE UN SOLO PERIODO PRIMERO: son los seguros de reemplazar.
+   *
+   * No se bloquea ninguno --puede haber una razon legitima para rehacer una
+   * carga de once meses-- pero el orden pone delante lo que casi siempre se
+   * busca, en vez de dejar que gane el que mas solapa.
+   */
+  candidates.sort(
+    (a, b) =>
+      a.periods.length - b.periods.length ||
+      new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime(),
+  );
+
+  return { found: true, candidates };
+}
+
+const MESES_ORDEN = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
+
+/** "August 2025" antes que "June 2026": por año y luego por mes de verdad. */
+function ordenarPeriodos(a: string, b: string): number {
+  const [ma, ya] = a.split(" ");
+  const [mb, yb] = b.split(" ");
+  return Number(ya) - Number(yb) || MESES_ORDEN.indexOf(ma) - MESES_ORDEN.indexOf(mb);
+}
+
+/**
+ * "July 2026" para uno, "Aug 2025 – Jun 2026 (11 months)" para varios.
+ *
+ * ⚠ EL RANGO SE CALCULA DE LA LISTA ORDENADA Y DICE CUANTOS SON. Un rango sin
+ * el conteo --"Aug 2025 – Jun 2026"-- deja pensar que son dos meses.
+ */
+export function describirPeriodos(periods: string[]): string {
+  if (periods.length === 0) return "no periods";
+  if (periods.length === 1) return periods[0];
+  const corto = (p: string) => {
+    const [m, y] = p.split(" ");
+    return `${m.slice(0, 3)} ${y}`;
   };
+  return `${corto(periods[0])} – ${corto(periods[periods.length - 1])} (${periods.length} months)`;
 }
 
 const DELETE_CHUNK = 500;
