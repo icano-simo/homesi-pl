@@ -69,6 +69,48 @@ import { createServerClient } from "@/lib/supabase-server";
  * lecturas y nadie sabria que existieron.
  */
 
+/**
+ * ── ⚠ EL PREFIJO DEL NUMERO DE PRESTAMO NO ES LA SUCURSAL ───────────────────
+ *
+ * Parece que lo fuera --"150002050394" en la sucursal 150-- y esa lectura se
+ * midio y es FALSA. Sobre los 494 cierres, el 2026-09-15:
+ *
+ *     prefijo = sucursal      348   (70%)
+ *     prefijo DISTINTO        146   (30%)  -- 105 con prefijo del catalogo,
+ *                                             41 con prefijo que no existe
+ *
+ * Un tercio de la cartera. Quien resuelva una sucursal por el prefijo acierta
+ * dos de cada tres veces, que es justo la proporcion que hace que el error pase
+ * desapercibido.
+ *
+ * ⚠ Y LOS 41 FUERA DE CATALOGO SE AGRUPAN POR PERSONA, NO AL AZAR. Ahi esta lo
+ * que hace util esta nota en vez de curiosa:
+ *
+ *     913   20 prestamos   Brian Heibel                -> 5 sucursales
+ *     203   19             Fowler, Tirio, Garcia       -> 8 sucursales
+ *     776    5             Silvio Arteaga              -> 776
+ *     150    4             Anthony Robert DiToma       -> 150 y 733
+ *     276    1             Brent Edwards               -> 276
+ *
+ * CINCO de esas seis personas --Heibel, Fowler, Tirio, DiToma, Edwards-- estan
+ * entre los OCHO loan officers sin nomina localizada en el P&L. Y que 913 y 203
+ * repartan sus prestamos entre cinco y ocho sucursales encaja con que sean un
+ * CANAL DE ORIGINACION y no una sucursal.
+ *
+ * La hipotesis que eso sugiere --que esas personas no sean empleados de la
+ * division-- explicaria a la vez por que no tienen nomina, por que no estan en
+ * dim_person y por que sus prestamos llevan un prefijo que nadie reconoce. NO
+ * ESTA COMPROBADA y no se resuelve desde aqui: es pregunta para quien lleve la
+ * originacion. Queda escrita porque sin ella "146 prefijos raros" es un dato
+ * suelto, y con ella es una pista.
+ *
+ * ⚠ QUE EL P&L REPARTA UN PRESTAMO ENTRE DOS SUCURSALES NO ES UNA TERCERA
+ * RESPUESTA. El margen de division se contabiliza en la 700 y el de sucursal en
+ * la suya, asi que ver filas en 700 y en 747 para el mismo prestamo es el
+ * comportamiento esperado. La 747 es una respuesta sobre su sucursal; la 700 es
+ * donde va el margen corporativo de casi todos.
+ */
+
 /** El espejo manda; el archivo es respaldo. */
 export const FUENTE_VIVA = "activity_report.loan_records_v2" as const;
 
@@ -102,6 +144,7 @@ export interface ClosedLoan {
   branch: string | null;
   /** `loan_info_channel` en el archivo. Verificado identico sobre los 433 en ambas fuentes. */
   loanChannel: string | null;
+  loanProgram: string | null;
   loanAmount: number | null;
   closingMonth: string | null;
   /** `Own Production` | `B2B` | `Affinity` | `Recruitment` | `NPPM`. */
@@ -205,7 +248,7 @@ export async function getClosedLoans(opts: {
       .from("loan_records_v2")
       .select(
         "loan_number,borrower_name,loan_officer,loan_officer_person_code,branch," +
-          "total_loan_amount,closing_month,strategy,is_b2b,lead_source,loan_channel",
+          "total_loan_amount,closing_month,strategy,is_b2b,lead_source,loan_channel,loan_program",
       )
       .eq("is_closed", true)
       .eq("counts_for_division", true);
@@ -248,6 +291,7 @@ export async function getClosedLoans(opts: {
       personCode: (r.loan_officer_person_code as string) ?? null,
       branch: (r.branch as string) ?? null,
       loanChannel: (r.loan_channel as string) ?? null,
+      loanProgram: (r.loan_program as string) ?? null,
       loanAmount: r.total_loan_amount == null ? null : Number(r.total_loan_amount),
       closingMonth: (r.closing_month as string) ?? null,
       strategy: (r.strategy as string) ?? null,
