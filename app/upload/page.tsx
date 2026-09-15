@@ -494,6 +494,35 @@ function LoanCountUploadSection({ onUploadComplete }: { onUploadComplete?: () =>
         </p>
       </div>
 
+      {/*
+        * ⚠ ANTES DE SUBIR, NO DESPUES. Un aviso que aparece al terminar llega
+        * tarde por definicion: para entonces ya se subio.
+        *
+        * Desde que Loan Count lee del espejo, subir un archivo ya no cambia
+        * ninguna pantalla. Sin decirlo, la subida es una accion sin efecto que
+        * parece funcionar -- se guarda, dice que se guardo, y ninguna cifra se
+        * mueve. Esa es exactamente la trampa que este aviso existe para evitar.
+        *
+        * El archivo NO se retira: el espejo depende de que Salesforce
+        * sincronice y eso estuvo parado tres dias este mes. Lo que cambia es
+        * cual manda -- y si los dos dicen cosas distintas, manda el espejo.
+        *
+        * La tabla de abajo enseña la diferencia por periodo, que es lo que
+        * convierte la subida en un diagnostico util en vez de un gesto vacio.
+        */}
+      <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-4 py-3">
+        <p className="text-xs text-amber-900">
+          <span className="font-semibold">The screens no longer read this file.</span>{" "}
+          Loan Count and the P&amp;L by Loan Officer read the daily Salesforce mirror. Uploading
+          here still stores the file as a backup — useful when the sync stops — but it will not
+          change what any screen shows, and where the two disagree the mirror wins.
+        </p>
+        <p className="mt-1.5 text-xs text-amber-800">
+          The table below compares them period by period, so an upload tells you how far behind
+          the file is.
+        </p>
+      </div>
+
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
@@ -626,7 +655,17 @@ function LoanCountUploadSection({ onUploadComplete }: { onUploadComplete?: () =>
 
 // ─── Loan Count history ───────────────────────────────────────────────────────
 
-type LoanCountPeriod = { month: string; year: number; count: number; last_updated: string };
+type LoanCountPeriod = {
+  month: string;
+  year: number;
+  /** Cierres en el espejo. Es la cifra viva. */
+  count: number;
+  /** Lo que traia el archivo subido, si hubo subida. */
+  file_count: number;
+  /** Cuantos ve el espejo que el archivo no tiene. */
+  missing_from_file: number;
+  last_updated: string;
+};
 
 function LoanCountHistory({ refreshKey }: { refreshKey: number }) {
   const [periods, setPeriods] = useState<LoanCountPeriod[]>([]);
@@ -684,7 +723,9 @@ function LoanCountHistory({ refreshKey }: { refreshKey: number }) {
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50 text-left text-gray-500">
                 <th className="px-4 py-3 font-medium">Period</th>
-                <th className="px-4 py-3 font-medium text-right">Loan records</th>
+                <th className="px-4 py-3 font-medium text-right">In the mirror</th>
+                <th className="px-4 py-3 font-medium text-right">In your file</th>
+                <th className="px-4 py-3 font-medium text-right">Not in your file</th>
                 <th className="px-4 py-3 font-medium">Last updated</th>
                 <th className="px-4 py-3" />
               </tr>
@@ -706,7 +747,10 @@ function LoanCountHistory({ refreshKey }: { refreshKey: number }) {
                     <td className="px-4 py-2.5 text-right">
                       {confirmKey === key ? (
                         <div className="flex items-center justify-end gap-1.5">
-                          <span className="text-gray-500">Delete {p.count} records?</span>
+                          <span className="text-gray-500">
+                            Delete {p.file_count} uploaded records? The screens read the mirror,
+                            so the figures will not change.
+                          </span>
                           <button
                             onClick={() => handleDelete(p.month, p.year)}
                             disabled={deletingKey === key}

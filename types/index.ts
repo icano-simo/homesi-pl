@@ -510,6 +510,15 @@ export interface LoanOfficial {
   recruitment: boolean;
   /** De Encompass. Conserva el nombre viejo para no tocar cinco pantallas. */
   lead_source_lo: string | null;
+  /**
+   * El BD asignado, de `bd` en el espejo. Se lee, no se edita.
+   *
+   * Era una columna editable del archivo. Se midio antes de sustituirla: de los
+   * 92 cierres donde las dos fuentes lo traen, 86 coinciden y los 6 que no son
+   * reasignaciones que el archivo no recogio. El espejo no solo lo tiene, lo
+   * tiene al dia. Poblado en 183 de los 494.
+   */
+  bd_owner: string | null;
 
   /** Salesforce dice B2B y nadie lo ha clasificado todavia. Cola de trabajo. */
   b2b_unclassified: boolean;

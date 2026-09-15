@@ -710,6 +710,46 @@ export default function LoanCountPage() {
                   </td>
                   <td className="px-3 py-2 font-mono text-gray-800 whitespace-nowrap">
                     {loan.loan_number}
+                    {/*
+                      * ⚠ DOS MARCAS DISTINTAS, Y LA DIFERENCIA ES EL PUNTO.
+                      *
+                      * "unreviewed" son 16 prestamos que Salesforce clasifica
+                      * B2B y que NADIE ha mirado: no hay dos opiniones, hay una.
+                      * Es cola de trabajo, y se vacia sola segun se clasifiquen.
+                      *
+                      * "disputed" es que alguien SI miro y dijo lo contrario.
+                      * Sobre los 494 hay 23, y el caso que lo explica es
+                      * 747002052489 de Gian Laino: el archivo lo marcaba
+                      * recruitment y Salesforce dice B2B -- coherente en dos
+                      * campos a la vez, o sea una disputa de clasificacion de
+                      * verdad y no un despiste de captura.
+                      *
+                      * Enseñarlas igual enterraria la segunda entre las
+                      * primeras, que es justo al reves de lo que valen: una
+                      * pide trabajo, la otra pide criterio.
+                      */}
+                    {loan.b2b_disputed && (
+                      <span
+                        className="ml-1.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-700"
+                        title={
+                          "Two opinions disagree. Salesforce classifies this loan as " +
+                          (loan.b2b_salesforce ? "B2B" : "not B2B") +
+                          "; someone here marked it as " +
+                          (loan.b2b ? "B2B" : "not B2B") +
+                          ". Somebody looked and said otherwise — worth reading before changing."
+                        }
+                      >
+                        disputed
+                      </span>
+                    )}
+                    {loan.b2b_unclassified && (
+                      <span
+                        className="ml-1.5 rounded bg-sky-100 px-1 py-0.5 text-[10px] font-medium text-sky-700"
+                        title="Salesforce classifies this loan as B2B and nobody has reviewed it yet. Not a disagreement — a queue."
+                      >
+                        unreviewed
+                      </span>
+                    )}
                   </td>
                   <td className="max-w-[180px] truncate px-3 py-2 font-medium text-gray-800">
                     {loan.borrower_name ?? "—"}
@@ -741,15 +781,18 @@ export default function LoanCountPage() {
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {fmt(loan.loan_amount)}
                   </td>
-                  <td className="max-w-[120px] px-3 py-2 text-gray-400">
+                  <td className="max-w-[120px] truncate px-3 py-2 text-gray-600">
                     {/*
-                      * BD Owner deja de editarse y por ahora no se enseña: vivia
-                      * en una columna del archivo y `loan_manual_flags` no tiene
-                      * sitio para el. El espejo trae un campo `bd` que
-                      * probablemente sea lo mismo, pero NO se ha comprobado que
-                      * lo sea y ponerlo aqui sin medirlo seria afirmarlo.
+                      * Deja de editarse y sale del espejo. Se midio antes de
+                      * darlo por equivalente: de los 92 cierres donde las dos
+                      * fuentes lo traen, 86 coinciden y los 6 que no son
+                      * reasignaciones que el archivo no recogio -- lleva tres
+                      * semanas parado. O sea que el espejo no solo lo tiene:
+                      * lo tiene mejor.
                       */}
-                    <span title="Was a column of the uploaded file; not carried over yet">—</span>
+                    <span title="From the mirror — not set by hand">
+                      {loan.bd_owner ?? "—"}
+                    </span>
                   </td>
                   {BOOL_FIELDS.map((f) => (
                     <td key={f.key} className="px-3 py-2 text-center">

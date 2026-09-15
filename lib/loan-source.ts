@@ -145,6 +145,14 @@ export interface ClosedLoan {
   /** `loan_info_channel` en el archivo. Verificado identico sobre los 433 en ambas fuentes. */
   loanChannel: string | null;
   loanProgram: string | null;
+  /**
+   * El BD asignado. Era `bd_owner`, una columna del archivo que se editaba a
+   * mano, y sale del espejo porque ademas esta al dia: comparados los 92 en que
+   * las dos fuentes lo traen, 86 coinciden y los 6 que no son reasignaciones
+   * que el archivo no recogio -- tiene tres semanas. Poblado en 183 de los 494
+   * cierres.
+   */
+  bd: string | null;
   loanAmount: number | null;
   closingMonth: string | null;
   /** `Own Production` | `B2B` | `Affinity` | `Recruitment` | `NPPM`. */
@@ -322,7 +330,7 @@ export async function getClosedLoans(opts: {
       .from("loan_records_v2")
       .select(
         "loan_number,borrower_name,loan_officer,loan_officer_person_code,branch," +
-          "total_loan_amount,closing_month,strategy,is_b2b,lead_source,loan_channel,loan_program",
+          "total_loan_amount,closing_month,strategy,is_b2b,lead_source,loan_channel,loan_program,bd",
       )
       .eq("is_closed", true)
       .eq("counts_for_division", true);
@@ -366,6 +374,7 @@ export async function getClosedLoans(opts: {
       branch: (r.branch as string) ?? null,
       loanChannel: (r.loan_channel as string) ?? null,
       loanProgram: (r.loan_program as string) ?? null,
+      bd: (r.bd as string) ?? null,
       loanAmount: r.total_loan_amount == null ? null : Number(r.total_loan_amount),
       closingMonth: (r.closing_month as string) ?? null,
       strategy: (r.strategy as string) ?? null,

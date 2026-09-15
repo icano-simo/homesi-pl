@@ -93,6 +93,10 @@ export async function GET(req: NextRequest) {
         affinity: l.strategy === "Affinity",
         recruitment: l.strategy === "Recruitment",
         lead_source_lo: l.leadSource,
+        /* Era una columna editable del archivo; sale del espejo y ademas al dia:
+           de los 92 comparables coinciden 86, y los 6 que no son reasignaciones
+           que el archivo no recogio. */
+        bd_owner: l.bd,
 
         /** Salesforce dice B2B y nadie lo ha clasificado. Cola de trabajo. */
         b2b_unclassified: l.b2bSinClasificar,
