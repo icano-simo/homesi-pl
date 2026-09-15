@@ -67,6 +67,37 @@ export function extractLoanNumber(desc: string): string | null {
  * 8. Derive Year, Month, Movement = Credit − Debit
  * 9. Trim text fields
  */
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LA SUCURSAL DE BLAST VIENE CON DOS CEROS DE MAS
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * El export trae "70000", "70300", "71000", "71600"... donde la sucursal es
+ * "700", "703", "710", "716". Sin recortarlo, NINGUN filtro encuentra esas
+ * filas: el archivo entra, el upload dice "completed", y el P&L sale vacio.
+ *
+ * ⚠ ES EL FALLO QUE MAS CUESTA DE ESTA APP, y por eso vive aqui y no en un SQL
+ * de correccion. Ha pasado DOS VECES --julio arreglado en agosto, agosto
+ * arreglado en septiembre-- y las dos se arreglo a mano despues de que alguien
+ * mirara una pantalla vacia sin saber por que. No falla nada: por eso nadie se
+ * entera hasta que busca el dato.
+ *
+ * ⚠ CONDICIONAL, NO INCONDICIONAL, aunque hoy vengan siempre mal. En el archivo
+ * de julio 69 de 1.326 filas YA venian correctas como "700": un recorte a ciegas
+ * las habria convertido en "7". Cuesta lo mismo escribir la condicion, y el dia
+ * que el export cambie otra vez esta aguanta y la otra rompe lo que ya estaba
+ * bien.
+ *
+ * La forma se acota a `7xx00` a proposito, que es la que produce Blast. Un
+ * codigo de cinco digitos con otra forma se deja intacto: no sabemos que es, y
+ * recortarlo seria inventarse una sucursal.
+ */
+const SUCURSAL_BLAST = /^7[0-9]{2}00$/;
+
+export function normalizeBlastBranch(branch: string): string {
+  return SUCURSAL_BLAST.test(branch) ? branch.slice(0, 3) : branch;
+}
+
 export function normalizePL(buffer: Buffer): NormalizePLResult {
   const { rows: raw, sheet } = readSheetRaw(
     buffer,
@@ -129,7 +160,7 @@ export function normalizePL(buffer: Buffer): NormalizePLResult {
       // Step 4: split GLNumber by "-"
       const dashIdx = glNumber.indexOf(GL_NUMBER_SEPARATOR);
       const glCode = dashIdx >= 0 ? glNumber.slice(0, dashIdx).trim() : glNumber;
-      const branch = dashIdx >= 0 ? glNumber.slice(dashIdx + 1).trim() : "";
+      const branch = normalizeBlastBranch(dashIdx >= 0 ? glNumber.slice(dashIdx + 1).trim() : "");
 
       // Step 7: parse date
       const rawDate = col(row, GL_COL.JOURNAL_POST_DATE);

@@ -182,6 +182,14 @@ export interface EnrichResult {
   transactions: EnrichedTransaction[];
   uncategorizedCount: number;
   unknownBranchCount: number;
+  /**
+   * QUE sucursales no estan en el catalogo, no solo cuantas filas.
+   *
+   * Un "142 unknown branch" no se puede resolver; un "70000, 70300, 71000" se
+   * lee de un vistazo y dice exactamente que paso. Ver la nota en
+   * lib/enrich-transactions.
+   */
+  unknownBranches: string[];
 }
 
 // ─── API response shapes ──────────────────────────────────────────────────────
@@ -215,6 +223,16 @@ export interface UploadPLResponse {
   rowCount: number;
   uncategorizedCount: number;
   unknownBranchCount: number;
+  /**
+   * Las sucursales que no estan en `finance_division.branches`. Vacio si todas
+   * cuadran.
+   *
+   * ⚠ VAN EN LA RESPUESTA, no solo su conteo, porque son lo unico que permite
+   * resolver el problema sin ir a la base: ver "70000, 70300" dice que el export
+   * trae dos ceros de mas. Ese fallo entra sin fallar --el upload dice
+   * "completed" y el P&L sale vacio-- y ya costo dos correcciones a mano.
+   */
+  unknownBranches: string[];
   parseWarnings: number;
   manualAssignments?: ManualAssignmentSummary;
   /** Present only when orphaned transaction-level notes existed to sweep. */
