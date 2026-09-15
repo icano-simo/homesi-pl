@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
     ]);
 
     // ── 7. Enrich rows with category / region data (pure function) ────────
-    const { transactions, uncategorizedCount, unknownBranchCount } =
+    const { transactions, uncategorizedCount, unknownBranchCount, unknownBranches } =
       enrichTransactions(rows, glMappings ?? [], branches ?? [], id);
 
     // ── 6. Batch-insert in chunks to stay within payload limits ───────────
@@ -207,6 +207,7 @@ export async function POST(req: NextRequest) {
       rowCount: rows.length,
       uncategorizedCount,
       unknownBranchCount,
+      unknownBranches,
       parseWarnings: warnings.length,
     };
     if (manualSummary) response.manualAssignments = manualSummary;

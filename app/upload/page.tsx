@@ -351,9 +351,39 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
               {result.parseWarnings} row(s) had parse warnings and were skipped.
             </p>
           )}
-          {(result.uncategorizedCount > 0 || result.unknownBranchCount > 0) && (
+          {/*
+            * ⚠ UNA SUCURSAL FUERA DEL CATALOGO NO ES UN AVISO GRIS MAS.
+            *
+            * Es el fallo que mas cuesta de esta app: el archivo entra, el upload
+            * dice "completed", y el P&L sale VACIO porque ningun filtro
+            * encuentra esas filas. No falla nada, asi que el unico sintoma es
+            * una pantalla en blanco y nadie sabe por que. Ha pasado dos veces
+            * --julio y agosto-- y las dos se arreglo a mano por SQL.
+            *
+            * Por eso va en rojo, aparte del aviso de categorias, Y NOMBRA LAS
+            * SUCURSALES: "142 unknown branch" no se puede resolver, "70000,
+            * 70300, 71000" dice exactamente que paso.
+            */}
+          {"unknownBranches" in result && result.unknownBranches?.length > 0 && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs">
+              <p className="font-semibold text-red-700">
+                {result.unknownBranchCount.toLocaleString()} row
+                {result.unknownBranchCount === 1 ? "" : "s"} loaded with a branch that is not in the
+                catalogue — they will not appear in the P&amp;L.
+              </p>
+              <p className="mt-1 text-red-700">
+                Branch{result.unknownBranches.length === 1 ? "" : "es"} not found:{" "}
+                <span className="font-mono font-semibold">{result.unknownBranches.join(", ")}</span>
+              </p>
+              <p className="mt-1 text-red-600">
+                If they look like a real branch with extra digits, the export format changed. If
+                they are new branches, add them under Settings → Branches.
+              </p>
+            </div>
+          )}
+          {result.uncategorizedCount > 0 && (
             <p className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-              Some rows are uncategorized. Review GL Mapping and Branches in Settings.
+              Some rows are uncategorized. Review GL Mapping in Settings.
             </p>
           )}
           {result.manualAssignments && <ManualAssignmentBlock ma={result.manualAssignments} />}
