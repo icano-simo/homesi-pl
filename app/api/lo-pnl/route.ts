@@ -24,6 +24,42 @@ const MESES_NOMBRE = [
   "July","August","September","October","November","December",
 ];
 
+/**
+ * El nombre, escrito igual venga como venga.
+ *
+ * ⚠ LAS FUENTES NO SE PONEN DE ACUERDO Y LA PANTALLA LO ENSEÑABA. `july castro`
+ * del roster, "LAINO CHEGWIN, GIAN L" del P&L, "Gian Laino" de Salesforce:
+ * unos en minuscula, otros en mayuscula, y el lector tenia que deducir que son
+ * personas y no codigos.
+ *
+ * ⚠ SOLO TOCA COMO SE VE, NUNCA COMO SE EMPAREJA. El emparejador trabaja con
+ * `normalizeName`, que es otra cosa y vive en lib/lo-payroll-name. Si esto se
+ * colara en una clave, dos grafias de la misma persona dejarian de casar.
+ *
+ * Las particulas se quedan en minuscula --"de", "del", "la", "van"-- porque
+ * "Hortencia De Anda" con D mayuscula es un apellido compuesto mal escrito, y
+ * ese apellido ya nos costo una regla de emparejamiento.
+ */
+const PARTICULAS = new Set(["de", "del", "la", "las", "los", "van", "von", "da", "di", "y"]);
+
+function nombreBonito(raw: string | null | undefined): string {
+  const s = (raw ?? "").trim();
+  if (!s) return "";
+  // Un person_code --"jose.arango", "m.rodriguez"-- no es un nombre: se deja
+  // como esta en vez de convertirlo en "Jose.arango", que parece un nombre y no
+  // lo es.
+  if (/^[a-z0-9]+\.[a-z0-9.]+$/i.test(s)) return s;
+  return s
+    .split(/\s+/)
+    .map((p, i) => {
+      const bajo = p.toLowerCase();
+      if (i > 0 && PARTICULAS.has(bajo)) return bajo;
+      // Respeta los guiones: "Tito-Pace", no "Tito-pace".
+      return bajo.replace(/(^|[-'])([a-záéíóúñü])/g, (_, sep, c) => sep + c.toUpperCase());
+    })
+    .join(" ");
+}
+
 /*
  * ─────────────────────────────────────────────────────────────────────────────
  * P&L POR LOAN OFFICER
@@ -277,10 +313,54 @@ export type PayrollStatus =
   /** Solo aparece en formas de atribucion menos fiable. */
   | "fragile_only";
 
+/**
+ * A que pregunta pertenece esta persona.
+ *
+ * ⚠ LA PANTALLA MEZCLABA LOS CUATRO Y POR ESO NO SE ENTENDIA. Un procesador con
+ * coste y cero cierres salia igual que un loan officer que no cerro nada, y lo
+ * primero es su trabajo mientras lo segundo es un hallazgo.
+ *
+ * ⚠ EL EJE ES `is_producer`, NO EL TEXTO DEL CARGO. En `org.roster_current` hay
+ * 42 cargos distintos para 114 personas, con mayusculas mezcladas y variantes
+ * del mismo puesto --"LO ASSISTANT" y "LOAN OFFICER ASSISTANT", "BUSINESS
+ * DEVELOPER" y "BUSINESS DEVELOPMENT"--. Agrupar por ese texto inventaria
+ * categorias. El booleano ya lo resolvio alguien aguas arriba.
+ *
+ * ⚠ Y EL NOMBRE DEL CARGO PUEDE CONTRADECIRLO: los dos "NonProducing Branch
+ * Manager" tienen `is_producer = true`. Manda el booleano; el cargo se enseña
+ * tal cual para que quien lo lea vea la contradiccion en vez de sospechar del
+ * dato.
+ */
+export type OfficerGroup =
+  /** Cierra prestamos. "¿Se paga solo?" tiene sentido pleno aqui. 36 personas. */
+  | "producer"
+  /** NPPM: otra figura y otra pregunta. 6. */
+  | "nppm"
+  /** Asistentes, procesadores, soporte. Coste real y cero cierres: 62. */
+  | "support"
+  /**
+   * No esta en `roster_current`, asi que no hay cargo que mostrar. 22 personas.
+   *
+   * Son las bajas --Vermejo, Anderson-- y quienes nunca estuvieron en RRHH. NO
+   * se meten en otro cubo: "cargo no disponible" es lo honesto.
+   *
+   * ⚠ OBSERVACION, NO AFIRMACION: los NUEVE loan officers sin nomina localizada
+   * caen TODOS aqui, ninguno en `producer`. Y encaja con otra cosa medida --los
+   * prefijos de prestamo 913, 203 y 150, que no existen en el catalogo de
+   * sucursales y se agrupan por persona-- apuntando a que produzcan sin ser de
+   * la division. Es una correlacion sobre 22 personas, no una conclusion, y no
+   * se resuelve desde esta pantalla.
+   */
+  | "unknown";
+
 export interface OfficerBlock {
   name: string;
   personCode: string | null;
   branch: string | null;
+  /** El cargo tal cual viene del roster. Null cuando no esta. */
+  position: string | null;
+  area: string | null;
+  group: OfficerGroup;
 
   // ── Bloque 1 ──
   loans: LoanRow[];
@@ -310,6 +390,60 @@ export interface OfficerBlock {
    */
   pendingPlBooked: number;
   block1Net: number;
+
+  /*
+   * ── LA CUENTA, EN EL ORDEN EN QUE SE LEE ──────────────────────────────────
+   *
+   * La tabla tenia tres columnas de dinero y ninguna decia de donde salia la
+   * siguiente: Gian Laino producia 22.469, costaba 16.919, y el neto ponia
+   * 5.551 sin que se viera la resta. Estas cuatro se leen de izquierda a
+   * derecha como una cuenta y CADA UNA SE RECONSTRUYE DE LAS DE AL LADO:
+   *
+   *     produced - commission - otherCost = net
+   *
+   * Gian Laino, medido: 237.219,98 - 76.070,71 - 49.570,87 = 111.578,40.
+   *
+   * ⚠ ES LA MISMA CIFRA QUE `total`, no una segunda. La igualdad se cumple
+   * siempre porque otherCost se define como "la nomina que no es comision", asi
+   * que produced - comision - (nomina - comision) = produced - nomina. Sacar el
+   * desglose NO cambia ningun total: lo hace legible.
+   *
+   * ⚠ Y HACE VISIBLE LO QUE ESTABA ENTERRADO EN UN COMENTARIO: la comision sale
+   * POR la nomina, no encima. Restarla y ademas contar 60105 la contaria dos
+   * veces, y por eso `total` nunca la resto -- pero nadie podia verlo.
+   */
+
+  /** Lo que dejaron sus prestamos. Igual a block1Net. */
+  produced: number;
+  /** Lo que cobro por cerrarlos, de Compensafe. Positivo. */
+  commission: number;
+  /**
+   * El resto de su nomina: nomina localizada menos comision. Positivo.
+   *
+   * ⚠ PUEDE SALIR NEGATIVO, y cuando pasa NO se pinta: se marca. Ver
+   * `commissionExceedsPayroll`.
+   */
+  otherCost: number;
+  /** produced - commission - otherCost. Identico a `total`. */
+  net: number;
+  /**
+   * La comision es MAYOR que la nomina localizada, asi que `otherCost` sale
+   * negativo -- lo que leido literalmente diria que sus otros costes le
+   * devolvieron dinero.
+   *
+   * ⚠ ES UN DETECTOR QUE LA MARCA ANTERIOR NO TENIA. `commissionOutsidePayroll`
+   * pregunta "¿tiene ALGUNA nomina?"; esta pregunta "¿le CABE la comision
+   * dentro?". Medido el 2026-09-15: salta en CUATRO personas y solo tres
+   * llevaban la marca vieja. La cuarta es Haydee Tito-Pace, con nomina
+   * localizada de 1.292 contra 32.179 de comision -- veinticinco veces mas --
+   * y nadie lo estaba viendo.
+   *
+   * ⚠ DICE LO QUE SE VE Y NO DIAGNOSTICA. Las causas son varias y la pantalla
+   * no las distingue: P&L del periodo sin cargar --el caso de Haydee, sucursal
+   * 728--, nomina sin atribuir, o comision mal cruzada. Afirmar cual seria
+   * inventar.
+   */
+  commissionExceedsPayroll: boolean;
 
   // ── Bloque 2 ──
   payroll: PayrollRow[];
@@ -431,10 +565,35 @@ export async function GET(req: NextRequest) {
    * de lo que sigue cambia. El filtro de "que cuenta" --is_closed AND
    * counts_for_division-- vive en lib/loan-source y no se reescribe aqui.
    */
-  const [cerrados, plCoverage] = await Promise.all([
+  const [cerrados, plCoverage, rosterRows] = await Promise.all([
     getClosedLoans({ month, year }),
     getPlCoverage(),
+    /*
+     * El cargo de cada persona. Que falle NO puede tumbar la pantalla: sin
+     * roster todo el mundo cae en "unknown", que es peor pero es honesto.
+     */
+    createServerClient("org")
+      .from("roster_current")
+      .select("person_code,position,area,is_producer,is_nppm_realtor")
+      .range(0, 999)
+      .then((r) => (r.data ?? []) as Array<Record<string, unknown>>)
+      .then((d) => d, () => [] as Array<Record<string, unknown>>),
   ]);
+
+  const roster = new Map(rosterRows.map((r) => [r.person_code as string, r]));
+
+  /** Cargo y grupo de una persona. Sin roster, "unknown" y sin cargo. */
+  const cargoDe = (code: string | null): { position: string | null; area: string | null; group: OfficerGroup } => {
+    const r = code ? roster.get(code) : undefined;
+    if (!r) return { position: null, area: null, group: "unknown" };
+    return {
+      position: (r.position as string) ?? null,
+      area: (r.area as string) ?? null,
+      // ⚠ El booleano manda sobre el texto del cargo: los dos "NonProducing
+      // Branch Manager" tienen is_producer = true.
+      group: r.is_producer ? "producer" : r.is_nppm_realtor ? "nppm" : "support",
+    };
+  };
 
   /*
    * El mes real de cierre de cada prestamo, que NO es el `month` de la consulta:
@@ -749,10 +908,24 @@ export async function GET(req: NextRequest) {
      */
     const cobraEnNomina = payrollStatus === "located";
 
+    const cargo = cargoDe(persona?.personCode ?? null);
+    // La nomina localizada, en positivo. `otherCost` es lo que queda de ella
+    // despues de la comision -- ver la nota de la cuenta en OfficerBlock.
+    const nominaPos = -block2Total;
+    const otherCost = nominaPos - block1Commission;
+
     officers.push({
-      name: nombre,
+      name: nombreBonito(nombre),
       personCode: persona?.personCode ?? null,
       branch: (filas[0]?.branch as string | null) ?? null,
+      position: cargo.position,
+      area: cargo.area,
+      group: cargo.group,
+      produced: block1Net,
+      commission: block1Commission,
+      otherCost,
+      net: block1Net - block1Commission - otherCost,
+      commissionExceedsPayroll: otherCost < 0,
       loans,
       loansPendingPl: pendientes.length,
       pendingPlBooked,
@@ -791,10 +964,22 @@ export async function GET(req: NextRequest) {
     const persona = censo.people.find((p) => idDe(p) === id);
     const fragil = nominaFragil.get(id) ?? [];
     const block2Total = filas.reduce((s, r) => s + r.amount, 0);
+    const cargoSinCierres = cargoDe(persona?.personCode ?? null);
     officers.push({
-      name: persona?.displayName ?? id,
+      name: nombreBonito(persona?.displayName ?? id),
       personCode: persona?.personCode ?? null,
       branch: null,
+      position: cargoSinCierres.position,
+      area: cargoSinCierres.area,
+      group: cargoSinCierres.group,
+      // Sin cierres no hay nada producido ni comision que restar: su cuenta es
+      // solo el coste, en negativo. Que un procesador salga asi NO es un
+      // hallazgo -- es su trabajo, y por eso va en su propio grupo.
+      produced: 0,
+      commission: 0,
+      otherCost: -block2Total,
+      net: block2Total,
+      commissionExceedsPayroll: false,
       loans: [],
       loanCount: 0,
       // Sin cierres no puede haber ninguno pendiente de P&L.
