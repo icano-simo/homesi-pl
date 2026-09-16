@@ -676,10 +676,23 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
  */
 function TarjetaTotales({ o }: { o: OfficerBlock }) {
   /*
-   * Aqui SI se agrupa por cuenta y sucursal, al contrario que en la tarjeta de
-   * un prestamo. Sumando 64 prestamos la fila cruda no dice nada --habria 840--
-   * y lo que se quiere saber es cuanto pesa cada cuenta. El par que se anula,
-   * que es la razon de las filas crudas, se ve en la tarjeta del prestamo.
+   * ─────────────────────────────────────────────────────────────────────────
+   * ⚠ AQUI SE AGRUPA Y EN LA TARJETA DE UN PRESTAMO NO. PARECE UNA
+   *   CONTRADICCION Y NO LO ES.
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * La fila cruda existe para que se vea un par anularse DENTRO de un prestamo:
+   * 41305 LO Margin -9.602,39 contra 41200 Discount Income +9.602,39, o los
+   * +389,00 y -333,00 de 41205 que son un traslado a la 700. Ahi la fila cruda
+   * es el dato.
+   *
+   * Sumando los 64 prestamos de Nathan Martinez serian 840 filas, y ninguna
+   * diria nada: un +389,00 suelto entre ochocientas no es informacion, es
+   * ruido. Lo que se pregunta en esta tarjeta es otra cosa --cuanto pesa cada
+   * cuenta en el total-- y para eso la suma es la respuesta.
+   *
+   * Dos preguntas distintas sobre los mismos datos, como las dos cuentas del
+   * pie. El criterio no es "crudo o agrupado", es "¿que se esta preguntando?".
    */
   const agrupadas = useMemo(() => {
     const m = new Map<string, LoanLine>();
@@ -821,16 +834,28 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
   const [ayuda, setAyuda] = useState(false);
 
   /*
-   * ⚠ ABIERTAS POR DEFECTO, Y CON UN INTERRUPTOR PARA TODAS. Nathan Martinez
-   * cierra 65 prestamos con 840 filas de cuenta entre todos --13,9 de media y
-   * 28 en el peor--, o sea mas de mil filas apiladas.
+   * ─────────────────────────────────────────────────────────────────────────
+   * PLEGADAS A PARTIR DE 15 CIERRES, ABIERTAS POR DEBAJO
+   * ─────────────────────────────────────────────────────────────────────────
    *
-   * No se pliega por defecto porque eso seria decidir por el lector que el
-   * detalle no le interesa. Pero la cabecera de cada tarjeta lleva ya su
-   * importe, sus bps y su contribucion, asi que plegarlas NO esconde ninguna
-   * cifra -- solo el desglose-- y por eso el interruptor es barato.
+   * Medido en el peor caso, Nathan Martinez: 64 de sus 65 cierres tienen
+   * lineas, 840 filas de cuenta en total --13,9 de media y 28 en el peor
+   * prestamo--, o sea mas de mil filas apiladas de una vez.
+   *
+   * ⚠ PLEGAR AQUI NO ESCONDE NINGUNA CIFRA, y es lo que hace que esta sea la
+   * salida buena y no las otras dos. La cabecera de cada tarjeta lleva ya
+   * numero, prestatario, periodo, importe, bps y contribucion: lo unico que se
+   * pliega es el desglose por cuenta. Paginar o enseñar "los N mayores" SI
+   * esconderia dinero, y este modulo no puede hacer eso.
+   *
+   * El umbral va por numero de cierres y no por filas porque es lo que el
+   * lector ve antes de abrir: con doce prestamos quiere el detalle, con sesenta
+   * y cinco quiere primero la lista.
    */
-  const [plegadas, setPlegadas] = useState<Set<string>>(() => new Set());
+  const UMBRAL_PLEGADO = 15;
+  const [plegadas, setPlegadas] = useState<Set<string>>(
+    () => new Set(o.loans.length > UMBRAL_PLEGADO ? o.loans.map((l) => l.loan_number) : []),
+  );
   const alternar = (ln: string) =>
     setPlegadas((prev) => {
       const n = new Set(prev);
@@ -880,13 +905,30 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {/*
+              * ⚠ LOS DOS BOTONES A LA VISTA, no uno que cambia de texto. Con
+              * uno solo, el que aparece depende de un estado que no se ve --si
+              * estan todas plegadas o no-- y con 65 tarjetas eso no se sabe sin
+              * bajar hasta el final. Dos botones dicen las dos acciones
+              * posibles, y el que ya no hace nada se apaga.
+              */}
             {o.loans.length > 1 && (
-              <button
-                onClick={() => setPlegadas(todasPlegadas ? new Set() : new Set(o.loans.map((l) => l.loan_number)))}
-                className="rounded-full border border-slate-200 px-2.5 py-1 text-[10px] text-slate-500 hover:bg-slate-50"
-              >
-                {todasPlegadas ? "Expand all" : "Collapse all"}
-              </button>
+              <span className="mr-1 inline-flex overflow-hidden rounded-full border border-slate-200 text-[10px]">
+                <button
+                  onClick={() => setPlegadas(new Set())}
+                  disabled={plegadas.size === 0}
+                  className="px-2.5 py-1 text-slate-500 enabled:hover:bg-slate-50 disabled:text-slate-300"
+                >
+                  Expand all
+                </button>
+                <button
+                  onClick={() => setPlegadas(new Set(o.loans.map((l) => l.loan_number)))}
+                  disabled={todasPlegadas}
+                  className="border-l border-slate-200 px-2.5 py-1 text-slate-500 enabled:hover:bg-slate-50 disabled:text-slate-300"
+                >
+                  Collapse all
+                </button>
+              </span>
             )}
             {/*
               * ⚠ UN SOLO BOTON PARA TODA LA PROSA. Los parrafos estaban
