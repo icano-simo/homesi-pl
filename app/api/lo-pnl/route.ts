@@ -296,6 +296,36 @@ export interface LoanLine {
    * fuera tambien los costes directos, que SI lo causan. Cual de las dos es la
    * buena es una decision de negocio, no un bug que se arregle de pasada.
    *
+   * ─── CUANTO PESA LA DIFERENCIA, MEDIDO EL 2026-09-15 ───────────────────────
+   *
+   * Sobre los 482 cierres de la division con apuntes:
+   *
+   *     solo Revenue        5.577.387,15
+   *     todas las lineas    5.625.016,96
+   *     diferencia             47.629,81   =  0,85%
+   *
+   * ⚠ PERO LA MEDIA POR PRESTAMO ES 17,03% Y LA MEDIANA 1,59%, y esa distancia
+   * ES el hallazgo: no es una diferencia repartida, es una cola. Mediana 1,59%,
+   * p95 9,09%, y luego 22 prestamos por encima del 10%, seis del 25%, cinco del
+   * 50% y DOS por encima del 100% --donde lo excluido supera al Revenue--.
+   *
+   * ⚠ Y LA COLA ES UNA SOLA CUENTA, NO EL COSTE ORDINARIO DEL PRESTAMO:
+   *
+   *     55601  One-Time Transfers    32 lineas   16 prestamos   bruto 334.352,38
+   *
+   * Es la que produce los dos casos del 100%: el 203001997314 lleva +12.450,00
+   * contra 208,00 de Revenue, y el 707002013216 lleva -32.144,00 en mayo contra
+   * un BM Margin de marzo. Quitandola, la diferencia agregada sube a 1,43% --sube
+   * porque su neto es negativo-- y el resto es coste de prestamo de toda la vida:
+   * Credit Report en 345 prestamos, U/W - TALX en 193, tasacion en 22.
+   *
+   * ⚠ SG&A Y PERSONAL NO MUEVEN NADA HOY, PERO SE VERAN. 70100 Marketing son 270
+   * lineas en 100 prestamos con neto EXACTAMENTE 0,00, y 60125 Operations Payroll
+   * otras 24 en 12, tambien 0,00: son pares que se anulan dentro de cada
+   * prestamo. Un solo prestamo tiene SG&A con neto distinto de cero --el
+   * 700002013844, con -8.721,60 de Office Expense--. Asi que incluirlos no cambia
+   * ningun total, pero SI hace aparecer 270 lineas de marketing en el desglose.
+   *
    * Lo que si se hace es DECIRLO: el pie del desglose reparte el total por
    * grupo, para que las dos cifras se vean una al lado de la otra en vez de
    * descubrirse por sorpresa comparando dos pantallas.
