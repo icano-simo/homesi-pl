@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
 import { LoanPnlCard, usdEntero } from "@/components/loan-pnl-card";
+import { PRODUCTION_PAY_GL_CODES } from "@/lib/loan-detail-accounts";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
@@ -889,8 +890,22 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
     };
   }, [o.loans]);
 
-  const nominaPos = -o.block2Total;
   const localizada = o.payrollStatus !== "not_located";
+
+  /*
+   * ⚠ SOLO LAS CUENTAS DE PRODUCCION, NO LA NOMINA ENTERA. Se comparaba la
+   * comision contra el total de nomina, y esa diferencia no significaba nada:
+   * metia impuestos, seguros y telefono, que son el coste de tener a la persona
+   * como empleado y no dinero que ella reciba. En Nathan Martinez en julio,
+   * 13.996,51 de comision contra 13.996,51 de 60105 -- identico al centimo --
+   * mientras que contra la nomina completa salia una diferencia de 1.472,95 que
+   * eran justo sus impuestos y seguros.
+   *
+   * Las tres cuentas y por que solo esas, en lib/loan-detail-accounts.ts.
+   */
+  const pagoPorProducir = -o.payroll
+    .filter((r) => r.gl_code != null && PRODUCTION_PAY_GL_CODES.includes(r.gl_code))
+    .reduce((s, r) => s + r.amount, 0);
 
   return (
     <LoanPnlCard
@@ -988,16 +1003,19 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
               <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
             </div>
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-slate-600">Paid in payroll</span>
+              <span className="text-slate-600"
+                    title="Only the accounts that pay for production: 60105 Loan Officer Payroll, 60115 BM Personal Production, 60117 Sales Manager Payroll. Taxes, insurance and equipment are the cost of employing the person, not money they receive.">
+                Loan officer payroll
+              </span>
               <span className="font-mono tabular-nums text-slate-700">
-                {localizada ? usdEntero(nominaPos)
+                {localizada ? usdEntero(pagoPorProducir)
                   : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
               </span>
             </div>
             <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
               <span className="font-medium text-slate-600">Difference</span>
               <span className="font-mono tabular-nums font-medium text-slate-700">
-                {localizada ? usdEntero(o.commission - nominaPos) : "—"}
+                {localizada ? usdEntero(o.commission - pagoPorProducir) : "—"}
               </span>
             </div>
           </div>

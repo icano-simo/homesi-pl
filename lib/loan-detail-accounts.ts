@@ -32,6 +32,54 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * LAS CUENTAS POR LAS QUE SE LE PAGA A ALGUIEN POR PRODUCIR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠ SON LAS UNICAS COMPARABLES CON LA COMISION DE COMPENSAFE. Lo demas de la
+ * nomina --impuestos, seguros, telefono-- es el coste de tener a la persona
+ * como empleado, no dinero que ella reciba: enfrentarlo a la comision producia
+ * una diferencia que no significaba nada.
+ *
+ * Medido en Nathan Martinez, julio de 2026:
+ *
+ *     comision de sus cierres        13.996,51
+ *     60105 Loan Officer Payroll    -13.996,51   <- identico al centimo
+ *     ------------------------------------------
+ *     diferencia                             0
+ *
+ *     contra la nomina COMPLETA
+ *     64100 Payroll Tax              -1.018,72
+ *     62305 Employee Insurance       -1.178,32
+ *     62304 Credit From Payroll         +732,74
+ *     62301 Vision                        -8,65
+ *     ------------------------------------------
+ *     diferencia                     -1.472,95   <- impuestos y seguros
+ *
+ * ⚠ TRES CUENTAS Y NO UNA, porque no todos cobran por la misma. Un branch
+ * manager que produce cobra en 60115 --Badovinac-- y un sales manager en 60117
+ * --Mariano Claudio--. Preguntar solo por 60105 los deja a los dos fuera.
+ * Medido sobre los 39 officers con comision, contando los que casan al euro:
+ *
+ *     60105 solo                6/39    desvio 782.514,14
+ *     60105 + 60115 + 60117     7/39    desvio 496.123,48
+ *     + 60127                   7/39    desvio 496.123,48   (nadie lo usa)
+ *     toda la nomina            1/39    desvio 1.112.220,41
+ *
+ * ⚠ Y NO CUADRA SIEMPRE, NI DEBE ESPERARSE QUE CUADRE. Son 7 de 39 sobre todos
+ * los periodos y 4 de 17 en julio: los que casan son aquellos cuya comision se
+ * pago dentro del mismo periodo. Compensafe agrupa por FECHA DE CIERRE y el
+ * P&L por FECHA DE PAGO, asi que un cierre de fin de mes se paga en el
+ * siguiente. La comparacion pasa de no significar nada a significar "lo que
+ * falta por pagar o se pago de antes", que es una pregunta real.
+ *
+ * ⚠ NO SE INCLUYE 60112 (BM Operating Entity - Salary) NI 60126 (Regional -
+ * Salary): son sueldo fijo, no pago por produccion. Ni 60118, que es el
+ * asistente del loan officer y es otra persona.
+ */
+export const PRODUCTION_PAY_GL_CODES: readonly string[] = ["60105", "60115", "60117"];
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * EL ORDEN EN QUE SE LEEN LAS CUENTAS DE UN PRESTAMO, SIEMPRE EL MISMO
  * ═══════════════════════════════════════════════════════════════════════════
  *
