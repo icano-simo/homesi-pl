@@ -1434,9 +1434,19 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
             {/*
               * ⚠ LOS AÑOS SALEN DEL DATO Y DICEN CUANTOS MESES TRAEN. Escritos
               * a mano, el año que viene el boton seguiria diciendo "2025".
-              * Y ninguno esta completo: 2025 tiene cinco meses --el P&L empieza
-              * en agosto-- asi que un "2025" a secas promete doce y enseña
-              * cinco. El conteo va en el boton, no en un tooltip.
+              *
+              * ⚠ Y EL CONTADOR DICE DE QUE ES, porque hay DOS cuentas y no
+              * coinciden en ningun año:
+              *
+              *              meses con P&L      meses con cierres
+              *     2025     5  (ago-dic)       4  (sep-dic)
+              *     2026     8  (ene-ago)       9  (ene-sep)
+              *
+              * En 2025 sobra agosto --hay P&L y no hubo cierres-- y en 2026
+              * falta septiembre, que tiene cierres y aun no tiene P&L. Un "5 mo"
+              * a secas al lado de una tabla con cierres de cuatro meses invita a
+              * restar y a preguntarse que falta; por eso pone "5 mo P&L" y el
+              * tooltip lleva las dos listas.
               */}
             {(data?.years ?? [])
               .filter((y) => y.year !== anioHeredado)
@@ -1444,7 +1454,11 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                 <button
                   key={y.year}
                   onClick={() => setPeriodo({ tipo: "anio", anio: y.year })}
-                  title={`${y.year}: ${y.months.join(", ")}`}
+                  title={[
+                    `${y.year} — P&L loaded for ${y.months.length} month(s): ${y.months.join(", ") || "none"}`,
+                    `Closings in ${y.closingMonths.length} month(s): ${y.closingMonths.join(", ") || "none"}`,
+                    "The two need not match: a month can carry payroll with no closings, or closings whose P&L is not loaded yet.",
+                  ].join("\n")}
                   className={`border-l border-gray-200 px-3 py-1 ${
                     periodo.tipo === "anio" && periodo.anio === y.year
                       ? "bg-blue-600 text-white"
@@ -1453,7 +1467,7 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                 >
                   {y.year}
                   <span className={periodo.tipo === "anio" && periodo.anio === y.year ? "ml-1 text-white/70" : "ml-1 text-gray-400"}>
-                    {y.months.length === 12 ? "" : `· ${y.months.length} mo`}
+                    {y.months.length === 12 ? "" : `· ${y.months.length} mo P&L`}
                   </span>
                 </button>
               ))}

@@ -908,11 +908,23 @@ export interface LoPnlResult {
    * ⚠ SE DERIVAN DEL DATO Y NO DE UNA LISTA ESCRITA A MANO. Con una lista, el
    * año que viene el boton seguiria diciendo "2025" y faltaria 2026.
    *
-   * ⚠ Y CADA UNO DICE CUANTOS MESES TRAE, porque ninguno esta completo: medido
-   * el 2026-09-16, 2025 tiene CINCO meses --el P&L empieza en agosto-- y 2026
-   * tiene ocho. Un boton que ponga "2025" a secas promete doce y enseña cinco.
+   * ⚠ Y CADA UNO DICE CUANTOS MESES TRAE, porque ninguno esta completo. Pero
+   * son DOS cuentas distintas y hay que devolver las dos, porque la pantalla
+   * enseña las dos cosas y no coinciden en ningun año:
+   *
+   *              meses con P&L        meses con cierres
+   *     2025     5  (ago-dic)         4  (sep-dic)
+   *     2026     8  (ene-ago)         9  (ene-sep)
+   *
+   * En 2025 sobra agosto --hay P&L y no hubo cierres-- y en 2026 falta
+   * septiembre, que tiene cierres y todavia no tiene P&L cargado: es el mismo
+   * caso que marca .
+   *
+   * Un boton que dijera "5 mo" al lado de una tabla con cierres de cuatro meses
+   * invita a restar y a preguntarse que falta. Por eso el contador dice de que
+   * es y el tooltip lleva las dos listas.
    */
-  years: { year: number; months: string[] }[];
+  years: { year: number; months: string[]; closingMonths: string[] }[];
   /** Sin el espejo de person_name_key la tasa baja de 34/46 a 31/46. */
   nameKeyAvailable: boolean;
   nameKeyNote: string | null;
@@ -1822,10 +1834,32 @@ export async function GET(req: NextRequest) {
     // Sin esto la pantalla se queda sin botones de año, no sin cifras.
     console.error("[lo-pnl] no se pudieron leer los periodos cargados:", e);
   }
-  const years = [...porAnio.entries()]
-    .map(([year, set]) => ({
+  /*
+   * Y los meses en que hubo CIERRES, que no son los mismos. Salen de los
+   * cierres que ya se han leido para este periodo... no: hacen falta de TODOS
+   * los periodos, porque el boton describe el año entero y no el que se mira.
+   * Se reutiliza la consulta que ya se hizo para el aviso de otros meses.
+   */
+  const cierresPorAnio = new Map<number, Set<string>>();
+  try {
+    for (const l of await getClosedLoans({})) {
+      const [y, m] = (l.closingMonth ?? "").split("-");
+      const anio = Number(y);
+      const mes = m ? MESES_NOMBRE[Number(m) - 1] : null;
+      if (!anio || !mes) continue;
+      const set = cierresPorAnio.get(anio) ?? new Set<string>();
+      set.add(mes);
+      cierresPorAnio.set(anio, set);
+    }
+  } catch (e) {
+    console.error("[lo-pnl] no se pudieron leer los meses con cierres:", e);
+  }
+
+  const years = [...new Set([...porAnio.keys(), ...cierresPorAnio.keys()])]
+    .map((year) => ({
       year,
-      months: MESES_NOMBRE.filter((m) => set.has(m)),
+      months: MESES_NOMBRE.filter((m) => porAnio.get(year)?.has(m)),
+      closingMonths: MESES_NOMBRE.filter((m) => cierresPorAnio.get(year)?.has(m)),
     }))
     .sort((a, b) => b.year - a.year);
 
