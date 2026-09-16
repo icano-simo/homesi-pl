@@ -75,7 +75,144 @@ function Marca({ children, title, tono = "gris" }: {
 
 // ─── Detalle de una persona ───────────────────────────────────────────────────
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * EL DESGLOSE DE UN PRESTAMO, CUENTA A CUENTA
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ SIN AGRUPAR POR CUENTA, Y ES LA DECISION QUE DA SENTIDO AL BLOQUE. Medido
+ * sobre los 736 prestamos con apuntes: agrupar por gl_code + sucursal taparia
+ * 590.857,86 de movimiento en 727 grupos, y en 317 de ellos --209 prestamos--
+ * lo tapado son filas que se compensan.
+ *
+ * El caso que lo motiva, 710002042266: la fila resumen dice "Margin 7.272,43 /
+ * Other 1.130,70" y dentro hay un par de 9.602,39 que se anula entero --41305
+ * LO Margin contra 41200 Discount Income--. Colapsado, ese movimiento no
+ * existe. Y agrupando por cuenta desaparecerian ademas otros dos pares dentro
+ * de la MISMA cuenta: 41205 (+389,00 y -333,00) y 41309 (+448,50 y -280,31).
+ *
+ * ⚠ CERRADO POR DEFECTO. El panel ya lleva tres modulos; catorce lineas
+ * abiertas en cada uno de 24 prestamos empujarian la nomina y la cuenta fuera
+ * de la vista.
+ */
+function DesglosePrestamo({ l }: { l: LoanRow }) {
+  // Por importe absoluto descendente: lo que mas mueve, primero. El orden del
+  // P&L de origen no dice nada, y el alfabetico por cuenta esconde el tamaño.
+  const lineas = [...l.lines].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  const total = lineas.reduce((s, x) => s + x.amount, 0);
+
+  // El reparto por category_6. Solo se enseña cuando hay mas de un grupo: con
+  // uno solo, el subtotal seria el total repetido.
+  const grupos = new Map<string, number>();
+  for (const x of lineas) {
+    const g = x.category_6 ?? "(no group)";
+    grupos.set(g, (grupos.get(g) ?? 0) + x.amount);
+  }
+  const porGrupo = [...grupos.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+
+  return (
+    <tr className="bg-slate-50">
+      <td colSpan={7} className="border-b border-gray-200 px-3 py-2">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="text-left text-gray-500">
+              <th className="px-2 py-1 font-medium">GL</th>
+              <th className="px-2 py-1 font-medium">Account</th>
+              <th className="px-2 py-1 font-medium">Category 7</th>
+              <th className="px-2 py-1 font-medium" title="The branch of the entry, which is not always the branch of the loan.">
+                Branch
+              </th>
+              <th className="px-2 py-1 font-medium text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lineas.map((x, i) => {
+              /*
+               * ⚠ LA SUCURSAL DEL APUNTE SE DISTINGUE CUANDO NO ES LA DEL
+               * PRESTAMO, PERO EN NEUTRO Y NO EN AMBAR.
+               *
+               * Medido sobre los cierres de la division: 1.999 de 5.536 lineas
+               * --el 36,1%-- se contabilizan en otra sucursal. Parte del margen
+               * va a la 700 por diseño, asi que en ambar un tercio de cada
+               * desglose pareceria un problema y la marca dejaria de significar
+               * nada. Es informacion, y se viste como informacion.
+               *
+               * Es el mismo error del que ya avisa lib/loan-detail-accounts.ts:
+               * comparar contra la sucursal del prestamo marcaba 308 de 374.
+               */
+              const otraSucursal = !!x.branch && !!l.branch && x.branch !== l.branch;
+              return (
+                <tr key={i} className="border-t border-gray-200/70">
+                  <td className="px-2 py-1 font-mono text-gray-600">{x.gl_code ?? "—"}</td>
+                  <td className="px-2 py-1 text-gray-700" title={x.check_description ?? undefined}>
+                    {x.gl_name ?? "—"}
+                  </td>
+                  <td className="px-2 py-1 text-gray-500">{x.category_7 ?? "—"}</td>
+                  <td className="px-2 py-1">
+                    <span
+                      className={otraSucursal
+                        ? "rounded border border-slate-300 bg-white px-1 font-mono text-slate-600"
+                        : "font-mono text-gray-500"}
+                      title={otraSucursal
+                        ? `Booked in branch ${x.branch}, while the loan is branch ${l.branch}. Common and not an error: part of the margin is booked in 700 by design.`
+                        : undefined}
+                    >
+                      {x.branch ?? "—"}
+                    </span>
+                  </td>
+                  {/*
+                    * Al centimo, no redondeado como la tabla de fuera: este
+                    * desglose existe para poder cuadrar contra la contabilidad,
+                    * y con dolares enteros no cuadra.
+                    */}
+                  <td className={`px-2 py-1 text-right font-mono tabular-nums ${
+                    x.amount < 0 ? "text-red-600" : "text-gray-700"
+                  }`}>
+                    {usdExacto(x.amount)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            {/*
+              * ⚠ EL TOTAL SE REPARTE POR GRUPO PORQUE ESTA PANTALLA Y LA DE
+              * DETALLE DE PRESTAMOS NO DAN LO MISMO, Y ASI SE VE POR QUE.
+              *
+              * `app/api/loan-detail/route.ts` cuenta solo `category_6 =
+              * "Revenue"`; este modulo cuenta todas las lineas del prestamo.
+              * En 710002042266 eso es 7.986,43 contra 8.403,13, y los 416,70
+              * de diferencia son tres costes directos --tasacion, informe de
+              * credito, condominio-- que SI los causa el prestamo.
+              *
+              * No se unifica desde aqui: cual de las dos definiciones es la
+              * buena es una decision de negocio. Lo que no puede pasar es que
+              * se descubra por sorpresa comparando dos pantallas.
+              */}
+            {porGrupo.length > 1 && porGrupo.map(([grupo, suma]) => (
+              <tr key={grupo} className="border-t border-gray-200 text-gray-500">
+                <td className="px-2 py-1" colSpan={4}>{grupo}</td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums">{usdExacto(suma)}</td>
+              </tr>
+            ))}
+            <tr className="border-t-2 border-gray-300 font-semibold text-gray-700">
+              <td className="px-2 py-1" colSpan={4}>
+                {lineas.length} entr{lineas.length === 1 ? "y" : "ies"}
+              </td>
+              <td className={`px-2 py-1 text-right font-mono tabular-nums ${colorNeto(total)}`}>
+                {usdExacto(total)}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </td>
+    </tr>
+  );
+}
+
 function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
+  const [abierto, setAbierto] = useState<string | null>(null);
+
   if (loans.length === 0) {
     return (
       <div className="px-4 py-3 text-xs text-gray-400 italic">
@@ -114,9 +251,20 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {loans.map((l) => (
-            <tr key={l.loan_number} className="border-b border-gray-100 hover:bg-gray-50">
-              <td className="px-3 py-1 font-mono text-gray-700">{l.loan_number}</td>
+          {loans.map((l) => {
+            const abre = abierto === l.loan_number;
+            return (
+            <Fragment key={l.loan_number}>
+            <tr
+              onClick={() => setAbierto(abre ? null : l.loan_number)}
+              className={`cursor-pointer border-b border-gray-100 hover:bg-gray-50 ${abre ? "bg-gray-50" : ""}`}>
+              <td className="px-3 py-1 font-mono text-gray-700">
+                <span className="inline-flex items-center">
+                  <ChevronRight size={11}
+                    className={`mr-1 shrink-0 transition-transform ${abre ? "rotate-90 text-blue-600" : "text-gray-400"}`} />
+                  {l.loan_number}
+                </span>
+              </td>
               <td className="px-3 py-1 text-gray-500">{l.month} {l.year}</td>
               <td className="px-3 py-1 text-right text-gray-600">{usd(l.loan_amount)}</td>
               <td className="px-3 py-1 text-right">{usd(l.margin)}</td>
@@ -135,7 +283,10 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                   : usd(l.commission)}
               </td>
             </tr>
-          ))}
+            {abre && <DesglosePrestamo l={l} />}
+            </Fragment>
+            );
+          })}
         </tbody>
         {/*
           * ⚠ LA FILA DE TOTALES ES LO QUE ATA ESTE BLOQUE A LA TABLA DE FUERA.

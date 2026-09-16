@@ -245,9 +245,79 @@ async function cargarCenso(): Promise<Censo> {
 
 // ─── Lo que devuelve ──────────────────────────────────────────────────────────
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * UN APUNTE DEL P&L, SIN AGRUPAR
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ SE DEVUELVEN LAS FILAS CRUDAS Y NO UNA SUMA POR CUENTA, y la razon esta
+ * medida: agrupar por `gl_code` + `branch` esconderia 590.857,86 de movimiento
+ * en 727 grupos, y en 317 de ellos --209 prestamos-- lo que se tapa son filas
+ * que se compensan entre si.
+ *
+ * El prestamo 710002042266 lo enseña entero. Agrupado salen doce lineas;
+ * crudas son catorce, y las dos que desaparecen son justo las interesantes:
+ *
+ *     41205  Other HUD Fees, Net  710   +389,00  "710002042266|PEREZ | UBALDO"
+ *     41205  Other HUD Fees, Net  710   -333,00  "ADMIN FEE ON FILE ..."
+ *       agrupadas: +56,00
+ *
+ *     41309  DM Margin            700   +448,50
+ *     41309  DM Margin            700   -280,31
+ *       agrupadas: +168,19
+ *
+ * Es el MISMO fenomeno que hace visible el par 41305 LO Margin / 41200 Discount
+ * Income --opuestos exactos de 9.602,39-- solo que dentro de una sola cuenta.
+ * Una vista que existe para no colapsar no puede colapsar por su cuenta.
+ */
 export interface LoanLine {
   gl_code: string | null;
   gl_name: string | null;
+  /** El grupo contable, tal cual. No se reagrupa nada por el: se enseña. */
+  category_7: string | null;
+  /**
+   * ⚠ EL GRUPO QUE EXPLICA POR QUE ESTA PANTALLA Y LA DE DETALLE DE PRESTAMOS
+   * DAN NUMEROS DISTINTOS PARA EL MISMO PRESTAMO.
+   *
+   * `app/api/loan-detail/route.ts` filtra por `category_6 in NET_GROUPS`, y
+   * NET_GROUPS tiene un solo grupo: "Revenue". Este modulo cuenta TODAS las
+   * lineas del prestamo. Sobre 710002042266:
+   *
+   *     Revenue                  7.986,43   11 filas   41200 41205 41215
+   *                                                    41305 41306 41309
+   *                                                    41830 55275
+   *     Direct Production Costs    416,70    3 filas   55265 Condo Fees
+   *                                                    55550 Appraisal
+   *                                                    55600 Credit Report
+   *     TOTAL                    8.403,13   14 filas
+   *
+   * ⚠ NO SE UNIFICAN AQUI, y las dos son defendibles: el detalle de prestamos
+   * deja fuera lo que no causa el prestamo --SG&A, personal-- pero de paso deja
+   * fuera tambien los costes directos, que SI lo causan. Cual de las dos es la
+   * buena es una decision de negocio, no un bug que se arregle de pasada.
+   *
+   * Lo que si se hace es DECIRLO: el pie del desglose reparte el total por
+   * grupo, para que las dos cifras se vean una al lado de la otra en vez de
+   * descubrirse por sorpresa comparando dos pantallas.
+   */
+  category_6: string | null;
+  /**
+   * La sucursal DEL APUNTE, que no siempre es la del prestamo.
+   *
+   * Parte del margen se contabiliza en la 700 --el DM Margin de este ejemplo--
+   * y eso es informacion, no ruido: sin ella, dos lineas de la misma cuenta
+   * 41205 en sucursales distintas parecen un duplicado.
+   */
+  branch: string | null;
+  /** El periodo del apunte. No tiene por que ser el del cierre. */
+  month: string | null;
+  year: number | null;
+  /**
+   * La descripcion, que es lo unico que distingue dos filas de la misma cuenta
+   * y la misma sucursal. Sin ella el par de 41205 se lee como un error de
+   * carga en vez de como un cobro y su ajuste.
+   */
+  check_description: string | null;
   amount: number;
   is_margin: boolean;
 }
@@ -658,7 +728,7 @@ export async function GET(req: NextRequest) {
       ...(await paginar<Record<string, unknown>>(() =>
         supabase
           .from("pl_transactions")
-          .select("loan_number,gl_code,gl_name,movement")
+          .select("loan_number,gl_code,gl_name,category_7,category_6,branch,month,year,check_description,movement")
           .in("loan_number", trozo),
       )),
     );
@@ -780,6 +850,12 @@ export async function GET(req: NextRequest) {
         return {
           gl_code: l.gl_code as string | null,
           gl_name: l.gl_name as string | null,
+          category_7: l.category_7 as string | null,
+          category_6: l.category_6 as string | null,
+          branch: l.branch as string | null,
+          month: l.month as string | null,
+          year: l.year as number | null,
+          check_description: l.check_description as string | null,
           amount: amt,
           is_margin: esMargen,
         };
