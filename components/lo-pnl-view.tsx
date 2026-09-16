@@ -416,7 +416,6 @@ function BloqueNomina({ rows, fragiles, volumen }: {
     porCuenta.set(k, e);
   }
   const total = rows.reduce((s, r) => s + r.amount, 0);
-  const fragilTotal = fragiles.reduce((s, r) => s + r.amount, 0);
 
   return (
     /*
@@ -460,14 +459,38 @@ function BloqueNomina({ rows, fragiles, volumen }: {
 
       {fragiles.length > 0 && (
         /*
-         * Fuera del total y dicho. Si no se enseñara, estas personas caerian en
-         * "no payroll located", y eso seria FALSO -- y falso de la peor manera,
-         * porque se leeria como un hallazgo.
+         * ⚠ SE LISTAN, NO SE CUENTAN. Estuvieron detalladas, las comprimi a
+         * "+ 2 not counted" al recortar texto, y eso perdio informacion: en
+         * Juseth Castro son "Salesforce User for Castro, Juseth" por +126,00 y
+         * -126,00 -- un par que se anula, y que sin verlo parece una sola cifra
+         * de 0,00 o ninguna. Es el mismo criterio de filas crudas que rige el
+         * desglose por cuenta.
+         *
+         * ⚠ Y VAN FUERA DEL TOTAL A PROPOSITO. `SHAPES_IN_TOTAL` solo admite
+         * "comma" y "email"; estas llegan por la forma "for" --"SALESFORCE USER
+         * FOR APELLIDO, NOMBRE"-- que es mas fragil. Se enseñan en gris y
+         * despues de la linea del total para que se vea que no suman.
          */
-        <p className="mt-1.5 text-[10px] text-slate-400"
-           title={`${fragiles.length} payroll row(s) worth ${usdExacto(fragilTotal)} were matched through description shapes too weak to include, so they are left out of this total.`}>
-          + {fragiles.length} not counted
-        </p>
+        <div className="mt-2 border-t border-dashed border-slate-300 pt-1.5">
+          <p className="text-[10px] text-slate-400"
+             title="Matched through description shapes weaker than 'SURNAME, NAME' or a company email, so they are shown but left out of the total.">
+            Not counted &middot; weaker match
+          </p>
+          <dl className="mt-0.5 space-y-0.5 text-[10px] text-slate-400">
+            {fragiles.map((r, i) => (
+              <div key={i} className="flex items-baseline gap-2">
+                <dt className="truncate pl-2" title={r.check_description}>
+                  {r.gl_name || r.gl_code}
+                </dt>
+                <span aria-hidden className="min-w-0 flex-1 translate-y-[-3px] border-b border-dotted border-slate-200" />
+                <dd className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
+                  <span className="w-[4.5rem] text-right">{usdEntero(r.amount)}</span>
+                  <span className="w-[4rem] text-right">{enBps(r.amount)}</span>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       )}
     </div>
   );
