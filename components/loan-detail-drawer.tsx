@@ -42,6 +42,13 @@ interface LoanRow {
   costs: number;
   net: number;
   net_bps: number | null;
+  /** De comp.loan_commission. Null = no cruza, que NO es cero. */
+  commission: number | null;
+  /** net - commission. Null cuando la comision no se conoce. */
+  contribution: number | null;
+  contribution_bps: number | null;
+  /** Su mes no tiene P&L cargado: la contribucion sale negativa por eso. */
+  pl_pending: boolean;
   no_margin: boolean;
   /** Every margin account, and only margin. See margin_net in the endpoint. */
   margin_net: number;
@@ -58,6 +65,10 @@ interface Summary {
   costs: number;
   net: number;
   net_bps: number | null;
+  commission: number;
+  loans_without_commission: number;
+  contribution: number;
+  contribution_bps: number | null;
 }
 
 interface DetailData {
@@ -239,12 +250,17 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
     for (const l of inScope) for (const [k, v] of Object.entries(l.concepts)) concepts[k] = (concepts[k] ?? 0) + v;
     const net = inScope.reduce((s, l) => s + l.net, 0);
     const marginNet = inScope.reduce((s, l) => s + l.margin_net, 0);
+    // Solo las comisiones conocidas. Un null contado como cero diria que ese
+    // prestamo no le costo nada a la sucursal.
+    const commission = inScope.reduce((s, l) => s + (l.commission ?? 0), 0);
+    const contribution = net - commission;
     return {
       loan_count: inScope.length,
       without_margin: inScope.filter((l) => l.no_margin).length,
-      volume, concepts, net, marginNet,
+      volume, concepts, net, marginNet, commission, contribution,
       net_bps:    volume ? (net / volume) * 10000 : null,
       margin_bps: volume ? (marginNet / volume) * 10000 : null,
+      contribution_bps: volume ? (contribution / volume) * 10000 : null,
     };
   }, [inScope]);
 
@@ -333,7 +349,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               Net bps {sortDesc ? "high → low" : "low → high"}
             </button>
             <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
-              Net = {(data?.net_groups ?? NET_GROUPS).join(" + ")}
+              Contribution = {(data?.net_groups ?? NET_GROUPS).join(" + ")} − LO commission
             </span>
             {/* A whole column of dashes reads as a broken column, and that is
                 how this one was reported. It is not broken: July 2026 is the
@@ -423,7 +439,20 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                     Total revenue
                     <span className="block font-normal normal-case text-[9px] text-slate-500">margin + other</span>
                   </Th>
-                  <Th className="text-right">Total bps</Th>
+                  {/* ⚠ LA COMISION Y LA CONTRIBUCION TAMBIEN EN LA TABLA, no
+                      solo en las tarjetas. Con el total de las tarjetas restando
+                      la comision y el de la tabla sin restarla, la misma pantalla
+                      daria dos cifras con nombres parecidos en dos pestañas --
+                      que es exactamente el fallo que la nota de arriba describe. */}
+                  <Th className="text-right">
+                    LO comm.
+                    <span className="block font-normal normal-case text-[9px] text-slate-500">from Compensafe</span>
+                  </Th>
+                  <Th className="text-right bg-[#001A40]/5">
+                    Contribution
+                    <span className="block font-normal normal-case text-[9px] text-slate-500">after paying the LO</span>
+                  </Th>
+                  <Th className="text-right bg-[#001A40]/5">Contrib. bps</Th>
                 </tr>
               </thead>
               <tbody>
@@ -450,7 +479,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                     <Amount v={l.net - l.margin_net} amount={l.loan_amount}
                             title={otherRevenueDetail(l)} />
                     <Amount v={l.net} amount={l.loan_amount} bold />
-                    <Td className={`text-right font-mono tabular-nums font-bold ${num(l.net)}`}>{fmtBps(l.net_bps)}</Td>
+                    {/* Null no es cero: el prestamo no cruza con Compensafe. */}
+                    {l.commission == null
+                      ? <Td className="text-right font-mono text-slate-300" title="This loan does not cross with Compensafe. Not the same as a zero commission.">—</Td>
+                      : <Amount v={-l.commission} amount={l.loan_amount} />}
+                    {l.contribution == null
+                      ? <Td className="bg-[#001A40]/5 text-right font-mono text-slate-300" title="Without a known commission there is no contribution to compute. Showing the gross here would say nobody was paid.">—</Td>
+                      : <Amount v={l.contribution} amount={l.loan_amount} bold />}
+                    <Td className={`bg-[#001A40]/5 text-right font-mono tabular-nums font-bold ${num(l.contribution ?? 0)}`}>
+                      {fmtBps(l.contribution_bps)}
+                    </Td>
                   </tr>
                 ))}
               </tbody>
@@ -483,8 +521,10 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   <Amount v={totals.net - totals.marginNet} amount={totals.volume} bold
                           title={otherConcepts.length ? `Concepts outside margin: ${otherConcepts.join(", ")}` : undefined} />
                   <Amount v={totals.net} amount={totals.volume} bold />
-                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net)}`}>
-                    {fmtBps(totals.net_bps)}
+                  <Amount v={-totals.commission} amount={totals.volume} bold />
+                  <Amount v={totals.contribution} amount={totals.volume} bold />
+                  <Td className={`bg-[#001A40]/5 text-right font-mono font-bold tabular-nums ${num(totals.contribution)}`}>
+                    {fmtBps(totals.contribution_bps)}
                   </Td>
                 </tr>
               </tfoot>
@@ -625,7 +665,8 @@ function MiniPL({ l }: { l: LoanRow }) {
       support_on_demand={l.support_on_demand}
       signals={<Signals l={l} />}
       lineas={l.lines}
-      total={{ label: "TOTAL REVENUE", value: l.net }}
+      commission={l.commission}
+      total={{ label: "TOTAL CONTRIBUTION", value: l.contribution }}
     />
   );
 }
@@ -729,9 +770,27 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
         </div>
         <div className="px-3 pt-2">
           <Block title="Revenue and direct costs" total={s.revenue} amount={s.volume} lines={s.lines} />
+          {/* La comision del mes, con su origen dicho: en esta pantalla nadie
+              espera una cifra que no este en la contabilidad. */}
+          <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
+            <span className="uppercase tracking-wide">
+              &minus; LO commission
+              <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
+                from Compensafe — not a P&amp;L account
+              </span>
+            </span>
+            <span className="font-mono tabular-nums text-rose-700">{fmt(-s.commission)}</span>
+          </div>
+          {s.loans_without_commission > 0 && (
+            <p className="px-3 pb-1 text-[10px] text-slate-500">
+              {s.loans_without_commission} loan{s.loans_without_commission === 1 ? " does" : "s do"} not cross
+              with Compensafe, so no commission is known for {s.loans_without_commission === 1 ? "it" : "them"} —
+              left out rather than counted as zero.
+            </p>
+          )}
         </div>
       </div>
-      <NetBanner net={s.net} netBps={s.net_bps} />
+      <NetBanner net={s.contribution} netBps={s.contribution_bps} />
     </div>
   );
 }
@@ -756,7 +815,7 @@ function NetBanner({ net, netBps }: { net: number; netBps: number | null }) {
           le daba a esta misma cifra. Que el numero que coincide entre las dos
           vistas se llamara de dos formas, mientras los dos que NO coinciden
           compartian la palabra "net", es lo que hacia parecer que no cuadraban. */}
-      <span>TOTAL REVENUE</span>
+      <span>TOTAL CONTRIBUTION</span>
       <span>
         <span className={`font-mono font-bold tabular-nums ${loss ? "text-rose-700" : "text-emerald-300"}`}>
           {fmt(net)}
@@ -787,6 +846,12 @@ function Signals({ l }: { l: LoanRow }) {
       {l.b2b && <Signal label="B2B" />}
       {l.support_on_demand && <Signal label="On Demand" />}
       {l.processing && <Signal label="Processing" />}
+      {l.pl_pending && (
+        <span title="No P&L is loaded for this month yet, so the commission is subtracted from revenue that has not been booked. Not a loss: a missing period."
+              className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+          P&L pending
+        </span>
+      )}
       {l.no_margin && (
         <span className="ml-1 rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">
           no margin

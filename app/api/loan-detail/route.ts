@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
-import { getClosedLoans } from "@/lib/loan-source";
+import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   ALL_MARGIN_ACCOUNTS,
   isBankedChannel,
@@ -109,6 +109,36 @@ export interface LoanDetailRow {
   costs: number;
   net: number;
   net_bps: number | null;
+  /*
+   * ─── LA COMISION DEL LOAN OFFICER, Y LO QUE QUEDA DESPUES ────────────────
+   *
+   * ⚠ NO SALE DEL P&L SINO DE `comp.loan_commission`, asi que no tiene gl_code
+   * y no se puede cuadrar contra el libro mayor como el resto de la tarjeta. La
+   * linea lo dice en pantalla: en esta pantalla nadie espera una cifra que no
+   * este en la contabilidad.
+   *
+   * ⚠ NULL NO ES CERO. Un prestamo que no cruza con Compensafe tiene comision
+   * DESCONOCIDA, y por eso su contribucion tambien es null en vez de igual al
+   * revenue: enseñar el bruto ahi diria que no se le pago a nadie.
+   */
+  commission: number | null;
+  contribution: number | null;
+  contribution_bps: number | null;
+  /**
+   * El mes de este prestamo no tiene P&L cargado todavia.
+   *
+   * ⚠ SIN ESTA MARCA, RESTAR LA COMISION CONVIERTE NUEVE CIERRES EN PERDIDAS
+   * QUE NO EXISTEN. Medido el 2026-09-16: de los 13 prestamos que pasan a
+   * negativo al restar la comision, NUEVE cerraron en septiembre de 2026 y no
+   * tienen NI UNA linea de P&L -- Compensafe ya pago y el margen aun no se ha
+   * contabilizado. Uno de ellos sale a -11.488,07 y lo unico que pasa es que
+   * falta cargar el mes.
+   *
+   * Es el mismo caso que el modulo de LO ya aparta con `plPending`, y aqui
+   * aparece solo ahora: hasta que el total no restaba nada, un prestamo sin
+   * lineas daba cero y no llamaba la atencion.
+   */
+  pl_pending: boolean;
   /** No margin account carries an amount. The question this view answers. */
   no_margin: boolean;
 }
@@ -182,6 +212,41 @@ export async function GET(req: NextRequest) {
       .filter((l) => l.branch !== null && inScope(l.branch) && isBankedChannel(l.loan_info_channel));
 
     const loanNumbers = loans.map((l) => l.loan_number as string);
+
+    // Hasta que mes llega el P&L cargado, para poder decir "falta el mes" en vez
+    // de enseñar una perdida que no existe. Mismo helper que el modulo de LO.
+    const plCoverage = await getPlCoverage();
+
+    /*
+     * La comision del loan officer, de `comp.loan_commission`.
+     *
+     * ⚠ QUE FALLE NO PUEDE TUMBAR LA PANTALLA, igual que en el modulo de LO:
+     * sin Compensafe las comisiones salen null --que es "no se sabe", no
+     * "cero"-- y el resto de la tarjeta se ve igual.
+     *
+     * ⚠ `lo_pay`, NUNCA `total_pay`. `total_pay` incluye `other_pay`, que es el
+     * override y se le paga al MANAGER del loan officer -- las descripciones del
+     * origen lo dicen literalmente ("BR 770 - Override on Badovinac"). Sumarlo
+     * atribuiria el pago de uno a otro.
+     */
+    const commissionByLoan = new Map<string, number>();
+    try {
+      const comp = createServerClient("comp");
+      for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
+        const chunk = loanNumbers.slice(i, i + IN_CHUNK);
+        if (chunk.length === 0) break;
+        const { data, error } = await comp
+          .from("loan_commission")
+          .select("loan_number,lo_pay")
+          .in("loan_number", chunk);
+        if (error) throw new Error(error.message);
+        for (const r of data ?? []) {
+          if (r.lo_pay != null) commissionByLoan.set(r.loan_number as string, Number(r.lo_pay));
+        }
+      }
+    } catch (e) {
+      console.error("[loan-detail] comp.loan_commission no disponible:", e);
+    }
 
     // ── What those loans earned, in the books the filter asks for ───────────
     // The raw branch filter, NOT resolveBaseBranches. The two answer different
@@ -327,7 +392,27 @@ export async function GET(req: NextRequest) {
        */
       const revenue = NET_GROUPS.reduce((s, g) => s + (a.groups[g] ?? 0), 0);
       const costs   = 0;
+      /*
+       * ⚠ `net` SIGUE SIENDO revenue + costes directos, SIN la comision, y eso
+       * es a proposito aunque la tarjeta ya enseñe la contribucion.
+       *
+       * La tabla deriva "Other revenue" como `net - margin_net`, de la resta y
+       * no de una segunda suma, para que no pueda discrepar del total que tiene
+       * al lado. Si `net` pasara a llevar la comision restada, esa resta la
+       * metaria dentro de "Other revenue" en silencio: una comision de 5.045,63
+       * apareceria como ingreso ajeno negativo y nadie podria verlo.
+       *
+       * Por eso la comision viaja en su propio campo y la contribucion es una
+       * cifra APARTE, no una redefinicion de esta.
+       */
       const net     = revenue;
+      /** Lo que se le pago al loan officer por este prestamo. Null si no cruza. */
+      const commission = commissionByLoan.has(l.loan_number)
+        ? commissionByLoan.get(l.loan_number)! : null;
+      /** net - commission. Null cuando la comision no se conoce: ver abajo. */
+      const contribution = commission == null ? null : net - commission;
+      /** Su mes no tiene P&L cargado. Ver la nota en LoanDetailRow.pl_pending. */
+      const plPending = !plPeriodLoaded(plCoverage, month, year);
 
       // An account is out of rule when the BRANCH IT IS BOOKED IN does not
       // normally carry it — not when it differs from the loan's branch. DM
@@ -404,6 +489,10 @@ export async function GET(req: NextRequest) {
         foreign_months: [...a.months].sort(),
         revenue, costs, net,
         net_bps: bps(net, amount),
+        commission,
+        contribution,
+        pl_pending: plPending,
+        contribution_bps: contribution == null ? null : bps(contribution, amount),
         no_margin: noMargin,
       };
     });
@@ -439,6 +528,15 @@ export async function GET(req: NextRequest) {
     const summaryRevenue = rows.reduce((s, r) => s + r.revenue, 0);
     const summaryCosts   = 0;
     const summaryNet     = summaryRevenue;
+    /*
+     * ⚠ SOLO SE SUMAN LAS COMISIONES CONOCIDAS, y se dice cuantas faltan. Un
+     * prestamo que no cruza con Compensafe vale null, no cero: contarlo como
+     * cero diria que ese prestamo no le costo nada a la sucursal, y el total de
+     * contribucion saldria mejor que la realidad.
+     */
+    const summaryCommission = rows.reduce((s, r) => s + (r.commission ?? 0), 0);
+    const loansWithoutCommission = rows.filter((r) => r.commission == null).length;
+    const summaryContribution = summaryNet - summaryCommission;
 
     const summary = {
       loan_count: rows.length,
@@ -454,6 +552,10 @@ export async function GET(req: NextRequest) {
       costs: summaryCosts,
       net: summaryNet,
       net_bps: bps(summaryNet, summaryVolume),
+      commission: summaryCommission,
+      loans_without_commission: loansWithoutCommission,
+      contribution: summaryContribution,
+      contribution_bps: bps(summaryContribution, summaryVolume),
     };
 
     // ── Margin in these books that is not on one of this card's loans ───────
