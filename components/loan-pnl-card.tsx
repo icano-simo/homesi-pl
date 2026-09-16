@@ -193,13 +193,6 @@ function Linea({ x, importeBase, sucursal }: {
           * en el libro mayor.
           */}
         {conceptLabel(x.gl_name, x.category_7)}
-        {(() => {
-          const principal = conceptLabel(x.gl_name, x.category_7);
-          const otro = principal === x.gl_name ? x.category_7 : x.gl_name;
-          return otro && otro !== principal
-            ? <span className="ml-1 text-[9px] text-slate-400">{otro}</span>
-            : null;
-        })()}
         {fuera && (
           <span
             title={`Booked in branch ${x.branch}, while the loan is branch ${sucursal}. Common and not an error: part of the margin is booked in 700 by design.`}
@@ -275,9 +268,11 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         </div>
 
         {/* ── Las cuentas, por peldaño ──────────────────────────────────── */}
-        {/* flex-1 sin overflow: absorbe el hueco que le sobra a una tarjeta
-            baja dentro de una fila alta, y empuja el banner al fondo. */}
-        <div className="flex-1 px-3 pt-2">
+        {/* ⚠ SIN flex-1. Lo tuvo, y empujaba el banner al fondo de la tarjeta:
+            en la de totales quedaba un hueco grande entre los costes y el
+            total. El hueco que sobra en una tarjeta baja se queda DEBAJO de
+            todo, que es donde no estorba. */}
+        <div className="px-3 pt-2">
           {p.lineas.length === 0 && (
             <p className="px-3 pb-1 text-[10px] italic text-slate-400">No entries on this loan</p>
           )}
@@ -312,10 +307,21 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
             */}
           {p.commission !== undefined && (
             <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
+              {/*
+                * ⚠ LA ETIQUETA NOMBRA EXACTAMENTE LO QUE RESTA, y con las
+                * mismas palabras que la linea de donde sale. Decia "LO
+                * commission" mientras mas abajo la tarjeta enseña "Commission
+                * on loans" y "Payroll this period": tres nombres para dos
+                * cifras, y no habia forma de saber cual entraba en el total.
+                *
+                * La que resta es "Commission on loans" -- la de Compensafe por
+                * los cierres del periodo-- y NO la nomina. La nomina se resta
+                * en la otra cuenta, la de abajo, que es otra pregunta.
+                */}
               <span className="uppercase tracking-wide">
-                &minus; LO commission
+                &minus; Commission on loans
                 <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
-                  from Compensafe
+                  from Compensafe, not payroll
                 </span>
               </span>
               <span className="font-mono tabular-nums text-rose-700">
@@ -351,12 +357,18 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
           hayFuera ? "" : "rounded-b-2xl"
         } ${perdida ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"}`}
       >
-        <span>{p.total.label}</span>
-        <span>
-          <span className={`font-mono font-bold tabular-nums ${perdida ? "text-rose-700" : "text-emerald-300"}`}>
+        <span className="text-[10px] uppercase leading-tight tracking-wide opacity-80">
+          {p.total.label}
+        </span>
+        <span className="text-right">
+          {/* ⚠ LA CIFRA MAS GRANDE DE LA TARJETA. Es la respuesta, y al mismo
+              cuerpo que una linea de cuenta se perdia entre ellas. */}
+          <span className={`block font-mono text-xl font-bold leading-none tabular-nums ${
+            perdida ? "text-rose-700" : "text-emerald-300"
+          }`}>
             {p.total.value == null ? "—" : usdExacto(p.total.value)}
           </span>
-          <span className={`ml-1.5 font-mono text-[11px] ${perdida ? "text-rose-800" : "text-emerald-400"}`}>
+          <span className={`mt-0.5 block font-mono text-[11px] ${perdida ? "text-rose-800" : "text-emerald-400"}`}>
             {p.total.value == null ? "— bps" : bps(p.total.value, p.amount)}
           </span>
         </span>
@@ -365,9 +377,7 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
       {/* Fuera de la cuenta: debajo del total, en gris y sobre otro fondo. */}
       {hayFuera && (
         <div className="shrink-0 rounded-b-2xl border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
-          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">
-            Not part of this contribution
-          </p>
+
           {p.elsewhere!.map((s) => s.lineas.length === 0 ? null : (
             <Fragment key={s.label}>
               <div className="mt-1 flex items-center justify-between text-[10px] font-semibold text-slate-600">

@@ -398,7 +398,11 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               * usuario en silencio.
               */
             <div className="px-1 py-2">
-              <LoPnlView branch={branchFilter.length === 1 ? branchFilter[0] : null} />
+              <LoPnlView
+                branch={branchFilter.length === 1 ? branchFilter[0] : null}
+                month={data?.month ?? month}
+                year={data?.year ?? year}
+              />
             </div>
           )}
 

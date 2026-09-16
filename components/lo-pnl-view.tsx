@@ -173,7 +173,7 @@ function escalonDe(categoria6: string | null | undefined) {
 const DESTINOS = [
   {
     key: "division" as const,
-    label: "Kept by the division (700)",
+    label: "Distributed to division (700)",
     suyo: (x: LoanLine) => x.branch === "700",
   },
   {
@@ -308,12 +308,18 @@ function AyudaPnl({ onClose }: { onClose: () => void }) {
           </section>
 
           <section>
-            <h4 className="text-[11px] font-semibold text-gray-800">Cost is whole, production is one branch</h4>
+            <h4 className="text-[11px] font-semibold text-gray-800">Who belongs to a branch</h4>
             <p className="mt-1">
-              Payroll has no branch, so inside a branch view each person carries their entire
-              payroll against what they produced there alone. For the 29 officers who only close in
-              one branch that is exact; for the 16 who close in several it overstates the cost in
-              each one.
+              The HR roster decides, and nothing else: not where someone closed most loans, not
+              where their payroll is booked. Somebody assigned to 710 appears under 710 even if
+              every closing of theirs is in 716 — and those closings are still shown, each card
+              carrying the branch of its own loan.
+            </p>
+            <p className="mt-1">
+              Anyone not in the roster has no assigned branch. They do not appear in a branch view
+              at all, and in the standalone screen they sit under &ldquo;Role unknown&rdquo; with
+              the reason. Guessing a branch from where they closed is the thing this rule exists to
+              prevent.
             </p>
           </section>
 
@@ -679,6 +685,14 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
             <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
               {l.month} {l.year}
             </span>
+            {/* El nombre del origen, solo cuando NO es el que se enseña: el
+                archivo escribe "Affinity" donde el P&L escribe 716. */}
+            {l.branch_raw && l.branch_raw !== l.branch && (
+              <span className="ml-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] font-semibold text-slate-400"
+                    title={'The loan file names this branch ' + l.branch_raw + '. In the P&L it is ' + l.branch + '.'}>
+                {l.branch_raw}
+              </span>
+            )}
             {l.plPending && (
               <span title="No P&L is loaded for this loan's closing month. Left out of the totals; its origination cost may already be booked."
                     className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
@@ -697,7 +711,7 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
         commission={l.commission}
         total={{ label: "TOTAL CONTRIBUTION", value: l.contribution }}
         elsewhere={[
-          { label: "Kept by the division (700)", lineas: fuera700 },
+          { label: "Distributed to division (700)", lineas: fuera700 },
           { label: "Booked in another branch", lineas: fueraOtra },
         ]}
       />
@@ -814,13 +828,26 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
               {o.loansBranchNotInPl} branch not in P&amp;L
             </span>
           )}
+          {/*
+            * ⚠ EL AVISO QUE SALVA EL CASO VERMEJO EN UNA VISTA MENSUAL. Cerro
+            * una vez en noviembre de 2025 y siguio costando hasta mayo de 2026
+            * --tiene nomina en diez meses seguidos-- asi que NO desaparece: sale
+            * en cada uno de ellos con coste y cero cierres, y leido tal cual
+            * dice que es puro gasto. Esto dice que cerro, pero en otro mes.
+            */}
+          {o.closingsOtherPeriods > 0 && (
+            <span title="Closings this person has in other periods. In a monthly view their cost shows here and their production does not — the two are in different months."
+                  className="ml-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">
+              {o.closingsOtherPeriods} closing{o.closingsOtherPeriods === 1 ? "" : "s"} in other months
+            </span>
+          )}
         </>
       }
       lineas={cuerpo}
       commission={o.commission}
       total={{ label: "TOTAL CONTRIBUTION", value: o.contribution }}
       elsewhere={[
-        { label: "Kept by the division (700)", lineas: fuera700 },
+        { label: "Distributed to division (700)", lineas: fuera700 },
         { label: "Booked in another branch", lineas: fueraOtra },
       ]}
       extra={
@@ -840,7 +867,13 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
             */}
           <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-slate-600">Commission on loans</span>
+              {/* La MISMA cifra que resta la escalera de arriba, con el mismo
+                  nombre. Antes salia aqui como "Commission on loans" y alli
+                  como "LO commission", y nadie podia decir si eran la misma. */}
+              <span className="text-slate-600">
+                Commission on loans
+                <span className="ml-1 text-[9px] text-slate-400">subtracted above</span>
+              </span>
               <span className="font-mono tabular-nums text-slate-700">{usdExacto(o.commission)}</span>
             </div>
             <div className="flex items-baseline justify-between gap-2">
@@ -947,7 +980,6 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
       if (n.has(ln)) n.delete(ln); else n.add(ln);
       return n;
     });
-  const todasPlegadas = o.loans.length > 0 && plegadas.size === o.loans.length;
 
   // Escape cierra. Un panel que solo se cierra con la X se queda abierto en
   // cuanto alguien lo intenta por el camino de siempre.
@@ -991,30 +1023,11 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {/*
-              * ⚠ LOS DOS BOTONES A LA VISTA, no uno que cambia de texto. Con
-              * uno solo, el que aparece depende de un estado que no se ve --si
-              * estan todas plegadas o no-- y con 65 tarjetas eso no se sabe sin
-              * bajar hasta el final. Dos botones dicen las dos acciones
-              * posibles, y el que ya no hace nada se apaga.
+              * Aqui vivian "Expand all" y "Collapse all". Se retiran: cada
+              * tarjeta se abre y se cierra sola con un clic, y en una fila
+              * horizontal el boton global movia las 65 a la vez sin que se
+              * viera el efecto mas alla de la primera pantalla.
               */}
-            {o.loans.length > 1 && (
-              <span className="mr-1 inline-flex overflow-hidden rounded-full border border-slate-200 text-[10px]">
-                <button
-                  onClick={() => setPlegadas(new Set())}
-                  disabled={plegadas.size === 0}
-                  className="px-2.5 py-1 text-slate-500 enabled:hover:bg-slate-50 disabled:text-slate-300"
-                >
-                  Expand all
-                </button>
-                <button
-                  onClick={() => setPlegadas(new Set(o.loans.map((l) => l.loan_number)))}
-                  disabled={todasPlegadas}
-                  className="border-l border-slate-200 px-2.5 py-1 text-slate-500 enabled:hover:bg-slate-50 disabled:text-slate-300"
-                >
-                  Collapse all
-                </button>
-              </span>
-            )}
             {/*
               * ⚠ UN SOLO BOTON PARA TODA LA PROSA. Los parrafos estaban
               * repartidos entre las tarjetas y eran lo que impedia leer una
@@ -1085,11 +1098,28 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
  *
  * @param branch  La sucursal del modal. Null en la pantalla propia.
  */
-export function LoPnlView({ branch = null }: { branch?: string | null }) {
+export function LoPnlView({ branch = null, month: mesInicial = null, year: anioInicial = null }: {
+  branch?: string | null;
+  /** El mes desde el que se abrio el modal. Null en la pantalla suelta. */
+  month?: string | null;
+  year?: number | null;
+}) {
   const def = useMemo(() => closePeriod(), []);
+  /*
+   * ⚠ ARRANCA EN EL MES DEL MODAL, y esto REVIERTE lo que se decidio antes.
+   *
+   * El modulo empezo en "todos los meses" porque la pregunta --"¿se paga sola
+   * esta persona?"-- solo tiene sentido a lo largo del tiempo. Pero la pantalla
+   * se abre desde la tarjeta de UN mes, y heredar la sucursal sin heredar el
+   * mes deja dos alcances distintos en la misma ventana.
+   *
+   * El selector sigue estando, y "All months" tambien: lo que cambia es donde
+   * arranca. Y lo que se perdia al pasar a mensual --el caso Vermejo-- se
+   * resuelve con `closingsOtherPeriods`, no dejandolo en todos los meses.
+   */
   const [all, setAll] = useState(false);
-  const [month, setMonth] = useState(def.month);
-  const [year, setYear] = useState(String(def.year));
+  const [month, setMonth] = useState(mesInicial ?? def.month);
+  const [year, setYear] = useState(String(anioInicial ?? def.year));
   const [data, setData] = useState<LoPnlResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1347,46 +1377,46 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
           {branch && (
             <>
               {/*
-                * ⚠ EL PERIODO NO SIGUE AL MODAL, Y HAY QUE DECIRLO.
+                * ⚠ ESTE AVISO ESTABA AL REVES Y SE REESCRIBE ENTERO.
                 *
-                * Dos alcances distintos en la misma ventana es de las cosas que
-                * mas confunden, asi que no puede quedar implicito. La razon es
-                * medida: Sergio Vermejo cerro UNA VEZ en noviembre de 2025 y
-                * siguio costando hasta mayo de 2026. Heredando el mes del modal
-                * desaparece de cualquier vista posterior, y con el el unico caso
-                * que enseña por que este modulo existe.
+                * Decia "el coste es entero, la produccion es solo de esta
+                * sucursal", y era cierto cuando la sucursal acotaba los
+                * CIERRES. Ya no: acota las PERSONAS, por
+                * `roster_current.branch_code`, y los prestamos de cada una se
+                * enseñan todos, cierren donde cierren.
                 *
-                * La sucursal SI se hereda: esa pregunta es la misma en las dos.
-                */}
-              <p className="text-amber-700">
-                <span className="font-semibold">The branch is inherited, the period is not.</span>{" "}
-                Branch {branch} comes from this window; the period has its own selector above,
-                because “does this person pay for themselves” only makes sense over time.
-              </p>
-              {/*
-                * ⚠ EL COSTE NO SE PUEDE REPARTIR POR SUCURSAL, Y HAY QUE DECIRLO.
-                *
-                * La nomina sale de las cuentas de compensacion y no lleva
-                * sucursal de produccion. Asi que aqui cada persona trae su coste
-                * ENTERO contra lo que produjo SOLO en esta sucursal.
-                *
-                * Medido: de los 45 loan officers con cierres, 29 cierran en una
-                * sola sucursal --para ellos la cifra es exacta-- y 16 en varias.
-                * Gian Laino cierra en cinco: 17 en la 747, 3 en la 716, 2 en la
-                * 710, y una en la 760 y en Affinity. En la vista de la 747 carga
-                * su nomina completa contra 17 de sus 24 cierres.
-                *
-                * No se reparte porque no hay con que: inventar un prorrateo por
-                * numero de cierres o por volumen seria un dato que nadie ha
-                * decidido, presentado como si fuera contabilidad.
+                * Asi que ahora las dos mitades son de la misma persona entera:
+                * su coste entero contra su produccion entera. Lo que hay que
+                * decir es OTRA cosa -- que un cierre en otra sucursal no la
+                * mueve de pantalla.
                 */}
               <p className="text-slate-500">
                 <span className="font-semibold text-gray-700">
-                  Cost is whole, production is only this branch.
+                  These are branch {branch}&rsquo;s people, not branch {branch}&rsquo;s closings.
                 </span>{" "}
-                Payroll has no branch, so each person carries their entire payroll against what they
-                produced here alone. For the 29 officers who only close here that is exact; for the
-                16 who close in several branches it overstates the cost in each one.
+                Who belongs here comes from the HR roster and nothing else — not from where they
+                closed, not from where their payroll is booked. Their loans are all shown, and each
+                card carries the branch of its own loan: a closing somewhere else is theirs too.
+                Anyone not in the roster has no assigned branch and does not appear in a branch
+                view; they are in the standalone screen, under &ldquo;Role unknown&rdquo;.
+              </p>
+              {/*
+                * ⚠ Y EL AVISO DEL MES, QUE AHORA SI SE HEREDA. El modulo
+                * arrancaba en "todos los meses" porque "¿se paga sola esta
+                * persona?" solo tiene sentido a lo largo del tiempo, y Sergio
+                * Vermejo lo demuestra: cerro en noviembre de 2025 y siguio
+                * costando hasta mayo de 2026.
+                *
+                * Medido al revertirlo: tiene nomina en DIEZ meses seguidos, asi
+                * que NO desaparece de una vista mensual -- sale en todos ellos.
+                * Lo que se pierde es el vinculo con lo que produjo, y eso lo
+                * dice la marca "n closings in other months" de su fila.
+                */}
+              <p className="text-amber-700">
+                <span className="font-semibold">Both the branch and the month come from this window.</span>{" "}
+                The selector above starts there and can be moved, including to “All months”. In a
+                single month someone can show cost without the closings that earned it — that is
+                what the blue mark on a row means: they closed, in another period.
               </p>
             </>
           )}

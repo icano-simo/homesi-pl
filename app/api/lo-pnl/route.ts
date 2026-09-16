@@ -379,6 +379,8 @@ export interface LoanRow {
   year: number | null;
   branch: string | null;
   loan_amount: number | null;
+  /** El nombre con el que el origen la escribe. "Affinity" es la 716. */
+  branch_raw: string | null;
   /** Para poder nombrar el prestamo en su tarjeta: un numero no dice de quien es. */
   borrower_name: string | null;
   /*
@@ -717,6 +719,15 @@ export interface OfficerBlock {
    * produce.
    */
   loansBranchNotInPl: number;
+  /**
+   * Cierres suyos en OTROS meses, cuando la vista es mensual.
+   *
+   * ⚠ ES LO QUE EVITA QUE UNA BAJA PAREZCA PURO GASTO. Sergio Vermejo cerro en
+   * noviembre de 2025 y siguio costando hasta mayo de 2026: en cualquiera de
+   * esos meses sale con coste y cero cierres, y sin este contador se lee como
+   * alguien que no produce. Cero cuando la vista es de todos los meses.
+   */
+  closingsOtherPeriods: number;
   /** block1Net - block1Commission. El ultimo escalon, a nivel de persona. */
   contribution: number;
 
@@ -933,16 +944,21 @@ export async function GET(req: NextRequest) {
    */
   const [cerrados, plCoverage, rosterRows] = await Promise.all([
     /*
-     * ⚠ EL FILTRO DE SUCURSAL ACOTA LOS CIERRES, NO LA NOMINA. La nomina de una
-     * persona no tiene sucursal de produccion: sale de las cuentas de
-     * compensacion, que se contabilizan donde se contabilizan. Filtrarla
-     * tambien dejaria a la gente de la sucursal con sus cierres y sin su coste,
-     * que es justo el numero que el modulo existe para enseñar.
+     * ═══════════════════════════════════════════════════════════════════════
+     * ⚠ LA SUCURSAL NO ACOTA LOS CIERRES: ACOTA LAS PERSONAS
+     * ═══════════════════════════════════════════════════════════════════════
      *
-     * Asi que dentro de una sucursal se lee: "estos son SUS loan officers, con
-     * lo que produjeron aqui y lo que cuestan en total".
+     * Antes se pedian aqui solo los cierres de esa sucursal, y la pantalla
+     * acababa enseñando "todo el que cerro algo aqui" -- que no es lo mismo que
+     * el personal de la sucursal. Ahora se piden TODOS los cierres del periodo
+     * y el filtro se aplica a la gente, mas abajo, por `roster_current.
+     * branch_code`.
+     *
+     * ⚠ Y SUS PRESTAMOS SE ENSEÑAN TODOS, cierren donde cierren, con la
+     * sucursal de cada uno a la vista. Que un LO de la 710 tenga cierres en la
+     * 716 es informacion, no un motivo para quitarselos de su ficha.
      */
-    getClosedLoans({ month, year, branches: branches.length ? branches : null }),
+    getClosedLoans({ month, year }),
     getPlCoverage(),
     /*
      * El cargo de cada persona. Que falle NO puede tumbar la pantalla: sin
@@ -950,7 +966,7 @@ export async function GET(req: NextRequest) {
      */
     createServerClient("org")
       .from("roster_current")
-      .select("person_code,position,area,is_producer,is_nppm_realtor")
+      .select("person_code,position,area,branch_code,is_producer,is_nppm_realtor")
       .range(0, 999)
       .then((r) => (r.data ?? []) as Array<Record<string, unknown>>)
       .then((d) => d, () => [] as Array<Record<string, unknown>>),
@@ -958,13 +974,14 @@ export async function GET(req: NextRequest) {
 
   const roster = new Map(rosterRows.map((r) => [r.person_code as string, r]));
 
-  /** Cargo y grupo de una persona. Sin roster, "unknown" y sin cargo. */
-  const cargoDe = (code: string | null): { position: string | null; area: string | null; group: OfficerGroup } => {
+  /** Cargo, sucursal y grupo de una persona. Sin roster, "unknown" y sin nada. */
+  const cargoDe = (code: string | null): { position: string | null; area: string | null; branch: string | null; group: OfficerGroup } => {
     const r = code ? roster.get(code) : undefined;
-    if (!r) return { position: null, area: null, group: "unknown" };
+    if (!r) return { position: null, area: null, branch: null, group: "unknown" };
     return {
       position: (r.position as string) ?? null,
       area: (r.area as string) ?? null,
+      branch: (r.branch_code as string) ?? null,
       // ⚠ El booleano manda sobre el texto del cargo: los dos "NonProducing
       // Branch Manager" tienen is_producer = true.
       group: r.is_producer ? "producer" : r.is_nppm_realtor ? "nppm" : "support",
@@ -1115,6 +1132,45 @@ export async function GET(req: NextRequest) {
     porOficial.set(n, [...(porOficial.get(n) ?? []), o]);
   }
 
+  /*
+   * ═══════════════════════════════════════════════════════════════════════════
+   * CIERRES FUERA DEL MES ELEGIDO: EL CASO VERMEJO, EN UNA VISTA MENSUAL
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * ⚠ ESTE MODULO ERA DE TODOS LOS MESES POR UNA RAZON, y al pasar a mensual
+   * hay que decir que se pierde. Sergio Vermejo cerro UNA VEZ en noviembre de
+   * 2025 y siguio costando hasta mayo de 2026: comprobado, tiene nomina en DIEZ
+   * meses seguidos, de agosto de 2025 a mayo de 2026.
+   *
+   * O sea que NO desaparece --sale en cada uno de esos diez meses-- pero de
+   * diciembre en adelante sale con coste y sin cierres, que leido tal cual dice
+   * que es puro gasto. Lo que se pierde no es la persona: es el vinculo con lo
+   * que produjo en otro mes.
+   *
+   * Por eso se cuenta cuantos cierres tiene FUERA del mes elegido. Con eso la
+   * pantalla puede decir "no cerro aqui, pero cerro 1 en otro periodo" en vez
+   * de dejar que se lea como alguien que no produce nada.
+   *
+   * Se pide sin periodo --una segunda consulta al espejo-- porque no hay forma
+   * de saberlo desde los cierres del mes, que es justo el problema.
+   */
+  const cierresFueraDelMes = new Map<string, number>();
+  if (month || year) {
+    try {
+      const todos = await getClosedLoans({});
+      const dentro = new Set(officials.map((o) => o.loan_number as string));
+      for (const l of todos) {
+        if (dentro.has(l.loanNumber)) continue;
+        const n = (l.loanOfficer ?? "").trim();
+        if (!n) continue;
+        cierresFueraDelMes.set(n, (cierresFueraDelMes.get(n) ?? 0) + 1);
+      }
+    } catch (e) {
+      // Que falle solo quita el aviso; las cifras del mes no dependen de esto.
+      console.error("[lo-pnl] no se pudieron contar los cierres de otros meses:", e);
+    }
+  }
+
 
   /*
    * ─────────────────────────────────────────────────────────────────────────
@@ -1230,7 +1286,17 @@ export async function GET(req: NextRequest) {
         loan_number: ln,
         month: f.month as string | null,
         year: f.year as number | null,
-        branch: f.branch as string | null,
+        /*
+         * ⚠ LA SUCURSAL RESUELTA, NO LA CRUDA. El archivo de prestamos escribe
+         * "Affinity" donde el P&L escribe 716 -- son 39 de los 67 cierres de
+         * Nathan Martinez-- y enseñar "Affinity" hacia parecer un fallo de la
+         * pantalla lo que es solo el nombre que usa el origen.
+         *
+         * El nombre original no se pierde: viaja en branch_raw y la tarjeta lo
+         * enseña como etiqueta cuando difiere.
+         */
+        branch: sucursalPrestamo,
+        branch_raw: (f.branch as string | null) ?? null,
         borrower_name: f.borrower_name as string | null,
         loan_program: f.loan_program as string | null,
         loan_officer: nombreBonito(nombre),
@@ -1426,7 +1492,11 @@ export async function GET(req: NextRequest) {
     officers.push({
       name: nombreBonito(nombre),
       personCode: persona?.personCode ?? null,
-      branch: (filas[0]?.branch as string | null) ?? null,
+      // ⚠ LA SUCURSAL DE LA PERSONA SALE DEL ROSTER, no de donde cerro. Era
+      // la del primer prestamo de la lista, que es tanto como decir "donde
+      // cerro primero": un LO de la 710 con un cierre en la 716 cambiaba de
+      // sucursal segun el orden de sus prestamos.
+      branch: cargo.branch,
       position: cargo.position,
       area: cargo.area,
       group: cargo.group,
@@ -1449,6 +1519,7 @@ export async function GET(req: NextRequest) {
       block1KeptByDivision,
       block1OtherBranch,
       loansBranchNotInPl: loans.filter((l) => l.branchNotInPl).length,
+      closingsOtherPeriods: cierresFueraDelMes.get(nombre) ?? 0,
       contribution: block1Net - block1Commission,
       block1Commission,
       loansWithoutCommission,
@@ -1477,22 +1548,19 @@ export async function GET(req: NextRequest) {
    * tienen que saltar a la vista.
    */
   /*
-   * ⚠ DENTRO DE UNA SUCURSAL NO SE AÑADE A QUIEN SOLO TIENE NOMINA.
+   * ⚠ ANTES, DENTRO DE UNA SUCURSAL, A ESTA GENTE NO SE LA AÑADIA.
    *
-   * La nomina de una persona NO tiene sucursal de produccion: sale de las
-   * cuentas de compensacion y no se puede repartir. Sin esto, cada sucursal
-   * enseñaba a las 132 personas de la empresa --37 productores en las cuatro
-   * que se midieron-- con su coste entero contra la produccion de esa sola
-   * sucursal, y el neto salia en -2,6 millones en todas. Leido literal, cada
-   * sucursal parecia hundida.
+   * La razon era buena y ya no aplica: como la sucursal acotaba los CIERRES y
+   * la nomina no tiene sucursal, cada sucursal acababa enseñando a las 132
+   * personas de la empresa con su coste entero contra la produccion de una
+   * sola, y el neto salia en -2,6 millones en todas.
    *
-   * Dentro de una sucursal la pregunta es "quien cerro AQUI", asi que solo
-   * salen los que tienen cierres en ella.
+   * Ahora la sucursal acota las PERSONAS por `roster_current.branch_code`, asi
+   * que el problema desaparece de raiz: quien no es de la sucursal no aparece,
+   * tenga cierres o no. Y quien SI lo es tiene que aparecer aunque no cierre --
+   * los 38 de la 700 no cierran ni uno y son su coste entero.
    */
-  const soloConCierres = branches.length > 0;
-
   for (const [id, filas] of nominaPorPersona) {
-    if (soloConCierres) continue;
     if (usados.has(id)) continue;
     const persona = censo.people.find((p) => idDe(p) === id);
     const fragil = nominaFragil.get(id) ?? [];
@@ -1501,7 +1569,7 @@ export async function GET(req: NextRequest) {
     officers.push({
       name: nombreBonito(persona?.displayName ?? id),
       personCode: persona?.personCode ?? null,
-      branch: null,
+      branch: cargoSinCierres.branch,
       position: cargoSinCierres.position,
       area: cargoSinCierres.area,
       group: cargoSinCierres.group,
@@ -1528,6 +1596,8 @@ export async function GET(req: NextRequest) {
       block1KeptByDivision: 0,
       block1OtherBranch: 0,
       loansBranchNotInPl: 0,
+      // Sin cierres en este mes, los de otros se buscan por su nombre visible.
+      closingsOtherPeriods: cierresFueraDelMes.get(persona?.displayName ?? "") ?? 0,
       contribution: 0,
       block1Commission: 0,
       loansWithoutCommission: 0,
@@ -1543,6 +1613,33 @@ export async function GET(req: NextRequest) {
       commissionOutsidePayroll: false,
     });
   }
+
+  /*
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EL FILTRO DE SUCURSAL: EL ROSTER MANDA, Y NADA MAS
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * La sucursal de una persona es `org.roster_current.branch_code`. No es donde
+   * cerro mas prestamos, no es donde le pagan la nomina, y no se deduce de
+   * nada. Si alguien esta asignado a la 710, sale en la 710 aunque todos sus
+   * cierres sean de la 716 y aunque su nomina se apunte en la 700.
+   *
+   * Es la misma regla que Loan Count ya aplica a los PRESTAMOS --manda el
+   * archivo de origen para la sucursal del prestamo-- aplicada a las PERSONAS.
+   *
+   * Medido contra el roster: 716 tiene 15 personas y 7 productoras, 710 tiene 8
+   * y 8, 733 tiene 12 y 4, y la 700 tiene 38 y NINGUNA productora.
+   *
+   * ⚠ QUIEN NO ESTA EN EL ROSTER NO TIENE SUCURSAL, y no se reparte por donde
+   * cerro: se queda fuera de cualquier vista de sucursal. En la pantalla suelta
+   * sigue saliendo, en "Role unknown" y con su motivo. Inventarle una sucursal
+   * a partir de sus cierres es exactamente lo que esta regla viene a prohibir.
+   */
+  const officersEnAlcance = branches.length
+    ? officers.filter((o) => o.branch != null && branches.includes(o.branch))
+    : officers;
+  officers.length = 0;
+  officers.push(...officersEnAlcance);
 
   officers.sort((a, b) => a.total - b.total);
 
