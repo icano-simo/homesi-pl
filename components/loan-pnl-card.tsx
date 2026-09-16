@@ -124,8 +124,19 @@ export interface TarjetaPrestamoProps {
   esTotal?: boolean;
 }
 
-const usdExacto = (n: number) =>
-  new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+/**
+ * ⚠ EL DINERO VA SIN DECIMALES Y LOS bps CON UNO, y no es una inconsistencia:
+ * es donde cada cifra tiene su precision util. En una tarjeta con veinte lineas,
+ * los centimos son veinte pares de digitos que nadie lee y que descuadran la
+ * columna; en los bps el decimal SI dice algo --180,0 contra 179,6 son dos
+ * rendimientos distintos-- porque ahi el numero entero es demasiado grueso.
+ *
+ * El desglose al centimo sigue existiendo donde hace falta cuadrar contra la
+ * contabilidad: el tooltip de cada linea lleva su descripcion, y la tabla de
+ * fuera conserva sus cifras.
+ */
+export const usdEntero = (n: number) =>
+  new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
 
 /**
  * ⚠ bps SOBRE EL IMPORTE DEL PRESTAMO, EN CADA LINEA. Es lo que el mini P&L
@@ -236,7 +247,7 @@ function Linea({ x, importeBase, sucursal }: {
         title={x.check_description ?? (x.amount > 0 ? "Adds to the net" : x.amount < 0 ? "Takes from the net" : "No amount")}
         className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums text-[11px]"
       >
-        <span className={`w-[5.5rem] text-right ${colorImporte(x.amount)}`}>{usdExacto(x.amount)}</span>
+        <span className={`w-[5.5rem] text-right ${colorImporte(x.amount)}`}>{usdEntero(x.amount)}</span>
         <span className="w-[4rem] text-right font-normal text-slate-400">{bps(x.amount, importeBase)}</span>
       </span>
     </div>
@@ -357,7 +368,7 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
                     <span className={`w-[5.5rem] text-right text-xs font-bold ${
                       subtotal < 0 ? "text-rose-700" : "text-[#001A40]"
                     }`}>
-                      {usdExacto(subtotal)}
+                      {usdEntero(subtotal)}
                     </span>
                     <span className="w-[4rem] text-right text-[11px] font-normal text-slate-400">
                       {bps(subtotal, p.amount)}
@@ -410,7 +421,7 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
               <span className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
                 {p.commission == null
                   ? <span className="w-[5.5rem] text-right text-xs text-slate-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>
-                  : <span className="w-[5.5rem] text-right text-xs font-bold text-rose-700">{usdExacto(-p.commission)}</span>}
+                  : <span className="w-[5.5rem] text-right text-xs font-bold text-rose-700">{usdEntero(-p.commission)}</span>}
                 <span className="w-[4rem] text-right text-[11px] font-normal text-slate-400">
                   {p.commission == null ? "" : bps(-p.commission, p.amount)}
                 </span>
@@ -438,21 +449,43 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         * el numero. Compacta y en horizontal, la cifra sigue siendo la mayor de
         * la tarjeta sin necesitar tanto sitio.
         */}
+      {/*
+        * ⚠ LA CIFRA MANDA, Y ANTES NO. Estaba en blanco apagado, pequeña y
+        * delgada, al lado de unos bps en azul claro que le robaban la mirada:
+        * el numero mas importante de la tarjeta era el que menos se veia.
+        *
+        * ⚠ EL COLOR ES #A6DEFF Y NO EL VERDE, y la razon es de significado, no
+        * de gusto. En este modulo el verde YA quiere decir "positivo" --lo usa
+        * `colorNeto` en la tabla y en las filas-- asi que una cifra verde aqui
+        * se leeria como "va bien", que es redundante: el banner ya dice eso
+        * entero, poniendose rosa cuando pierde. Y en el estado de perdida el
+        * verde tendria que irse, o sea que no serviria como identidad estable
+        * del banner. El azul no significa polaridad en ninguna parte del
+        * modulo, asi que dice "este es el total" y nada mas -- y ademas es el
+        * acento que la app ya usa.
+        */}
       <div
-        className={`flex shrink-0 items-center justify-between gap-2 px-4 py-2 shadow-xs ${
+        className={`flex shrink-0 flex-col gap-0.5 px-4 py-2 shadow-xs ${
           perdida ? "border-t border-rose-200 bg-rose-100" : "bg-[#001A40]"
         }`}
       >
-        <span className={`text-[11px] font-bold uppercase tracking-wider ${
+        <span className={`text-[10px] font-extrabold uppercase tracking-widest ${
           perdida ? "text-rose-800" : "text-slate-300"
         }`}>
           {p.total.label}
         </span>
-        <span className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
-          <span className={`text-base font-extrabold ${perdida ? "text-rose-700" : "text-[#A6DEFF]"}`}>
-            {p.total.value == null ? "—" : usdExacto(p.total.value)}
+        <span className="flex items-baseline justify-between gap-2">
+          <span className={`font-mono text-xl font-extrabold leading-none tabular-nums ${
+            perdida ? "text-rose-700" : "text-[#A6DEFF]"
+          }`}>
+            {p.total.value == null ? "—" : usdEntero(p.total.value)}
           </span>
-          <span className={`w-[4rem] text-right text-[11px] ${perdida ? "text-rose-800" : "text-slate-400"}`}>
+          {/* El badge baja de tono para no competir con la cifra. */}
+          <span className={`shrink-0 rounded-md border px-2 py-0.5 font-mono text-[10px] tabular-nums ${
+            perdida
+              ? "border-rose-300 bg-rose-200/60 text-rose-800"
+              : "border-white/20 bg-white/10 text-slate-200"
+          }`}>
             {p.total.value == null ? "— bps" : bps(p.total.value, p.amount)}
           </span>
         </span>
@@ -491,10 +524,17 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         <div className="border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
           {p.elsewhere!.map((s) => s.lineas.length === 0 ? null : (
             <Fragment key={s.label}>
-              <div className="mt-1 flex items-center justify-between text-[10px] font-semibold text-slate-600">
+              {/* El subtotal de la 700, con sus bps como los demas bloques:
+                  ahi siempre hay volumen, asi que no tiene el caso del cero. */}
+              <div className="mt-1 flex items-baseline justify-between gap-2 text-[10px] font-semibold text-slate-600">
                 <span>{s.label}</span>
-                <span className="font-mono tabular-nums">
-                  {usdExacto(s.lineas.reduce((a, x) => a + x.amount, 0))}
+                <span className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
+                  <span className="w-[5.5rem] text-right">
+                    {usdEntero(s.lineas.reduce((a, x) => a + x.amount, 0))}
+                  </span>
+                  <span className="w-[4rem] text-right font-normal text-slate-400">
+                    {bps(s.lineas.reduce((a, x) => a + x.amount, 0), p.amount)}
+                  </span>
                 </span>
               </div>
               <div className="-mx-3 opacity-70">

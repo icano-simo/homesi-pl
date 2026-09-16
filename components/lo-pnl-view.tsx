@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
-import { LoanPnlCard } from "@/components/loan-pnl-card";
+import { LoanPnlCard, usdEntero } from "@/components/loan-pnl-card";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
@@ -384,7 +384,23 @@ function AyudaPnl({ onClose }: { onClose: () => void }) {
  * segunda barra de desplazamiento. Una lista plana dice lo mismo: cuenta,
  * importe, y el total abajo.
  */
-function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: PayrollRow[] }) {
+/**
+ * @param volumen El volumen de los cierres de esa persona en el periodo, que es
+ *   la base de los bps. CERO cuando no cerro nada -- ver la nota de abajo.
+ */
+function BloqueNomina({ rows, fragiles, volumen }: {
+  rows: PayrollRow[]; fragiles: PayrollRow[]; volumen: number;
+}) {
+  /*
+   * ⚠ SIN VOLUMEN NO HAY bps, Y SE DEJA EN GUION -- NUNCA EN 0,0.
+   *
+   * La mayoria de Support tiene nomina y CERO cierres, asi que el divisor es
+   * cero. Un "0,0 bps" ahi diria que su nomina no pesa nada, y lo que pasa es
+   * que no hay volumen contra el que medirla: es una division imposible, no un
+   * resultado. Es la misma distincion que este modulo lleva haciendo con null
+   * y cero en la comision y en la nomina localizada.
+   */
+  const enBps = (v: number) => (volumen ? `${((v / volumen) * 10000).toFixed(1)} bps` : "—");
   if (rows.length === 0 && fragiles.length === 0) {
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] italic text-gray-400">
@@ -407,8 +423,8 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
      * ⚠ NI h-full NI flex-1 NI overflow AQUI, y es la SEGUNDA vez que el hueco
      * blanco se mueve en vez de desaparecer. Estos eran restos de cuando la
      * nomina vivia en una caja de alto fijo con su propio scroll: al quitarle
-     * la caja, el  estiraba el bloque al alto que la fila le daba a la
-     * tarjeta, y el  de la lista se comia el sobrante -- medio panel en
+     * la caja, el "h-full" estiraba el bloque al alto que la fila le daba a la
+     * tarjeta, y el "flex-1" de la lista se comia el sobrante -- medio panel en
      * blanco entre las tres cuentas y su total.
      *
      * NINGUN hijo de la tarjeta se estira. El unico que puede es el separador
@@ -424,7 +440,10 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
                 una columna: a este tamaño, una tabla de cuatro columnas para
                 dos datos pesa mas que el dato. */}
             <span aria-hidden className="min-w-0 flex-1 translate-y-[-3px] border-b border-dotted border-slate-300" />
-            <dd className="shrink-0 font-mono tabular-nums text-gray-700">{usdExacto(v.total)}</dd>
+            <dd className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
+              <span className="w-[4.5rem] text-right text-gray-700">{usdEntero(v.total)}</span>
+              <span className="w-[4rem] text-right text-slate-400">{enBps(v.total)}</span>
+            </dd>
           </div>
         ))}
       </dl>
@@ -433,7 +452,10 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
           arriba y no como una cuarta cifra suelta. */}
       <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-2">
         <span className="text-[11px] font-semibold text-gray-700">Total payroll cost</span>
-        <span className="font-mono tabular-nums text-xs font-bold text-rose-600">{usdExacto(total)}</span>
+        <span className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
+          <span className="w-[4.5rem] text-right text-xs font-bold text-rose-600">{usdEntero(total)}</span>
+          <span className="w-[4rem] text-right text-[11px] text-slate-400">{enBps(total)}</span>
+        </span>
       </div>
 
       {fragiles.length > 0 && (
@@ -925,7 +947,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
           <p className="pb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Payroll this period
           </p>
-          <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
+          <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} volumen={o.volume} />
 
           {/*
             * Las dos cifras juntas, sin la explicacion al lado: alguien las va a
@@ -936,19 +958,19 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
           <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-slate-600">Commission on loans</span>
-              <span className="font-mono tabular-nums text-slate-700">{usdExacto(o.commission)}</span>
+              <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
             </div>
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-slate-600">Paid in payroll</span>
               <span className="font-mono tabular-nums text-slate-700">
-                {localizada ? usdExacto(nominaPos)
+                {localizada ? usdEntero(nominaPos)
                   : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
               </span>
             </div>
             <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
               <span className="font-medium text-slate-600">Difference</span>
               <span className="font-mono tabular-nums font-medium text-slate-700">
-                {localizada ? usdExacto(o.commission - nominaPos) : "—"}
+                {localizada ? usdEntero(o.commission - nominaPos) : "—"}
               </span>
             </div>
           </div>
