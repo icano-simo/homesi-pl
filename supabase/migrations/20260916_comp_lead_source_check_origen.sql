@@ -1,0 +1,56 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- De dónde salió comp.lead_source_check, y por qué eso explica lo demás
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- ⚠ NO EJECUTADA. Se escribe para que la aplique el usuario. Solo cambia un
+-- comentario: no toca ni una fila, ni un permiso, ni una columna.
+--
+-- POR QUE EXISTE ESTE ARCHIVO
+--
+-- `comp.lead_source_check` acumula tres rarezas, y las tres tienen la misma
+-- causa. Quien la retome se las va a encontrar de una en una y va a perder el
+-- tiempo con cada una por separado, como se perdió el 2026-09-16:
+--
+--   1. Está VACIA -- 0 filas, `synced_at` nulo -- mientras sus dos hermanas
+--      traen 738 y 470 del mismo lote. Parece una carga rota. No lo es: el
+--      sync se puso en espera por decisión del usuario.
+--   2. Tenía la UNICA politica RLS del esquema, más un GRANT a
+--      `authenticated`, cuando las otras 23 tablas tienen cero. Parecía un
+--      descuido. Tampoco: el predicado --`allowed_apps ? 'homesi'`-- está
+--      pensado, y son dos pasos, no uno.
+--   3. Y NINGUNA PANTALLA LA LEE. No aparece ni una vez en `app/`,
+--      `components/` ni `lib/`, y la app entra a `comp` por
+--      `createServerClient("comp")` con la service role, que salta RLS y no
+--      necesita política ninguna.
+--
+-- ⚠ LA CAUSA COMUN: ESTA TABLA NO ESTA EN EL HISTORIAL DE MIGRACIONES.
+--
+-- Ninguna de las 118 migraciones registradas en `supabase_migrations` menciona
+-- `lead_source_check` -- se comprobó buscando el texto en los `statements` de
+-- todas ellas. Se creó POR FUERA, a mano, y con ella la política y el grant.
+--
+-- Eso explica las tres a la vez. Una tabla creada fuera del historial no pasó
+-- por donde se revisa el patrón del esquema, así que se llevó un permiso que
+-- la migración fundacional --`20260912232733 comp_compensafe_mirror`-- había
+-- decidido no dar a nadie: allí las dos tablas quedan con
+-- `enable row level security` y CERO politicas, grants solo a `service_role`,
+-- y eso está escrito en el mismo bloque, o sea que fue una decisión.
+--
+-- La lectura entera es: se preparó una pantalla que no llegó a construirse, y
+-- quedaron la tabla, el permiso y el hueco donde iría el spec. Nada de eso
+-- está roto. Está a medias, que es distinto y se arregla distinto.
+--
+-- ⚠ LO QUE HAY QUE HACER CUANDO SE RETOME: escribir el spec en `simo-sync`,
+-- grupo `comp`. Nada más. La tabla ya está, su clave está medida --lleva el
+-- importe a proposito, porque un mismo prestamo puede tener dos pagos
+-- legitimos la misma fecha: 467 filas con la comision en la clave y 463 sin
+-- ella-- y el permiso de mas se retiro el 2026-09-16. Si además hiciera falta
+-- leerla desde el navegador, se repone la política CON su pantalla delante.
+--
+-- Y LA LECCION QUE SIRVE PARA LA PROXIMA: una tabla creada fuera del historial
+-- de migraciones no es solo una tabla sin registrar. Es una tabla que no pasó
+-- por la revisión donde se aplican los patrones del esquema, y lo que se cuela
+-- ahí no se ve hasta que alguien audita permisos tabla por tabla.
+
+comment on table comp.lead_source_check is
+  'Compara lo que se PAGO contra la regla de comision VIGENTE en la fecha de cierre. Desde comp_marts.mart_lead_source_check. Responde la pregunta que ninguna otra tabla responde: se pago lo que correspondia. ⚠ ESTA VACIA A PROPOSITO: el sync se puso en espera por decision del usuario. Cero filas y synced_at nulo NO es una carga rota, y cuando se retome lo unico que falta es el spec en simo-sync, grupo comp. ⚠ NO ESTA EN EL HISTORIAL DE MIGRACIONES: ninguna de las 118 registradas la menciona, se creo por fuera. Eso es lo que explica que se llevara la UNICA politica RLS del esquema mas un GRANT a authenticated cuando las otras 23 tablas tienen cero -- una tabla creada fuera del historial no pasa por donde se revisa el patron. La politica y el grant se retiraron el 2026-09-16 porque ninguna pantalla la lee y la app entra por service_role, que salta RLS. Si algun dia hace falta leerla desde el navegador, se repone CON su pantalla delante. El patron del esquema esta en 20260912232733 comp_compensafe_mirror: RLS activo, cero politicas, grants solo a service_role.';
