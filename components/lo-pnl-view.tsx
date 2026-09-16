@@ -120,8 +120,16 @@ const ESCALONES = [
   },
   {
     key: "direct" as const,
+    /*
+     * ⚠ AQUI DENTRO VIVE 55601 One-Time Transfers, que no es un coste de
+     * produccion sino un traslado entre sucursales -- positivo donde se recibe,
+     * negativo donde se cede, y casi cero sumando la division entera. Por eso
+     * un prestamo suelto puede llevar +12.450 o -32.144 en este escalon sin que
+     * nada este mal. El porque completo, con las cifras, esta en la nota de
+     * `directCosts` en app/api/lo-pnl/route.ts.
+     */
     label: "Direct production costs",
-    hint: "Appraisal, credit report, verification. Shown with its own sign — these usually ADD, because they are charged to the borrower and come back to the branch.",
+    hint: "Appraisal, credit report, verification — and branch-to-branch transfers (55601), which is why this line can be unusually large on a single loan. Shown with its own sign: these usually ADD, because they are charged to the borrower and come back to the branch.",
     grupo: "Direct Production Costs",
   },
   {
@@ -420,7 +428,7 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
             <th className="px-3 py-1.5 font-medium text-right" title="What the loan left before paying the loan officer.">
               Gross revenue
             </th>
-            <th className="px-3 py-1.5 font-medium text-right" title="Appraisal, credit report, verification. Shown with its own sign — these usually ADD, because they are charged to the borrower and come back to the branch.">
+            <th className="px-3 py-1.5 font-medium text-right" title="Appraisal, credit report, verification — and branch-to-branch transfers (55601), which is why this line can be unusually large on a single loan. Shown with its own sign: these usually ADD, because they are charged to the borrower and come back to the branch.">
               Direct costs
             </th>
             <th className="px-3 py-1.5 font-medium text-right" title="Paid to the loan officer for this loan, from Compensafe.">
@@ -1277,7 +1285,7 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                   <th className="px-3 py-2 font-medium text-right" title="What the loans left before paying the loan officer. category_6 = 'Revenue'.">
                     Gross revenue
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="Appraisal, credit report, verification. Shown with its own sign — these usually ADD, because they are charged to the borrower and come back to the branch.">
+                  <th className="px-3 py-2 font-medium text-right" title="Appraisal, credit report, verification — and branch-to-branch transfers (55601), which is why this line can be unusually large on a single loan. Shown with its own sign: these usually ADD, because they are charged to the borrower and come back to the branch.">
                     Direct costs
                   </th>
                   <th className="px-3 py-2 font-medium text-right" title="What Compensafe paid them for those loans.">

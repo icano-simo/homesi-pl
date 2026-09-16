@@ -422,7 +422,57 @@ export interface LoanRow {
    * queda esa sucursal.
    */
   grossRevenue: number;
-  /** `category_6 = 'Direct Production Costs'` en su sucursal. Con su signo. */
+  /**
+   * `category_6 = 'Direct Production Costs'` en su sucursal. Con su signo.
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * ⚠ 55601 One-Time Transfers VIVE AQUI, Y ES UN TRASLADO ENTRE SUCURSALES
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Su `category_7` es "Compensation Transfers", y el nombre dice la verdad: no
+   * es un coste de produccion como la tasacion o el informe de credito, es
+   * dinero que una sucursal le pasa a otra. Se ve en el reparto -- positiva
+   * donde se recibe, negativa donde se cede:
+   *
+   *     716  -73.583,23        733  +37.340,69
+   *     707  -37.767,57        728  +34.560,05
+   *     701  -14.247,69        702  +14.861,95
+   *     724  -13.560,40        747  +13.667,21
+   *     741  -12.917,10        771  +11.694,68
+   *
+   *     83 lineas en 15 sucursales · bruto 670.812,67 · neto global -21.710,47
+   *
+   * Y en las descripciones, literales: "COMPENSATION TRANSFER" +13.301,15 en la
+   * 733 y -13.301,15 en la 716; "Abel Berrocal Transfer" +15.550,00 en la 728 y
+   * -15.550,00 en la 700; "Revenue Transfer BR733 - BR776", que ademas confirma
+   * por donde va el dinero de la 776, la sucursal que no existe en el P&L.
+   *
+   * ⚠ NO SE TOCA, Y ESA ES LA DECISION. Contar el apunte en la sucursal donde
+   * esta es exactamente lo correcto para un traslado: la que lo recibe lo suma
+   * y la que lo cede lo resta. Cualquier "arreglo" --excluirla, repartirla,
+   * llevarla a la 700-- romperia justo eso.
+   *
+   * ⚠ PERO EXPLICA COSAS QUE PARECEN ERRORES Y NO LO SON. A nivel de division
+   * casi se anula; a nivel de un prestamo concreto mueve muchisimo, asi que un
+   * cierre puede salir con un coste enorme o un ingreso enorme sin que nada
+   * este mal. Los dos casos medidos son suyos:
+   *
+   *     203001997314   +12.450,00 de 55601 contra 208,00 de revenue
+   *     707002013216   -32.144,00 en mayo contra un BM Margin de marzo
+   *
+   * Son 34 lineas en 17 prestamos --16 dentro del alcance de este modulo-- con
+   * 347.392,38 de bruto y -32.241,00 de neto. Quien los vea sin esta nota va a
+   * pensar que hay un fallo de carga.
+   *
+   * ⚠ Y LAS 49 FILAS SIN loan_number NO LLEGAN A LA NOMINA DE NADIE, medido el
+   * 2026-09-16 pasando las 49 por el emparejador: 47 no tienen forma de nombre
+   * --"BROKER DIVISION TRANSFER", "TRANSFERRED LOANS RECONCILIATION"-- y las
+   * dos que si la tienen, "BALLON, ZUZUNAGA, RECONCILIATION" (+10.108,00 en la
+   * 733 y -10.108,00 en la 716), quedan SIN ATRIBUIR. Cero euros de esta cuenta
+   * entran en el bloque 2. Merece comprobarse otra vez si alguien toca el
+   * emparejador: atribuir un traslado entre sucursales a una persona la dejaria
+   * pareciendo diez mil mas cara de lo que es.
+   */
   directCosts: number;
   /**
    * Lo que no cae en ninguno de los dos grupos anteriores. Casi siempre cero.
