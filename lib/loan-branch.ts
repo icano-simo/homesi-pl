@@ -69,6 +69,59 @@ const BRANCH_ALIASES: Record<string, string> = {
 
 /*
  * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠ SIETE SUCURSALES CON PRESTAMOS Y SIN NADIE EN EL ROSTER. NO SE SABE QUE SON
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Medido el 2026-09-16. Estan TODAS en `finance_division.branches` --o sea que
+ * el catalogo no las excluye-- y todas empiezan por 7, asi que ninguna de las
+ * dos reglas de este archivo las separa. Lo unico que las distingue es que
+ * `org.roster_current` no tiene NI UNA persona asignada a ellas:
+ *
+ *   suc  region          roster  loan_officials  espejo  cuentan  nomina sin
+ *                                                                 atribuir
+ *   718  No Grouping          0        10           51      10    173.478,67
+ *   701  Ana de Anda          0         5           65       5     86.075,19
+ *   741  Recruited            0         9          101       9     58.948,51
+ *   771  Recruited            0         2            8       2     32.753,50
+ *   712  Recruited            0         0            0       0     16.327,29
+ *   702  Ana de Anda          0         1           12       1      9.000,46
+ *   721  Ana de Anda          0         0            1       0      3.180,45
+ *                                                                 ----------
+ *                                                                 379.764,07
+ *
+ * Esos 379.764,07 son el 72,6% de toda la nomina que el modulo de P&L por Loan
+ * Officer no consigue atribuir a nadie (523.207,01 en 84 nombres). El otro
+ * 27,4% --143.442,94-- si esta en sucursales con gente.
+ *
+ * ⚠ HAY DOS EXPLICACIONES POSIBLES Y EL DATO APOYA LAS DOS. No se afirma
+ * ninguna, ni aqui ni en pantalla:
+ *
+ *   (a) SU GENTE NO ESTA DADA DE ALTA EN RRHH. De los 22 pares officer-sucursal
+ *       de estas siete, DIECIOCHO no aparecen en el roster por ningun lado --
+ *       David Kontny, Saidu Quansah, Mason Fowler, Patty Anderson, Hortencia De
+ *       Anda, Frank Rodriguez, Karol Gonzalez, Constantino Bovino...-- y son
+ *       exactamente los mismos nombres que encabezan la nomina sin atribuir.
+ *
+ *   (b) SON DE OTRA PARTE DE SUPREME Y SUS PRESTAMOS LLEGAN AQUI. Los otros
+ *       CUATRO pares SI estan en el roster, asignados a otra sucursal: Jorge
+ *       Zuzunaga cierra en la 718 y es de la 716, Gian Laino cierra en la 741 y
+ *       es de la 747, Nathan Martinez en la 741 siendo de la 716, Armando
+ *       Tejeda en la 771 siendo de la 707. Y el espejo ya marca como fuera de
+ *       la division casi toda su actividad: de los 101 registros de la 741 solo
+ *       9 cuentan, de los 51 de la 718 solo 10, de los 65 de la 701 solo 5.
+ *
+ * ⚠ LO QUE LA PANTALLA HACE: nada. Estas sucursales no se abren desde el modulo
+ * de P&L por Loan Officer porque no tienen personal asignado, y su nomina sin
+ * atribuir no se enseña en ninguna vista. Eso es correcto mientras no se sepa
+ * que son -- pero que no salgan NO significa que no existan, y por eso queda
+ * escrito aqui con los numeros en vez de solo con su ausencia.
+ *
+ * Quien pueda cerrarlo es RRHH, no el codigo: basta con saber si esas personas
+ * son de la division.
+ */
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
  * REGLA DE NEGOCIO SIN CODIGO: la exoneracion del B2B success fee
  * ─────────────────────────────────────────────────────────────────────────────
  *
