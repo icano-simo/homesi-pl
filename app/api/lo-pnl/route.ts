@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { MARGIN_ALL_GL_LIST } from "@/lib/loan-detail-accounts";
-import { resolveLoanBranchAlias } from "@/lib/loan-branch";
+import { CORPORATE_BRANCH, resolveLoanBranchAlias } from "@/lib/loan-branch";
 import { closePeriod } from "@/lib/close-period";
 import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
@@ -447,6 +447,36 @@ export interface LoanRow {
    * de saber cuanto se fue ni adonde.
    */
   bookedElsewhere: number;
+  /*
+   * ─── Y SE PARTE EN DOS, PORQUE SON DOS COSAS DISTINTAS ───────────────────
+   *
+   * ⚠ BAJO UNA SOLA ETIQUETA SON INDISTINGUIBLES, y una es el funcionamiento
+   * normal del negocio mientras la otra merece mirarse. Medido sobre los 494
+   * cierres de la division:
+   *
+   *   LA 700 -- reparto normal, corporativo se queda su parte:
+   *       DM Margin            827.013,69   411 lineas
+   *       Fee Income, Net      168.393,48   537
+   *       Processing Income    104.449,00   172
+   *       RM Margin             29.724,23
+   *       ...                            total 1.138.272,02
+   *
+   *   OTRA SUCURSAL -- traslados y margen apuntado donde no toca:
+   *       Back-end Margin      167.849,23    27 lineas
+   *       Compensation Transfers -102.925,78  13
+   *       Front-end Margin     -81.406,91    26
+   *       Discount Income       70.357,71    25
+   *       ...                            total    85.073,08
+   *
+   * Lo de la 700 es como funciona la division. Lo otro son 27 lineas de margen
+   * de cierre apuntadas en una sucursal que no es la del prestamo y 13 de
+   * traslados de compensacion: eso si es una pregunta.
+   */
+
+  /** Lo que se queda la division: contabilizado en la 700. Reparto normal. */
+  keptByDivision: number;
+  /** Contabilizado en una tercera sucursal, ni la suya ni la 700. */
+  bookedOtherBranch: number;
   /**
    * La sucursal de este prestamo NO TIENE NI UNA LINEA en todo el P&L.
    *
@@ -612,6 +642,10 @@ export interface OfficerBlock {
    * que pierde dinero por el camino.
    */
   block1Elsewhere: number;
+  /** De `block1Elsewhere`, lo que se queda la division en la 700. */
+  block1KeptByDivision: number;
+  /** De `block1Elsewhere`, lo apuntado en una tercera sucursal. */
+  block1OtherBranch: number;
   /**
    * Cierres suyos cuya sucursal no existe en el P&L. Ver LoanRow.branchNotInPl.
    *
@@ -1089,6 +1123,8 @@ export async function GET(req: NextRequest) {
       let directCosts = 0;
       let otherBooked = 0;
       let bookedElsewhere = 0;
+      let keptByDivision = 0;
+      let bookedOtherBranch = 0;
       const detail: LoanLine[] = lineas.map((l) => {
         const amt = Number(l.movement ?? 0);
         const esMargen = MARGIN_ALL_GL_LIST.includes((l.gl_code as string) ?? "");
@@ -1099,6 +1135,8 @@ export async function GET(req: NextRequest) {
           sucursalPrestamo !== null && (l.branch as string | null) === sucursalPrestamo;
         if (!enSuSucursal) {
           bookedElsewhere += amt;
+          if ((l.branch as string | null) === CORPORATE_BRANCH) keptByDivision += amt;
+          else bookedOtherBranch += amt;
         } else {
           const grupo = (l.category_6 as string | null) ?? null;
           if (grupo === GRUPO_REVENUE) grossRevenue += amt;
@@ -1132,6 +1170,8 @@ export async function GET(req: NextRequest) {
         directCosts,
         otherBooked,
         bookedElsewhere,
+        keptByDivision,
+        bookedOtherBranch,
         branchNotInPl: sucursalPrestamo !== null && sucursalesSinContabilidad.has(sucursalPrestamo),
         commission,
         contribution: commission == null ? null : grossRevenue + directCosts + otherBooked - commission,
@@ -1242,6 +1282,8 @@ export async function GET(req: NextRequest) {
      * se va no se borra: `block1Elsewhere` lo lleva y la pantalla lo enseña.
      */
     const block1Elsewhere = evaluables.reduce((s, l) => s + l.bookedElsewhere, 0);
+    const block1KeptByDivision = evaluables.reduce((s, l) => s + l.keptByDivision, 0);
+    const block1OtherBranch = evaluables.reduce((s, l) => s + l.bookedOtherBranch, 0);
     const block1Net = block1Revenue + block1DirectCosts + block1OtherBooked;
 
     const payroll = nominaPorPersona.get(id) ?? [];
@@ -1330,6 +1372,8 @@ export async function GET(req: NextRequest) {
       block1DirectCosts,
       block1OtherBooked,
       block1Elsewhere,
+      block1KeptByDivision,
+      block1OtherBranch,
       loansBranchNotInPl: loans.filter((l) => l.branchNotInPl).length,
       contribution: block1Net - block1Commission,
       block1Commission,
@@ -1407,6 +1451,8 @@ export async function GET(req: NextRequest) {
       block1DirectCosts: 0,
       block1OtherBooked: 0,
       block1Elsewhere: 0,
+      block1KeptByDivision: 0,
+      block1OtherBranch: 0,
       loansBranchNotInPl: 0,
       contribution: 0,
       block1Commission: 0,
