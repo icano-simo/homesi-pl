@@ -403,9 +403,12 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                   * nada en la fila que explique por que.
                   */}
                 {l.bookedElsewhere !== 0 && (
-                  <span className="ml-1 text-[10px] text-gray-400"
-                        title="Booked on this loan but in another branch, so it is not counted here. Open the loan to see which accounts.">
+                  <span className={`ml-1 text-[10px] ${l.branchNotInPl ? "text-amber-600" : "text-gray-400"}`}
+                        title={l.branchNotInPl
+                          ? `Branch ${l.branch} carries no entries at all in the P&L, so none of this loan's revenue can be booked to it. All of it sits in other branches.`
+                          : "Booked on this loan but in another branch, so it is not counted here. Open the loan to see which accounts."}>
                     {usd(l.bookedElsewhere, { signo: true })} elsewhere
+                    {l.branchNotInPl && " · branch not in P&L"}
                   </span>
                 )}
               </td>
@@ -759,9 +762,18 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
                 </p>
                 <dl className="mt-2 space-y-1.5 text-xs">
                   <div className="flex items-baseline justify-between gap-4">
+                    {/*
+                      * ⚠ LA ETIQUETA DICE "su propia sucursal" Y NO SOLO
+                      * "produced". Quien compare esta cifra con Compensafe la
+                      * va a encontrar mas baja y va a pensar que falta algo; lo
+                      * que falta esta dos lineas mas arriba, en booked
+                      * elsewhere, y la etiqueta tiene que llevar a ella.
+                      */}
                     <dt className="text-white/70">
                       Produced
-                      <span className="ml-1.5 text-[10px] text-white/40">what their own branch kept, before commission</span>
+                      <span className="ml-1.5 text-[10px] text-white/40">
+                        booked in their loans’ own branch — not everything they generated
+                      </span>
                     </dt>
                     <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
                   </div>
@@ -942,6 +954,7 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
     : null;
 
   const sinNomina = officers.filter((o) => o.payrollStatus === "not_located" && o.loanCount > 0);
+  const sucursalFantasma = officers.filter((o) => o.loansBranchNotInPl > 0);
   const fueraDeNomina = officers.filter((o) => o.commissionOutsidePayroll);
 
   return (
@@ -1048,6 +1061,42 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
             that is {usdExacto(Math.abs(totales.fuera))} of the closings’ revenue. Branch
             “Affinity” is read as 716, which is where its loans are booked.
           </p>
+          {/*
+            * ⚠ EL AVISO DE COMPENSAFE ES EL QUE EVITA LA LLAMADA. Alguien va a
+            * comparar "Produced" contra lo que Compensafe dice que genero esa
+            * persona, no va a cuadrar, y va a suponer que la pantalla esta
+            * rota. Dicho aqui, la diferencia es una respuesta y no un fallo.
+            */}
+          <p>
+            <span className="font-semibold text-gray-700">
+              &ldquo;Produced&rdquo; is not everything they generated.
+            </span>{" "}
+            It is what the loan&rsquo;s own branch booked. Compared against Compensafe, or against
+            a loan officer&rsquo;s own production report, it will come out lower &mdash; and the
+            gap is the &ldquo;Booked elsewhere&rdquo; figure, mostly division margin sitting in
+            700. Neither number is wrong; they answer different questions.
+          </p>
+          {/*
+            * ⚠ "SU SUCURSAL NO ESTA EN LOS LIBROS", NO "no produjeron". La
+            * distincion es toda la diferencia y sin decirla la pantalla las
+            * enseña igual: nueve cierres con gross revenue cero que parecen
+            * nueve prestamos que no dejaron nada.
+            */}
+          {sucursalFantasma.length > 0 && (
+            <p>
+              <span className="font-semibold text-amber-700">
+                Two branches are not in the P&amp;L at all.
+              </span>{" "}
+              {sucursalFantasma.map((o) => `${o.name} (${o.loansBranchNotInPl})`).join(", ")}
+              {" "}&mdash; {sucursalFantasma.reduce((s, o) => s + o.loansBranchNotInPl, 0)} closings
+              whose branch carries no entries in the ledger, so they cannot show revenue of their
+              own. Theirs is booked in 700 and 733 instead. It is the same situation the
+              &ldquo;Affinity&rdquo; alias exists to fix, but their revenue splits across two
+              branches, so picking one would move money between branches on a hunch &mdash; a
+              question for whoever maintains the branch catalogue, not something this screen
+              should guess.
+            </p>
+          )}
           <p>
             <span className="font-semibold text-gray-700">
               Commission and payroll are two calendars.
@@ -1302,6 +1351,19 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                           )}
                           {o.loanCount === 0 && (
                             <Marca title="This person has payroll but closed no loans in this period.">payroll, no closings</Marca>
+                          )}
+                          {/*
+                            * ⚠ "SU SUCURSAL NO ESTA EN LOS LIBROS", NO "no
+                            * produjo". Sin esta marca, los siete cierres de
+                            * Silvio Arteaga en la 776 se leen como siete
+                            * prestamos que no dejaron nada, cuando lo que pasa
+                            * es que la 776 no tiene ni una linea en el P&L.
+                            */}
+                          {o.loansBranchNotInPl > 0 && (
+                            <Marca tono="ambar"
+                              title="Their branch has no entries at all in the P&L, so these loans cannot show revenue of their own — it is booked in other branches. Not the same as having earned nothing.">
+                              {o.loansBranchNotInPl} closing{o.loansBranchNotInPl === 1 ? "" : "s"} in a branch the P&amp;L does not carry
+                            </Marca>
                           )}
                           {o.truncatedRows > 0 && (
                             <Marca title={`${o.truncatedRows} row(s) arrived at the 35-character limit, so the name may be cut.`}>

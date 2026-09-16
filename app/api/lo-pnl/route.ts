@@ -448,6 +448,19 @@ export interface LoanRow {
    */
   bookedElsewhere: number;
   /**
+   * La sucursal de este prestamo NO TIENE NI UNA LINEA en todo el P&L.
+   *
+   * ⚠ NO ES LO MISMO QUE "no gano nada aqui", y sin distinguirlo la pantalla
+   * las enseña igual. La 776 y la 150 no existen en `pl_transactions`: sus
+   * nueve cierres no pueden tener gross revenue propio por construccion, y su
+   * revenue esta contabilizado en la 700 y la 733.
+   *
+   * Es la misma situacion que el alias de Affinity arregla, y a estas dos NO se
+   * les pone alias porque su revenue se reparte entre dos sucursales -- elegir
+   * una seria mover dinero por una corazonada. Ver lib/loan-branch.ts.
+   */
+  branchNotInPl: boolean;
+  /**
    * Lo que se le pago al loan officer por ESTE prestamo, de comp.loan_commission.
    * Null cuando el prestamo no cruza, que NO es cero.
    */
@@ -599,6 +612,14 @@ export interface OfficerBlock {
    * que pierde dinero por el camino.
    */
   block1Elsewhere: number;
+  /**
+   * Cierres suyos cuya sucursal no existe en el P&L. Ver LoanRow.branchNotInPl.
+   *
+   * Se cuenta por persona porque es donde se lee: siete de los nueve son de
+   * Silvio Arteaga, y sin el contador su fila parece la de alguien que no
+   * produce.
+   */
+  loansBranchNotInPl: number;
   /** block1Net - block1Commission. El ultimo escalon, a nivel de persona. */
   contribution: number;
 
@@ -993,6 +1014,43 @@ export async function GET(req: NextRequest) {
   }
 
 
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * ¿EXISTE ESTA SUCURSAL EN LA CONTABILIDAD?
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * ⚠ LA DIFERENCIA ENTRE "NO GANO NADA AQUI" Y "AQUI NO HAY CONTABILIDAD" ES
+   * TODA LA DIFERENCIA, y sin esta comprobacion la pantalla las enseña igual.
+   *
+   * Medido el 2026-09-15: `pl_transactions` no tiene NI UNA linea en la 776 ni
+   * en la 150. Sus nueve cierres --siete de Silvio Arteaga, dos de Anthony
+   * DiToma-- salen con gross revenue cero, y leido sin mas parece que esos
+   * prestamos no dejaron nada. Lo que pasa es que su sucursal no existe en el
+   * libro: su revenue esta en la 700 y la 733.
+   *
+   * Se pregunta SOLO por las sucursales que tienen algun prestamo sin nada
+   * propio --dos o tres-- y con `head: true`, asi que no trae filas.
+   */
+  const sucursalesSinContabilidad = new Set<string>();
+  {
+    const sospechosas = new Set<string>();
+    for (const [, filas] of porOficial) {
+      for (const f of filas) {
+        const suc = resolveLoanBranchAlias(f.branch as string | null);
+        if (!suc) continue;
+        const suyas = lineasPorPrestamo.get((f.loan_number as string).trim()) ?? [];
+        if (suyas.length > 0 && !suyas.some((l) => l.branch === suc)) sospechosas.add(suc);
+      }
+    }
+    for (const suc of sospechosas) {
+      const { count } = await supabase
+        .from("pl_transactions")
+        .select("*", { count: "exact", head: true })
+        .eq("branch", suc);
+      if ((count ?? 0) === 0) sucursalesSinContabilidad.add(suc);
+    }
+  }
+
   const officers: OfficerBlock[] = [];
   const usados = new Set<string>();
 
@@ -1074,6 +1132,7 @@ export async function GET(req: NextRequest) {
         directCosts,
         otherBooked,
         bookedElsewhere,
+        branchNotInPl: sucursalPrestamo !== null && sucursalesSinContabilidad.has(sucursalPrestamo),
         commission,
         contribution: commission == null ? null : grossRevenue + directCosts + otherBooked - commission,
         // `net` ya no es identico a `contribution`: usa TODAS las lineas, esten
@@ -1271,6 +1330,7 @@ export async function GET(req: NextRequest) {
       block1DirectCosts,
       block1OtherBooked,
       block1Elsewhere,
+      loansBranchNotInPl: loans.filter((l) => l.branchNotInPl).length,
       contribution: block1Net - block1Commission,
       block1Commission,
       loansWithoutCommission,
@@ -1347,6 +1407,7 @@ export async function GET(req: NextRequest) {
       block1DirectCosts: 0,
       block1OtherBooked: 0,
       block1Elsewhere: 0,
+      loansBranchNotInPl: 0,
       contribution: 0,
       block1Commission: 0,
       loansWithoutCommission: 0,
