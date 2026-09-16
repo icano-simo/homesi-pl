@@ -390,6 +390,8 @@ export interface LoanRow {
    * Mini P&L Cards, que daban cifras distintas con nombres parecidos.
    */
   loan_program: string | null;
+  /** De Encompass. Va en la ficha junto al programa y el officer. */
+  lead_source: string | null;
   loan_officer: string | null;
   b2b: boolean;
   processing: boolean;
@@ -1014,6 +1016,7 @@ export async function GET(req: NextRequest) {
     loan_officer: l.loanOfficer,
     borrower_name: l.borrowerName,
     loan_program: l.loanProgram,
+    lead_source: l.leadSource,
     b2b: l.b2bManual === true,
     processing: l.processing === true,
     support_on_demand: l.supportOnDemand === true,
@@ -1309,6 +1312,7 @@ export async function GET(req: NextRequest) {
         branch_raw: (f.branch as string | null) ?? null,
         borrower_name: f.borrower_name as string | null,
         loan_program: f.loan_program as string | null,
+        lead_source: f.lead_source as string | null,
         loan_officer: nombreBonito(nombre),
         b2b: f.b2b === true,
         processing: f.processing === true,

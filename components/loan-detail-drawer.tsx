@@ -678,7 +678,7 @@ function MiniPL({ l }: { l: LoanRow }) {
       title={l.loan_number}
       tag={l.branch}
       subtitle={l.borrower_name}
-      meta={[l.loan_program, l.loan_officer].filter(Boolean).join(" · ") || null}
+      meta={[l.loan_program, l.loan_info_channel, l.loan_officer].filter(Boolean).join(" · ") || null}
       amount={l.loan_amount}
       branch={l.branch}
       b2b={l.b2b}

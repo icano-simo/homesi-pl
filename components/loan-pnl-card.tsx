@@ -94,12 +94,25 @@ export interface TarjetaPrestamoProps {
    * Bloques que solo existen en una de las tarjetas -- hoy, la nomina del
    * periodo y la comparacion comision/nomina del resumen por loan officer.
    *
-   * ⚠ VAN DENTRO DEL CUERPO DE LA TARJETA, no debajo ni en otra caja: son
-   * bloques con el mismo formato que los peldaños, y lo unico que los
-   * distingue es que solo una de las tarjetas los tiene. Si eso la hace la mas
-   * alta de la fila, ese pasa a ser el alto de todas -- no se recorta.
+   * ⚠ VAN DESPUES DEL BANNER, NO DENTRO DE LOS PELDAÑOS. Estuvieron dentro y
+   * con el mismo estilo de bloque, y entonces la tarjeta se leia como si el
+   * total fuera revenue menos costes menos comision MENOS NOMINA. La nomina no
+   * entra: es el sueldo de la persona, no cuelga de ningun prestamo, y la
+   * comision se paga A TRAVES de ella -- restar las dos contaria dos veces el
+   * mismo dinero.
+   *
+   * Comparten sitio y fondo con la seccion de la 700 porque son lo mismo:
+   * contexto detras del total, no parte de la resta.
    */
   extra?: React.ReactNode;
+  /**
+   * Si se pasa, la ficha lleva un chevron que pliega la tarjeta.
+   *
+   * ⚠ SOLO EL CHEVRON, no la tarjeta entera. Envolviendola en un onClick,
+   * pulsar cualquier cifra la escondia -- y en una tarjeta que existe para
+   * poder señalar cifras, eso es lo contrario de lo que se espera.
+   */
+  onCollapse?: () => void;
 }
 
 const usdExacto = (n: number) =>
@@ -130,7 +143,7 @@ function colorImporte(v: number) {
 const PELDAÑOS = [
   { key: "revenue", label: "Branch gross revenue", grupo: "Revenue" },
   { key: "direct", label: "Direct production costs", grupo: "Direct Production Costs" },
-  { key: "other", label: "Other booked to the loan", grupo: null },
+  { key: "other", label: "Other cost", grupo: null },
 ] as const;
 
 function peldañoDe(c6: string | null | undefined) {
@@ -241,11 +254,33 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
      * forma.
      */
     <div className="flex w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
-      <div className="flex min-h-0 flex-1 flex-col">
+      {/*
+        * ⚠ SIN flex-1 AQUI. Lo tenia, y como la fila estira todas las tarjetas
+        * al alto de la mas alta, ese flex-1 se comia el sobrante y CLAVABA el
+        * banner al fondo: en la tarjeta de totales, que es mas corta, quedaba un
+        * hueco entre la nomina y el TOTAL CONTRIBUTION.
+        *
+        * Ahora el banner va pegado al ultimo bloque y el hueco cae DEBAJO de
+        * todo, en el separador del final.
+        */}
+      <div className="flex flex-col">
         {/* ── La ficha del prestamo ─────────────────────────────────────── */}
         <div className="flex shrink-0 flex-col gap-1 border-b border-slate-200 bg-slate-100/90 p-3.5 text-xs font-bold text-[#001A40]">
           <div className="flex items-center justify-between gap-2">
-            <span className="truncate font-mono">{p.title}</span>
+            <span className="flex min-w-0 items-center gap-1">
+              {p.onCollapse && (
+                <button
+                  onClick={p.onCollapse}
+                  title="Collapse this card"
+                  className="shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-slate-600"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+              )}
+              <span className="truncate font-mono">{p.title}</span>
+            </span>
             {p.tag && (
               <span className="shrink-0 rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{p.tag}</span>
             )}
@@ -340,9 +375,6 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
             </div>
           )}
 
-          {/* Lo que solo tiene una de las tarjetas, con el mismo formato de
-              bloque y dentro del mismo cuerpo que scrollea. Ver `extra`. */}
-          {p.extra}
         </div>
 
       </div>
@@ -359,8 +391,8 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         */}
       <div
         className={`flex shrink-0 items-center justify-between p-3 text-xs font-bold shadow-xs ${
-          hayFuera ? "" : "rounded-b-2xl"
-        } ${perdida ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"}`}
+          perdida ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"
+        }`}
       >
         <span className="text-[10px] uppercase leading-tight tracking-wide opacity-80">
           {p.total.label}
@@ -381,7 +413,7 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
 
       {/* Fuera de la cuenta: debajo del total, en gris y sobre otro fondo. */}
       {hayFuera && (
-        <div className="shrink-0 rounded-b-2xl border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
+        <div className="shrink-0 border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
 
           {p.elsewhere!.map((s) => s.lineas.length === 0 ? null : (
             <Fragment key={s.label}>
@@ -400,6 +432,31 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
           ))}
         </div>
       )}
+
+      {/*
+        * ── Lo que NO entra en el total, detras del banner ──────────────────
+        *
+        * ⚠ ESTABA ANTES DEL BANNER Y CON EL MISMO ESTILO DE BLOQUE QUE LOS
+        * PELDAÑOS, y asi la tarjeta se leia como si el total fuera revenue
+        * menos costes menos comision MENOS NOMINA. No lo es: la nomina es el
+        * sueldo de la persona, no cuelga de ningun prestamo, y ademas la
+        * comision se paga A TRAVES de ella -- restar las dos contaria el mismo
+        * dinero dos veces.
+        *
+        * Va donde la seccion de la 700, detras del total y sobre otro fondo,
+        * porque es lo mismo: contexto que no participa en la resta.
+        */}
+      {p.extra && (
+        <div className="shrink-0 border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
+          {p.extra}
+        </div>
+      )}
+
+      {/*
+        * El sobrante de estirar la tarjeta al alto de la fila cae AQUI, debajo
+        * de todo. Antes lo absorbia el cuerpo y empujaba el banner al fondo.
+        */}
+      <div className="flex-1 rounded-b-2xl bg-slate-100" />
     </div>
   );
 }

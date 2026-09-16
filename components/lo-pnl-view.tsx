@@ -191,26 +191,43 @@ const DESTINOS = [
  * roster de RRHH-- y no de negocio, asi que mezclarlo arriba confunde sobre que
  * se esta mirando. Su cabecera dice por que estan ahi.
  */
-const SECCIONES: { key: OfficerGroup; label: string; hint: string }[] = [
+/*
+ * ⚠ CADA CATEGORIA LLEVA SU COLOR, Y EL COLOR ACOMPAÑA A SUS FILAS. Plegadas
+ * se entendia por la cabecera; abiertas, con 38 productores seguidos de 66 de
+ * soporte, entre los nombres ya no se sabia en que grupo se estaba sin subir a
+ * buscarlo. La banda lateral viaja con cada fila, asi que al desplazarse el
+ * grupo sigue diciendose solo.
+ *
+ * Tonos distintos de familia, no semaforo: ninguno significa "bien" o "mal".
+ */
+const SECCIONES: { key: OfficerGroup; label: string; hint: string; banda: string; fondo: string }[] = [
   {
     key: "producer",
     label: "Producers",
     hint: "They close loans. This is the group the module is about: does this person pay for themselves?",
+    banda: "border-l-4 border-l-sky-400",
+    fondo: "bg-sky-50",
   },
   {
     key: "support",
     label: "Support",
     hint: "Assistants, processors and support staff. They have a real cost and close no loans — that is their job, not a finding.",
+    banda: "border-l-4 border-l-violet-400",
+    fondo: "bg-violet-50",
   },
   {
     key: "nppm",
     label: "NPPM",
     hint: "Non-producing production managers tied to realtors. A different figure and a different question.",
+    banda: "border-l-4 border-l-amber-400",
+    fondo: "bg-amber-50",
   },
   {
     key: "unknown",
     label: "Role unknown",
     hint: "Not found in the HR roster, so there is no role to show. Former staff and people who were never in HR.",
+    banda: "border-l-4 border-l-slate-400",
+    fondo: "bg-slate-100",
   },
 ];
 /**
@@ -390,7 +407,8 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
       <dl className="min-h-0 flex-1 space-y-0.5 overflow-y-auto text-[11px]">
         {[...porCuenta.entries()].sort((a, b) => a[1].total - b[1].total).map(([gl, v]) => (
           <div key={gl} className="flex items-baseline gap-2">
-            <dt className="shrink-0 text-gray-600">{v.nombre || gl}</dt>
+            {/* Sangrados: se leen como los sumandos del total de abajo. */}
+            <dt className="shrink-0 pl-2 text-gray-600">{v.nombre || gl}</dt>
             {/* La guia de puntos ata el nombre con su importe sin una regla ni
                 una columna: a este tamaño, una tabla de cuatro columnas para
                 dos datos pesa mas que el dato. */}
@@ -668,13 +686,23 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
     );
   }
 
+  /*
+   * ⚠ ABIERTA NO SE PLIEGA AL PULSARLA, y antes si. El `onClick` envolvia la
+   * tarjeta ENTERA, asi que pulsar en cualquier sitio --una linea de cuenta,
+   * el total, una cifra que se queria señalar-- la escondia. Pulsar una tarjeta
+   * abre su desglose; no lo cierra.
+   *
+   * Para volver a plegarla esta el chevron de su cabecera, que es un objetivo
+   * pequeño y deliberado: cerrar tiene que costar mas que abrir.
+   */
   return (
-    <div onClick={onToggle} className="cursor-pointer">
+    <div>
       <LoanPnlCard
+        onCollapse={onToggle}
         title={l.loan_number}
         tag={l.branch}
         subtitle={l.borrower_name}
-        meta={[l.loan_program, l.loan_officer].filter(Boolean).join(" · ") || null}
+        meta={[l.loan_program, l.lead_source, l.loan_officer].filter(Boolean).join(" · ") || null}
         amount={l.loan_amount}
         branch={l.branch}
         b2b={l.b2b}
@@ -852,11 +880,25 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
       ]}
       extra={
         <>
-          {/* ── La nomina del periodo, que no cuelga de ningun prestamo ──── */}
-          <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
-            <span className="uppercase tracking-wide">Payroll this period</span>
-            <span className="font-mono tabular-nums text-rose-700">{usdExacto(nominaPos)}</span>
-          </div>
+          {/*
+            * ── La nomina del periodo, que no cuelga de ningun prestamo ──────
+            *
+            * ⚠ SU CABECERA NO LLEVA EL TOTAL, y antes si. Con el total arriba y
+            * las tres cuentas sueltas debajo, no se leia que Loan Officer
+            * Payroll, Payroll Tax y Telephone FUERAN esos 12.712,85: parecian
+            * cuatro cifras independientes. El total va ahora al final de la
+            * lista, con una linea encima, para que se lea como la suma que es.
+            *
+            * ⚠ Y LA CABECERA DICE QUE NO ENTRA EN EL TOTAL. Este bloque no es
+            * un peldaño mas: ni comparte su estilo ni su sitio --va detras del
+            * banner-- pero decirlo tambien con palabras es barato.
+            */}
+          <p className="pb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            Payroll this period
+            <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
+              their salary — not part of the total above
+            </span>
+          </p>
           <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
 
           {/*
@@ -1503,6 +1545,10 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                   const cierresSeccion = miembros.reduce((s, o) => s + o.loanCount, 0);
                   const contribucionSeccion = miembros.reduce((s, o) => s + o.contribution, 0);
                   const nominaSeccion = miembros.reduce((s, o) => s + o.block2Total, 0);
+                  const volumenSeccion = miembros.reduce((s, o) => s + o.volume, 0);
+                  const revenueSeccion = miembros.reduce((s, o) => s + o.block1Revenue, 0);
+                  const costesSeccion = miembros.reduce((s, o) => s + o.block1DirectCosts, 0);
+                  const comisionSeccion = miembros.reduce((s, o) => s + o.block1Commission, 0);
 
                   return (
                     <Fragment key={sec.key}>
@@ -1514,9 +1560,9 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                         */}
                       <tr
                         onClick={() => alternarGrupo(sec.key)}
-                        className="cursor-pointer border-b border-gray-200 bg-gray-50/80 hover:bg-gray-100"
+                        className={`cursor-pointer border-b border-gray-300 ${sec.fondo}`}
                       >
-                        <td className="px-3 py-2" colSpan={3}>
+                        <td className={`px-3 py-2 ${sec.banda}`}>
                           <span className="inline-flex items-center gap-1.5">
                             {seccionAbierta
                               ? <ChevronDown size={13} className="text-gray-500" />
@@ -1547,7 +1593,31 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                             </span>
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-right" colSpan={3} />
+                        {/*
+                          * ⚠ LA CABECERA SUMA LAS MISMAS COLUMNAS QUE SUS
+                          * FILAS. Llevaba conteo y neto, y tres celdas vacias en
+                          * medio: para saber cuanto cerro el grupo habia que
+                          * sumar a mano las filas de debajo.
+                          *
+                          * En Support y NPPM salen a cero o vacias, y esta bien:
+                          * un cero ahi dice algo --no cierran-- y es justo lo
+                          * que su grupo existe para separar.
+                          */}
+                        <td className="px-3 py-2 text-right font-semibold text-gray-700">
+                          {cierresSeccion || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-gray-700">
+                          {volumenSeccion ? usd(volumenSeccion) : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-gray-700">
+                          {revenueSeccion ? usd(revenueSeccion) : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-gray-700">
+                          {costesSeccion ? usd(costesSeccion) : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-gray-500">
+                          {comisionSeccion ? usd(-comisionSeccion) : "—"}
+                        </td>
                         {/*
                           * La cabecera plegada lleva los DOS finales, no solo
                           * el neto. Con uno solo, plegar la seccion escondia
@@ -1579,7 +1649,9 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                         className={`cursor-pointer border-b border-gray-100 hover:bg-blue-50/60 ${
                           abre ? "bg-blue-50" : ""
                         }`}>
-                        <td className="px-3 py-1.5">
+                        {/* La banda del grupo, en cada fila: al desplazarse ya
+                            no hace falta subir para saber en cual se esta. */}
+                        <td className={`px-3 py-1.5 ${sec.banda}`}>
                           <span className="inline-flex items-center">
                             {/*
                               * Siempre a la derecha: ya no despliega hacia abajo,
