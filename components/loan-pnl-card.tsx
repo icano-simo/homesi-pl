@@ -49,12 +49,35 @@ export interface TarjetaLinea {
 }
 
 export interface TarjetaPrestamoProps {
-  loan_number: string;
-  branch: string | null;
-  borrower_name: string | null;
-  loan_program: string | null;
-  loan_officer: string | null;
-  loan_amount: number | null;
+  /*
+   * ─── LA FICHA: HUECOS, NO CAMPOS DE UN PRESTAMO ──────────────────────────
+   *
+   * ⚠ SE LLAMAN `title`/`subtitle`/`meta` Y NO `loan_number`/`borrower_name`
+   * A PROPOSITO. Esta tarjeta la usan tres cosas: un prestamo, el resumen de un
+   * mes y el resumen de un loan officer, y las tres llenan los mismos huecos
+   * con lo suyo:
+   *
+   *             title            tag       subtitle        meta
+   *   prestamo  numero           sucursal  prestatario     programa · officer
+   *   mes       "JULY 2026"      —         "Banked loans"  n prestamos
+   *   officer   "ALL 24 CLOSINGS" sucursal  nombre         cargo · area
+   *
+   * Con nombres de prestamo, la tarjeta de totales habria tenido que pasar su
+   * nombre como `borrower_name`, y eso es exactamente como se empieza a
+   * justificar un segundo componente.
+   */
+  title: string;
+  /** La cajita de arriba a la derecha. */
+  tag?: string | null;
+  subtitle?: string | null;
+  meta?: string | null;
+  /** El importe de la ficha, y la base de TODOS los bps de la tarjeta. */
+  amount: number | null;
+  /**
+   * La sucursal contra la que se compara la de cada linea, para marcar "@700".
+   * Null en las tarjetas que suman varios prestamos: ahi no hay una sola.
+   */
+  branch?: string | null;
   b2b?: boolean;
   processing?: boolean;
   support_on_demand?: boolean;
@@ -67,6 +90,16 @@ export interface TarjetaPrestamoProps {
   total: { label: string; value: number | null };
   /** La seccion de la 700. Solo el modulo de LO la tiene. */
   elsewhere?: { label: string; lineas: TarjetaLinea[] }[];
+  /**
+   * Bloques que solo existen en una de las tarjetas -- hoy, la nomina del
+   * periodo y la comparacion comision/nomina del resumen por loan officer.
+   *
+   * ⚠ VAN DENTRO DEL CUERPO DE LA TARJETA, no debajo ni en otra caja: son
+   * bloques con el mismo formato que los peldaños, y lo unico que los
+   * distingue es que solo una de las tarjetas los tiene. Si eso la hace la mas
+   * alta de la fila, ese pasa a ser el alto de todas -- no se recorta.
+   */
+  extra?: React.ReactNode;
 }
 
 const usdExacto = (n: number) =>
@@ -201,28 +234,36 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
 
   return (
     /*
-     * ⚠ ALTO FIJO Y TODAS IGUALES. Con el alto del contenido, un prestamo de
-     * tres lineas y otro de veintiocho salen a alturas distintas y la fila deja
-     * de poder leerse en horizontal -- que es justo lo que el orden fijo de
-     * cuentas viene a permitir. El contenido que no cabe scrollea dentro.
+     * ⚠ NINGUNA TARJETA SCROLLEA POR DENTRO. El contenido cabe entero, y el
+     * alto lo iguala la fila: "items-stretch", que es el defecto de un flex-row,
+     * estira todas a la mas alta, y la que tiene menos contenido deja hueco
+     * abajo en vez de encogerse. Eso es lo que mantiene la linea de base y
+     * permite leer la fila en horizontal.
+     *
+     * ⚠ NO SE PONE ALTO FIJO. Lo tuvo --h-[30rem] con scroll dentro-- y era
+     * peor de las dos maneras: recortaba la tarjeta que totaliza y metia una
+     * segunda barra dentro de la del panel.
+     *
+     * El ancho SI es fijo: es una fila de tarjetas y el scroll horizontal es su
+     * forma.
      */
-    <div className="flex h-[30rem] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
+    <div className="flex w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
       <div className="flex min-h-0 flex-1 flex-col">
         {/* ── La ficha del prestamo ─────────────────────────────────────── */}
         <div className="flex shrink-0 flex-col gap-1 border-b border-slate-200 bg-slate-100/90 p-3.5 text-xs font-bold text-[#001A40]">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-mono">{p.loan_number}</span>
-            <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{p.branch ?? "—"}</span>
+            <span className="truncate font-mono">{p.title}</span>
+            {p.tag && (
+              <span className="shrink-0 rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{p.tag}</span>
+            )}
           </div>
-          <span className="truncate font-semibold text-slate-600">{p.borrower_name ?? "—"}</span>
-          {/* Programa y officer se leen como identidad, no como dato: contestan
-              "de quien es este prestamo y de que tipo" antes que ninguna cifra. */}
-          <span className="truncate text-[10px] font-normal text-slate-500">
-            {p.loan_program ?? "—"} · {p.loan_officer ?? "—"}
-          </span>
+          <span className="truncate font-semibold text-slate-600">{p.subtitle ?? "—"}</span>
+          {/* Identidad, no dato: contesta "de quien es esto y de que tipo" antes
+              que ninguna cifra. */}
+          <span className="truncate text-[10px] font-normal text-slate-500">{p.meta ?? "—"}</span>
           <div className="flex items-center justify-between gap-2">
             <span className="font-mono tabular-nums text-slate-500">
-              {p.loan_amount == null ? "—" : `$${p.loan_amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+              {p.amount == null ? "—" : `$${p.amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
             </span>
             <span className="inline-flex items-center gap-0.5">
               {p.b2b && <Etiqueta label="B2B" />}
@@ -234,9 +275,9 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         </div>
 
         {/* ── Las cuentas, por peldaño ──────────────────────────────────── */}
-        {/* Lo unico que scrollea dentro de la tarjeta: con alto fijo, un
-            prestamo de 28 lineas tiene que caber sin estirar la fila. */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2">
+        {/* flex-1 sin overflow: absorbe el hueco que le sobra a una tarjeta
+            baja dentro de una fila alta, y empuja el banner al fondo. */}
+        <div className="flex-1 px-3 pt-2">
           {p.lineas.length === 0 && (
             <p className="px-3 pb-1 text-[10px] italic text-slate-400">No entries on this loan</p>
           )}
@@ -252,11 +293,11 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
                   <span className="uppercase tracking-wide">{esc.label}</span>
                   <span className={`font-mono tabular-nums ${subtotal < 0 ? "text-rose-700" : ""}`}>
                     {usdExacto(subtotal)}
-                    <span className="ml-1 font-normal opacity-70">{bps(subtotal, p.loan_amount)}</span>
+                    <span className="ml-1 font-normal opacity-70">{bps(subtotal, p.amount)}</span>
                   </span>
                 </div>
                 {filas.map((x, i) => (
-                  <Linea key={`${esc.key}-${x.gl_code}-${i}`} x={x} importeBase={p.loan_amount} sucursal={p.branch} />
+                  <Linea key={`${esc.key}-${x.gl_code}-${i}`} x={x} importeBase={p.amount} sucursal={p.branch ?? null} />
                 ))}
               </Fragment>
             );
@@ -282,11 +323,15 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
                   ? <span className="text-slate-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>
                   : <>
                       {usdExacto(-p.commission)}
-                      <span className="ml-1 font-normal opacity-70">{bps(-p.commission, p.loan_amount)}</span>
+                      <span className="ml-1 font-normal opacity-70">{bps(-p.commission, p.amount)}</span>
                     </>}
               </span>
             </div>
           )}
+
+          {/* Lo que solo tiene una de las tarjetas, con el mismo formato de
+              bloque y dentro del mismo cuerpo que scrollea. Ver `extra`. */}
+          {p.extra}
         </div>
 
       </div>
@@ -312,14 +357,14 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
             {p.total.value == null ? "—" : usdExacto(p.total.value)}
           </span>
           <span className={`ml-1.5 font-mono text-[11px] ${perdida ? "text-rose-800" : "text-emerald-400"}`}>
-            {p.total.value == null ? "— bps" : bps(p.total.value, p.loan_amount)}
+            {p.total.value == null ? "— bps" : bps(p.total.value, p.amount)}
           </span>
         </span>
       </div>
 
       {/* Fuera de la cuenta: debajo del total, en gris y sobre otro fondo. */}
       {hayFuera && (
-        <div className="max-h-28 shrink-0 overflow-y-auto rounded-b-2xl border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
+        <div className="shrink-0 rounded-b-2xl border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
           <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">
             Not part of this contribution
           </p>
@@ -333,7 +378,7 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
               </div>
               <div className="-mx-3 opacity-70">
                 {s.lineas.map((x, i) => (
-                  <Linea key={`${s.label}-${i}`} x={x} importeBase={p.loan_amount} sucursal={p.branch} />
+                  <Linea key={`${s.label}-${i}`} x={x} importeBase={p.amount} sucursal={p.branch ?? null} />
                 ))}
               </div>
             </Fragment>

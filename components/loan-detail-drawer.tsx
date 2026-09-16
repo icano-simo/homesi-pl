@@ -380,7 +380,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
           {error && <p className="m-5 rounded-xl border border-red-100 bg-red-50 px-4 py-2 text-xs text-red-600">{error}</p>}
 
           {data && !loading && view === "cards" && (
-            <div className="scrollbar-thin-slate flex max-w-full flex-row gap-4 overflow-x-auto p-4 pb-6">
+            <div className="scrollbar-thin-slate flex max-w-full flex-row items-stretch gap-4 overflow-x-auto p-4 pb-6">
               {data.summary.loan_count > 0 && (
                 <SummaryCard s={data.summary} month={data.month} />
               )}
@@ -655,12 +655,12 @@ function StraySection({ bucket, title, note }: { bucket: StrayBucket | null; tit
 function MiniPL({ l }: { l: LoanRow }) {
   return (
     <LoanPnlCard
-      loan_number={l.loan_number}
+      title={l.loan_number}
+      tag={l.branch}
+      subtitle={l.borrower_name}
+      meta={[l.loan_program, l.loan_officer].filter(Boolean).join(" · ") || null}
+      amount={l.loan_amount}
       branch={l.branch}
-      borrower_name={l.borrower_name}
-      loan_program={l.loan_program}
-      loan_officer={l.loan_officer}
-      loan_amount={l.loan_amount}
       b2b={l.b2b}
       processing={l.processing}
       support_on_demand={l.support_on_demand}

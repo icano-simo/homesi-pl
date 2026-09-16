@@ -638,14 +638,15 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
      * ninguna cifra -- solo el desglose por cuenta.
      */
     /*
-     * ⚠ MISMO ANCHO Y MISMO ALTO QUE LA ABIERTA. En una fila horizontal, una
-     * tarjeta plegada mas baja rompe la linea de base de toda la fila y el ojo
-     * deja de poder recorrerla. Se pliega el CONTENIDO, no el hueco.
+     * ⚠ MISMO ANCHO, Y EL ALTO SE LO DA LA FILA. Sin alto propio, `items-stretch`
+     * la estira hasta la mas alta igual que a las abiertas: una tarjeta plegada
+     * mas baja rompe la linea de base y el ojo deja de poder recorrer la fila.
+     * Se pliega el CONTENIDO, no el hueco.
      */
     return (
       <button
         onClick={onToggle}
-        className="flex h-[30rem] w-[340px] shrink-0 flex-col items-stretch justify-center gap-1 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 text-left hover:border-[#A6DEFF] hover:bg-white"
+        className="flex w-[340px] shrink-0 flex-col items-stretch justify-center gap-1 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-left hover:border-[#A6DEFF] hover:bg-white"
       >
         <span className="truncate font-mono text-xs font-bold text-[#001A40]">{l.loan_number}</span>
         <span className="truncate text-[11px] text-slate-500">{l.borrower_name ?? "—"}</span>
@@ -664,12 +665,12 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
   return (
     <div onClick={onToggle} className="cursor-pointer">
       <LoanPnlCard
-        loan_number={l.loan_number}
+        title={l.loan_number}
+        tag={l.branch}
+        subtitle={l.borrower_name}
+        meta={[l.loan_program, l.loan_officer].filter(Boolean).join(" · ") || null}
+        amount={l.loan_amount}
         branch={l.branch}
-        borrower_name={l.borrower_name}
-        loan_program={l.loan_program}
-        loan_officer={l.loan_officer}
-        loan_amount={l.loan_amount}
         b2b={l.b2b}
         processing={l.processing}
         support_on_demand={l.support_on_demand}
@@ -705,11 +706,18 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
 }
 
 /**
- * La tarjeta que totaliza: la MISMA estructura, sumando todos sus prestamos.
+ * La tarjeta que totaliza: EL MISMO MOLDE, con otro contenido.
  *
- * Y lo unico que solo puede estar aqui: la nomina, que no cuelga de ningun
- * prestamo, y las dos cifras que hay que poder ver juntas -- lo que generaron
- * sus cierres contra lo que el P&L registra pagado.
+ * ⚠ ES `LoanPnlCard`, NO UN SEGUNDO COMPONENTE, y por eso los huecos de la
+ * ficha se llaman `title`/`subtitle`/`meta` y no `loan_number`/`borrower_name`:
+ * donde una tarjeta de prestamo pone su numero, esta pone "ALL 24 CLOSINGS", y
+ * donde aquella pone el prestatario, esta pone a la persona. Va la PRIMERA de
+ * la fila, con el mismo ancho y el mismo alto que las demas.
+ *
+ * Lo unico que existe solo aqui --la nomina del periodo, la comparacion entre
+ * lo que generaron sus cierres y lo que el P&L registra pagado, y el neto de la
+ * persona-- va en `extra`, con el mismo formato de bloque que los peldaños. Si
+ * eso la convierte en la mas alta de la fila, ese es el alto de todas.
  */
 function TarjetaTotales({ o }: { o: OfficerBlock }) {
   /*
@@ -724,12 +732,9 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
    * es el dato.
    *
    * Sumando los 64 prestamos de Nathan Martinez serian 840 filas, y ninguna
-   * diria nada: un +389,00 suelto entre ochocientas no es informacion, es
-   * ruido. Lo que se pregunta en esta tarjeta es otra cosa --cuanto pesa cada
-   * cuenta en el total-- y para eso la suma es la respuesta.
-   *
-   * Dos preguntas distintas sobre los mismos datos, como las dos cuentas del
-   * pie. El criterio no es "crudo o agrupado", es "¿que se esta preguntando?".
+   * diria nada. Lo que se pregunta en esta tarjeta es otra cosa --cuanto pesa
+   * cada cuenta en el total-- y para eso la suma es la respuesta. Agrupadas son
+   * 21 lineas en el peor caso, que es lo que hace que quepa sin scroll.
    */
   const agrupadas = useMemo(() => {
     const m = new Map<string, LoanLine>();
@@ -748,106 +753,108 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
   const localizada = o.payrollStatus !== "not_located";
 
   return (
-    <article className="rounded-xl border-2 border-[#001A40]/25 bg-white shadow-sm">
-      <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-t-xl border-b border-slate-200 bg-[#001A40] px-3 py-2 text-white">
-        <span className="text-xs font-semibold uppercase tracking-wide">
-          All {o.loanCount} closing{o.loanCount === 1 ? "" : "s"}
-        </span>
-        <div className="flex items-baseline gap-4 text-[11px]">
-          <span className="font-mono tabular-nums text-white/60">{usd(o.volume)}</span>
-          <span className="font-mono tabular-nums text-white/60">{bps(o.contribution, o.volume)} bps</span>
-          <span className={`font-mono tabular-nums text-xs font-bold ${
-            o.contribution > 0 ? "text-emerald-300" : o.contribution < 0 ? "text-red-300" : "text-white/70"
-          }`}>
-            {usd(o.contribution)}
-          </span>
-        </div>
-      </header>
+    <LoanPnlCard
+      title={`ALL ${o.loanCount} CLOSING${o.loanCount === 1 ? "" : "S"}`}
+      tag={o.branch}
+      subtitle={o.name}
+      meta={`${o.position ?? "Role not in the HR roster"}${o.area ? ` · ${o.area}` : ""}`}
+      amount={o.volume}
+      signals={
+        <>
+          {o.loansPendingPl > 0 && (
+            <span title={`${usdExacto(Math.abs(o.pendingPlBooked))} of origination cost is already booked on them; the margin is not. Left out of the figures.`}
+                  className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+              {o.loansPendingPl} pending P&amp;L
+            </span>
+          )}
+          {o.loansBranchNotInPl > 0 && (
+            <span title="Their branch has no entries at all in the P&L, so these loans cannot show revenue of their own."
+                  className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+              {o.loansBranchNotInPl} branch not in P&amp;L
+            </span>
+          )}
+        </>
+      }
+      lineas={agrupadas.filter((x) => x.in_branch)}
+      commission={o.commission}
+      total={{ label: "TOTAL CONTRIBUTION", value: o.contribution }}
+      elsewhere={[
+        { label: "Kept by the division (700)", lineas: agrupadas.filter((x) => !x.in_branch && x.branch === "700") },
+        { label: "Booked in another branch", lineas: agrupadas.filter((x) => !x.in_branch && x.branch !== "700") },
+      ]}
+      extra={
+        <>
+          {/* ── La nomina del periodo, que no cuelga de ningun prestamo ──── */}
+          <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
+            <span className="uppercase tracking-wide">Payroll this period</span>
+            <span className="font-mono tabular-nums text-rose-700">{usdExacto(nominaPos)}</span>
+          </div>
+          <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
 
-      <div className="px-1 py-1">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[34rem] text-[11px]">
-            <tbody>
-              <TablaCuentas lineas={agrupadas.filter((x) => x.in_branch)} sucursalPrestamo={null} />
-              <CierreEscalera commission={o.commission} contribution={o.contribution} />
-            </tbody>
-          </table>
-        </div>
-        <FueraDeLaCuenta lineas={agrupadas} sucursalPrestamo={null} />
-      </div>
+          {/*
+            * ⚠ LAS DOS CIFRAS, JUNTAS Y CON SU DIFERENCIA. Alguien las va a
+            * comparar de todas formas; enseñadas juntas con la explicacion al
+            * lado no invitan a restarlas, y ausentes si. Son dos calendarios:
+            * Compensafe agrupa por FECHA DE CIERRE y el P&L por FECHA DE PAGO.
+            */}
+          <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-slate-600">Commission on loans</span>
+              <span className="font-mono tabular-nums text-slate-700">{usdExacto(o.commission)}</span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-slate-600">Actually paid in payroll</span>
+              <span className="font-mono tabular-nums text-slate-700">
+                {localizada ? usdExacto(nominaPos)
+                  : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
+              </span>
+            </div>
+            <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
+              <span className="font-medium text-slate-600">Difference</span>
+              <span className="font-mono tabular-nums font-medium text-slate-700">
+                {localizada ? usdExacto(o.commission - nominaPos) : "—"}
+              </span>
+            </div>
+            <p className="mt-1 text-[10px] leading-snug text-slate-400">
+              Two calendars: commission by closing date, payroll by payment date. Not meant to match.
+            </p>
+          </div>
 
-      {/* ── Lo que no cuelga de ningun prestamo ───────────────────────────── */}
-      <div className="border-t-2 border-slate-200 px-3 py-3">
-        <h4 className="pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-          Payroll this period
-        </h4>
-        <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
-
-        {/*
-          * ⚠ LAS DOS CIFRAS, JUNTAS Y CON SU DIFERENCIA. Alguien las va a
-          * comparar de todas formas; ensenadas juntas con la explicacion al
-          * lado no invitan a restarlas, y ausentes si.
-          *
-          * Son dos calendarios: Compensafe agrupa por FECHA DE CIERRE y el P&L
-          * por FECHA DE PAGO, asi que no tienen por que cuadrar.
-          */}
-        <dl className="mt-2 space-y-1 rounded-lg border border-slate-200 bg-white p-3 text-[11px]">
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-slate-600">Commission on loans</dt>
-            <dd className="font-mono tabular-nums text-slate-700">{usdExacto(o.commission)}</dd>
+          {/*
+            * ⚠ EL NETO NO SALE DE LA CONTRIBUCION. Encadenarlos resta la
+            * comision dos veces --se paga POR la nomina--: 1.163.656,81 dentro
+            * de una nomina de 5.362.891,98, el 21,7%. Por eso arranca otra vez
+            * de lo producido y va en su propio bloque.
+            */}
+          <div className="my-1.5 rounded-lg bg-[#001A40] px-3 py-2 text-[11px] text-white">
+            <p className="pb-1 text-[9px] uppercase tracking-wide text-white/40">
+              Does this person pay for themselves — a separate question
+            </p>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-white/70">Produced</span>
+              <span className="font-mono tabular-nums">{usdExacto(o.produced)}</span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-white/70">&minus; Payroll not tied to loans</span>
+              <span className="font-mono tabular-nums">
+                {localizada ? usdExacto(nominaPos) : <span className="text-amber-300">not located</span>}
+              </span>
+            </div>
+            <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-white/25 pt-1">
+              <span className="font-bold uppercase tracking-wide">= Net</span>
+              <span className={`font-mono tabular-nums text-sm font-bold ${
+                o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
+              }`}>
+                {usdExacto(o.total)}
+              </span>
+            </div>
           </div>
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-slate-600">Actually paid in payroll</dt>
-            <dd className="font-mono tabular-nums text-slate-700">
-              {localizada ? usdExacto(nominaPos) : (
-                <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
-                  not located
-                </span>
-              )}
-            </dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-4 border-t border-slate-200 pt-1">
-            <dt className="font-medium text-slate-600">Difference</dt>
-            <dd className="font-mono tabular-nums font-medium text-slate-700">
-              {localizada ? usdExacto(o.commission - nominaPos) : "—"}
-            </dd>
-          </div>
-        </dl>
-
-        {/*
-          * ⚠ EL NETO NO SALE DE LA CONTRIBUCION, y encadenarlos es el error que
-          * mas caro sale aqui porque el resultado parece razonable: la comision
-          * se PAGA POR LA NOMINA, asi que restarla en la escalera y ademas
-          * restar la nomina entera resta el mismo dinero dos veces --
-          * 1.163.656,81 dentro de una nomina de 5.362.891,98, el 21,7%.
-          */}
-        <dl className="mt-2 space-y-1 rounded-lg bg-[#001A40] p-3 text-[11px] text-white">
-          <p className="pb-1 text-[10px] uppercase tracking-wide text-white/40">
-            Does this person pay for themselves — a separate question
-          </p>
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-white/70">Produced</dt>
-            <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-white/70">&minus; Payroll not tied to loans</dt>
-            <dd className="font-mono tabular-nums">
-              {localizada ? usdExacto(nominaPos) : <span className="text-amber-300">not located</span>}
-            </dd>
-          </div>
-          <div className="flex items-baseline justify-between gap-4 border-t border-white/25 pt-1.5">
-            <dt className="font-semibold uppercase tracking-wide">= Net</dt>
-            <dd className={`font-mono tabular-nums text-sm font-bold ${
-              o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
-            }`}>
-              {usdExacto(o.total)}
-            </dd>
-          </div>
-        </dl>
-      </div>
-    </article>
+        </>
+      }
+    />
   );
 }
+
 /**
  * ─────────────────────────────────────────────────────────────────────────────
  * EL DETALLE DE UNA PERSONA, EN TARJETAS APILADAS
@@ -986,24 +993,27 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
         </header>
 
         <div className="px-5 py-4">
-          {/* La que totaliza, primero y a lo ancho: la respuesta antes que el
-              detalle, y no compite por sitio con las de cada prestamo. */}
-          <TarjetaTotales o={o} />
-
-          {o.loans.length > 0 && (
-            <p className="px-1 pb-2 pt-4 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-              One card per closing · {o.loans.length}
-            </p>
-          )}
+          <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            The total, then one card per closing · {o.loans.length}
+          </p>
           {/*
             * ⚠ EN FILA HORIZONTAL CON SCROLL LATERAL, igual que las Mini P&L
-            * Cards del modal de prestamos. Apiladas en vertical, cada tarjeta
-            * tenia el alto de su contenido y comparar dos exigia recorrer la
-            * pagina; en fila y con el mismo alto, la misma cuenta cae en el
-            * mismo renglon de todas -- que es lo que el orden fijo de cuentas
-            * viene a permitir y apiladas no servia de nada.
+            * Cards del modal de prestamos, Y LA QUE TOTALIZA ES LA PRIMERA DE
+            * LA FILA, no una banda aparte encima.
+            *
+            * Apiladas en vertical, cada tarjeta medía lo que su contenido y
+            * comparar dos exigia recorrer la pagina; en fila y al mismo alto, la
+            * misma cuenta cae en el mismo renglon de todas -- que es lo que el
+            * orden fijo de cuentas viene a permitir y apiladas no servia de
+            * nada. Y la de totales fuera de la fila era un segundo formato para
+            * la misma cosa.
+            *
+            * `items-stretch` es el defecto del flex-row y es lo que iguala el
+            * alto: no hace falta escribirlo, pero es de lo que depende todo
+            * esto, asi que queda dicho.
             */}
-          <div className="scrollbar-thin-slate -mx-1 flex max-w-full flex-row gap-4 overflow-x-auto px-1 pb-4">
+          <div className="scrollbar-thin-slate -mx-1 flex max-w-full flex-row items-stretch gap-4 overflow-x-auto px-1 pb-4">
+            <TarjetaTotales o={o} />
             {o.loans.map((l) => (
               <TarjetaPrestamo
                 key={l.loan_number}
