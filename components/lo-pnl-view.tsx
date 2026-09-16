@@ -43,6 +43,19 @@ function usdExacto(n: number) {
   }).format(n);
 }
 
+/**
+ * Puntos basicos sobre una base, o "—" cuando no hay base que dividir.
+ *
+ * ⚠ LA BASE ES EL IMPORTE DE **ESE** PRESTAMO, nunca el volumen del periodo.
+ * Es la misma definicion que usa el detalle de prestamos --`bps(net, amount)`--
+ * y es lo unico que permite comparar un cierre de 200.000 con uno de 900.000:
+ * en dolares gana siempre el segundo, en bps se ve cual rindio.
+ */
+function bps(v: number | null | undefined, base: number | null | undefined) {
+  if (v == null || !base) return "—";
+  return ((v / base) * 10000).toFixed(1);
+}
+
 /** Verde si gana, rojo si pierde. El cero no es ninguna de las dos cosas. */
 function colorNeto(n: number) {
   if (n > 0) return "text-emerald-700";
@@ -411,9 +424,19 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
   const hayOtros = loans.some((l) => l.otherBooked !== 0);
 
   return (
-    <div className="overflow-auto max-h-80">
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-gray-50">
+    <table className="w-full table-fixed text-xs">
+      {/*
+        * ⚠ ANCHOS FIJOS Y `table-fixed`. Con anchos automaticos cada persona
+        * sacaba una tabla distinta --el ancho lo decidia el importe mas largo
+        * de SUS prestamos-- asi que al pasar de una a otra las columnas
+        * bailaban y no se podian comparar dos paneles seguidos.
+        */}
+      <colgroup>
+        <col className="w-[22%]" /><col className="w-[14%]" /><col className="w-[8%]" />
+        <col className="w-[14%]" /><col className="w-[14%]" /><col className="w-[14%]" />
+        <col className="w-[14%]" />
+      </colgroup>
+        <thead className="sticky top-0 z-10 bg-gray-50">
           <tr className="text-left text-gray-500 border-b border-gray-200">
             {/*
               * ⚠ LAS COLUMNAS SON LOS ESCALONES, LAS MISMAS QUE LA FILA DE LA
@@ -421,21 +444,39 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
               * "Margin earned / Other loan costs / What it left", que es un
               * reparto distinto del que usa el total de arriba: el prestamo se
               * leia de una forma y la persona de otra, sobre los mismos datos.
+              *
+              * ⚠ Y VAN EN EL ORDEN DE LA ESCALERA --revenue, costes directos,
+              * comision, neto-- y no en otro. La fila tiene que poderse
+              * reconstruir de izquierda a derecha; con la comision antes de los
+              * costes se leeria "revenue menos comision mas costes", que no es
+              * una secuencia que nadie sume de cabeza.
+              *
+              * "Closed" deja de ser columna y baja bajo el numero de prestamo:
+              * hace falta --el mes del cierre no es el del apunte-- pero no
+              * necesita una septima columna para dos palabras.
               */}
-            <th className="px-3 py-1.5 font-medium">Loan</th>
-            <th className="px-3 py-1.5 font-medium">Closed</th>
-            <th className="px-3 py-1.5 font-medium text-right">Loan amount</th>
-            <th className="px-3 py-1.5 font-medium text-right" title="What the loan left before paying the loan officer.">
-              Gross revenue
+            <th className="px-2 py-1.5 font-medium">Loan</th>
+            <th className="px-2 py-1.5 font-medium text-right">Volume</th>
+            {/*
+              * ⚠ bps DE LA CONTRIBUCION SOBRE EL IMPORTE DE **ESTE** PRESTAMO,
+              * no sobre el volumen del periodo. Es la unica lectura que permite
+              * comparar un prestamo de 200.000 con uno de 900.000: en dolares
+              * el segundo siempre gana, en bps se ve cual rindio.
+              */}
+            <th className="px-2 py-1.5 font-medium text-right" title="Contribution over this loan's own amount, in basis points. Not over the period's volume.">
+              bps
             </th>
-            <th className="px-3 py-1.5 font-medium text-right" title="Appraisal, credit report, verification — and branch-to-branch transfers (55601), which is why this line can be unusually large on a single loan. Shown with its own sign: these usually ADD, because they are charged to the borrower and come back to the branch.">
+            <th className="px-2 py-1.5 font-medium text-right" title="What the loan left before paying the loan officer.">
+              Revenue
+            </th>
+            <th className="px-2 py-1.5 font-medium text-right" title="Appraisal, credit report, verification — and branch-to-branch transfers (55601), which is why this line can be unusually large on a single loan. Shown with its own sign: these usually ADD, because they are charged to the borrower and come back to the branch.">
               Direct costs
             </th>
-            <th className="px-3 py-1.5 font-medium text-right" title="Paid to the loan officer for this loan, from Compensafe.">
-              LO commission
+            <th className="px-2 py-1.5 font-medium text-right" title="Paid to the loan officer for this loan, from Compensafe.">
+              Comm.
             </th>
-            <th className="px-3 py-1.5 font-medium text-right" title="Gross revenue plus direct costs, minus the commission. What this loan left the branch after paying the loan officer.">
-              Contribution
+            <th className="px-2 py-1.5 font-medium text-right" title="Revenue plus direct costs, minus the commission. What this loan left the branch after paying the loan officer.">
+              Net
             </th>
           </tr>
         </thead>
@@ -447,15 +488,18 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
             <tr
               onClick={() => setAbierto(abre ? null : l.loan_number)}
               className={`cursor-pointer border-b border-gray-100 hover:bg-gray-50 ${abre ? "bg-gray-50" : ""}`}>
-              <td className="px-3 py-1 font-mono text-gray-700">
-                <span className="inline-flex items-center">
+              <td className="px-2 py-1.5">
+                <span className="flex items-center">
                   <ChevronRight size={11}
                     className={`mr-1 shrink-0 transition-transform ${abre ? "rotate-90 text-blue-600" : "text-gray-400"}`} />
-                  {l.loan_number}
+                  <span className="min-w-0">
+                    <span className="block truncate font-mono text-gray-700">{l.loan_number}</span>
+                    <span className="block truncate text-[10px] text-gray-400">{l.month} {l.year}</span>
+                  </span>
                 </span>
               </td>
-              <td className="px-3 py-1 text-gray-500">{l.month} {l.year}</td>
-              <td className="px-3 py-1 text-right text-gray-600">{usd(l.loan_amount)}</td>
+              <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-600">{usd(l.loan_amount)}</td>
+              <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-500">{bps(l.contribution, l.loan_amount)}</td>
               {/*
                 * ⚠ LO DE FUERA YA NO CUELGA DE ESTA COLUMNA. Estaba pegado a
                 * la cifra y eso era justo lo que no se entendia: al lado de un
@@ -466,7 +510,7 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                 * inexistente, que no es una cantidad sino una advertencia sobre
                 * por que la cantidad es cero.
                 */}
-              <td className="px-3 py-1 text-right">
+              <td className="px-2 py-1.5 text-right font-mono tabular-nums">
                 {usd(l.grossRevenue)}
                 {l.branchNotInPl && (
                   <span className="ml-1 text-[10px] text-amber-600"
@@ -475,7 +519,7 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                   </span>
                 )}
               </td>
-              <td className="px-3 py-1 text-right">
+              <td className="px-2 py-1.5 text-right font-mono tabular-nums">
                 {usd(l.directCosts)}
                 {/*
                   * Lo que no cae en ninguno de los dos grupos viaja pegado a los
@@ -491,7 +535,7 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                   </span>
                 )}
               </td>
-              <td className="px-3 py-1 text-right text-gray-500">
+              <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-500">
                 {/*
                   * Null no es cero: el prestamo no cruzo con Compensafe. Un cero
                   * aqui diria "no cobro por el", que es otra cosa.
@@ -501,7 +545,7 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                           className="text-gray-300">—</span>
                   : usd(-l.commission)}
               </td>
-              <td className={`px-3 py-1 text-right font-mono tabular-nums font-medium ${colorNeto(l.contribution ?? 0)}`}>
+              <td className={`px-2 py-1.5 text-right font-mono tabular-nums font-medium ${colorNeto(l.contribution ?? 0)}`}>
                 {l.contribution == null
                   ? <span className="text-gray-300" title="Without a known commission there is no contribution to compute. Showing the gross here would say nobody was paid.">—</span>
                   : usd(l.contribution)}
@@ -521,14 +565,22 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
           * La comision se suma SOLO de los prestamos que cruzaron. Los que no
           * cruzan valen null, no cero, y cuantos son se dice en la tarjeta.
           */}
-        <tfoot className="sticky bottom-0 bg-gray-50">
-          <tr className="border-t-2 border-gray-300 font-semibold text-gray-700">
-            <td className="px-3 py-1.5" colSpan={2}>
+        <tfoot className="sticky bottom-0 bg-slate-50">
+          <tr className="border-t-2 border-slate-300 font-bold text-gray-800">
+            <td className="px-2 py-1.5">
               {loans.length} loan{loans.length === 1 ? "" : "s"}
             </td>
-            <td className="px-3 py-1.5 text-right">{usd(sum((l) => l.loan_amount ?? 0))}</td>
-            <td className="px-3 py-1.5 text-right">{usd(sum((l) => l.grossRevenue))}</td>
-            <td className="px-3 py-1.5 text-right">
+            <td className="px-2 py-1.5 text-right font-mono tabular-nums">{usd(sum((l) => l.loan_amount ?? 0))}</td>
+            {/*
+              * El bps del total va sobre el volumen del total, que es la unica
+              * base que le corresponde: promediar los bps de cada prestamo
+              * daria el mismo peso a uno de 200.000 que a uno de 900.000.
+              */}
+            <td className="px-2 py-1.5 text-right font-mono tabular-nums">
+              {bps(sum((l) => l.contribution ?? 0), sum((l) => l.loan_amount ?? 0))}
+            </td>
+            <td className="px-2 py-1.5 text-right font-mono tabular-nums">{usd(sum((l) => l.grossRevenue))}</td>
+            <td className="px-2 py-1.5 text-right font-mono tabular-nums">
               {usd(sum((l) => l.directCosts))}
               {hayOtros && (
                 <span className="ml-1 text-[10px] font-normal text-slate-500">
@@ -536,69 +588,16 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                 </span>
               )}
             </td>
-            <td className="px-3 py-1.5 text-right">{usd(-sum((l) => l.commission ?? 0))}</td>
-            <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${colorNeto(sum((l) => l.contribution ?? 0))}`}>
+            <td className="px-2 py-1.5 text-right font-mono tabular-nums">{usd(-sum((l) => l.commission ?? 0))}</td>
+            <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${colorNeto(sum((l) => l.contribution ?? 0))}`}>
               {usd(sum((l) => l.contribution ?? 0))}
             </td>
           </tr>
         </tfoot>
       </table>
-    </div>
   );
 }
 
-function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: PayrollRow[] }) {
-  if (rows.length === 0 && fragiles.length === 0) {
-    return (
-      <div className="px-4 py-3 text-xs text-gray-400 italic">
-        No payroll located for this person in this period.
-      </div>
-    );
-  }
-  const porCuenta = new Map<string, { nombre: string; total: number; filas: number }>();
-  for (const r of rows) {
-    const k = r.gl_code ?? "—";
-    const e = porCuenta.get(k) ?? { nombre: r.gl_name ?? "", total: 0, filas: 0 };
-    e.total += r.amount; e.filas++;
-    porCuenta.set(k, e);
-  }
-  const fragilTotal = fragiles.reduce((s, r) => s + r.amount, 0);
-
-  return (
-    <div className="px-3 py-2">
-      <table className="w-full text-xs">
-        <tbody>
-          {[...porCuenta.entries()].sort((a, b) => a[1].total - b[1].total).map(([gl, v]) => (
-            <tr key={gl} className="border-b border-gray-100">
-              <td className="px-2 py-1 font-mono text-gray-500 w-16">{gl}</td>
-              <td className="px-2 py-1 text-gray-600">{v.nombre}</td>
-              <td className="px-2 py-1 text-right text-gray-400 w-16">{v.filas}</td>
-              <td className="px-2 py-1 text-right font-medium">{usdExacto(v.total)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {fragiles.length > 0 && (
-        /*
-         * Fuera del total y dicho. Si no se enseñara, estas personas caerian en
-         * "no payroll located", y eso seria FALSO -- y falso de la peor manera,
-         * porque se leeria como un hallazgo.
-         */
-        <div className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
-          <div className="text-[10px] font-medium text-slate-500">
-            Not in the total — less reliable attribution
-          </div>
-          <div className="mt-0.5 text-[10px] text-slate-500">
-            {fragiles.length} row{fragiles.length !== 1 ? "s" : ""}, {usdExacto(fragilTotal)}.
-            Descriptions like “ZOOMPLUS-NAME” or “SALESFORCE USER FOR NAME” carry the name in a
-            shape that cannot be parsed as reliably as “SURNAME, NAME”.
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /**
  * Las cuatro secciones, en el orden en que se leen.
@@ -630,6 +629,206 @@ const SECCIONES: { key: OfficerGroup; label: string; hint: string }[] = [
     hint: "Not found in the HR roster, so there is no role to show. Former staff and people who were never in HR.",
   },
 ];
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * TODA LA PROSA DEL PANEL, EN UN SITIO Y DETRAS DE UN BOTON
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ ESTABA REPARTIDA ENTRE LAS TARJETAS Y ESE ERA EL PROBLEMA. Cada salvedad
+ * se habia escrito junto al numero que afectaba --que parecia lo correcto-- y
+ * el resultado era un panel donde entre dos cifras habia siempre un parrafo:
+ * el ojo no podia bajar por una columna sin cruzar texto, y el panel no cabia
+ * en la ventana.
+ *
+ * Ninguna se borra. Se juntan aqui, ordenadas de la que mas cambia una cifra a
+ * la que menos, y el panel se queda solo con numeros.
+ */
+function AyudaPnl({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const alPulsar = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", alPulsar);
+    return () => window.removeEventListener("keydown", alPulsar);
+  }, [onClose]);
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[80] bg-slate-900/40" onClick={onClose} />
+      <div
+        role="dialog"
+        aria-label="How this P&L is calculated"
+        className="fixed left-1/2 top-1/2 z-[90] w-[min(46rem,calc(100vw-2rem))] max-h-[min(44rem,calc(100vh-4rem))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <h3 className="text-sm font-semibold text-[#001A40]">How this P&amp;L is calculated</h3>
+          <button onClick={onClose} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100" aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="mt-4 space-y-4 text-[11px] leading-relaxed text-gray-600">
+          <section>
+            <h4 className="text-[11px] font-semibold text-gray-800">The ladder</h4>
+            <p className="mt-1">
+              A loan&rsquo;s result is read in steps: gross revenue, plus direct production costs,
+              minus what the loan officer was paid, equals what the loan left the branch.
+            </p>
+            <p className="mt-1">
+              <span className="font-medium text-gray-700">Direct costs ADD, they do not subtract.</span>{" "}
+              They come out positive because they are charged to the borrower and come back to the
+              branch &mdash; +416,70 on loan 710002042266. The sign is shown as it is; the label
+              never says &ldquo;minus&rdquo;.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="text-[11px] font-semibold text-gray-800">
+              Why there are two totals, and why they must not be chained
+            </h4>
+            <p className="mt-1">
+              <span className="font-medium text-gray-700">Total contribution</span> answers a
+              question about loans: what did they leave after paying the officer.{" "}
+              <span className="font-medium text-gray-700">Net</span> answers one about the person:
+              do they pay for themselves. Net starts again from what was produced, not from the
+              contribution.
+            </p>
+            <p className="mt-1">
+              Subtracting payroll from the contribution would count the same money twice, because
+              the commission is paid <em>through</em> payroll. Across the division that is
+              1.163.656,81 of commission inside a payroll of 5.362.891,98 &mdash; 21,7% of the
+              cost, counted again.
+            </p>
+            <p className="mt-1">
+              The two also sit on different calendars and are not meant to match: Compensafe groups
+              commission by closing date, the P&amp;L records payroll by payment date.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="text-[11px] font-semibold text-gray-800">Only the loan&rsquo;s own branch</h4>
+            <p className="mt-1">
+              Revenue is not all booked where the loan was produced. What another branch books is
+              real, is shown under &ldquo;Not part of this branch&rsquo;s contribution&rdquo;, and is
+              counted in no column. Most of it is division margin in 700, which is the normal
+              split; what lands in a third branch is not, and is listed separately.
+            </p>
+            <p className="mt-1">
+              So <span className="font-medium text-gray-700">&ldquo;Produced&rdquo; is not
+              everything the person generated.</span> Against Compensafe or an officer&rsquo;s own
+              production report it comes out lower, and the gap is what other branches book.
+            </p>
+            <p className="mt-1">
+              Branch &ldquo;Affinity&rdquo; is read as 716, where its loans are booked. Branches 776
+              and 150 carry no entries at all in the ledger, so their loans cannot show revenue of
+              their own &mdash; that is not the same as having earned nothing.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="text-[11px] font-semibold text-gray-800">Cost is whole, production is one branch</h4>
+            <p className="mt-1">
+              Payroll has no branch, so inside a branch view each person carries their entire
+              payroll against what they produced there alone. For the 29 officers who only close in
+              one branch that is exact; for the 16 who close in several it overstates the cost in
+              each one.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="text-[11px] font-semibold text-gray-800">Absences are not zeros</h4>
+            <p className="mt-1">
+              &ldquo;No payroll located&rdquo; means no row in the whole P&amp;L carries that name
+              &mdash; it is an absence, and it is the finding this module exists to surface. A loan
+              that does not cross with Compensafe has an unknown commission, not a zero one, and it
+              is left out of the contribution rather than counted as free.
+            </p>
+            <p className="mt-1">
+              Payroll found only through weaker description shapes &mdash; &ldquo;ZOOMPLUS-NAME&rdquo;,
+              &ldquo;SALESFORCE USER FOR NAME&rdquo; &mdash; is shown but left out of the total, and
+              said so where it happens.
+            </p>
+          </section>
+
+          <section>
+            <h4 className="text-[11px] font-semibold text-gray-800">Two accounts worth knowing about</h4>
+            <p className="mt-1">
+              <span className="font-mono text-gray-700">55601 One-Time Transfers</span> sits inside
+              direct production costs and is a branch-to-branch transfer, not a production cost:
+              positive where it is received, negative where it is given up, and close to zero across
+              the whole division. That is why a single loan can carry +12.450,00 or &minus;32.144,00
+              on that line with nothing wrong.
+            </p>
+            <p className="mt-1">
+              Closings whose month has no P&amp;L loaded are kept out of the figures and counted
+              separately, with the origination cost already booked shown alongside &mdash; their
+              loans and volume still count, because the loan did close.
+            </p>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * La nomina del periodo, como lista de perfil bajo.
+ *
+ * ⚠ ERA UNA TABLA DE CUATRO COLUMNAS DENTRO DE UN ACORDEON DENTRO DEL PANEL, y
+ * tres niveles de anidamiento para catorce numeros es lo que producia la
+ * segunda barra de desplazamiento. Una lista plana dice lo mismo: cuenta,
+ * importe, y el total abajo.
+ */
+function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: PayrollRow[] }) {
+  if (rows.length === 0 && fragiles.length === 0) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] italic text-gray-400">
+        No payroll located for this person in this period.
+      </div>
+    );
+  }
+  const porCuenta = new Map<string, { nombre: string; total: number; filas: number }>();
+  for (const r of rows) {
+    const k = r.gl_code ?? "—";
+    const e = porCuenta.get(k) ?? { nombre: r.gl_name ?? "", total: 0, filas: 0 };
+    e.total += r.amount; e.filas++;
+    porCuenta.set(k, e);
+  }
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  const fragilTotal = fragiles.reduce((s, r) => s + r.amount, 0);
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <dl className="space-y-0.5 text-[11px]">
+        {[...porCuenta.entries()].sort((a, b) => a[1].total - b[1].total).map(([gl, v]) => (
+          <div key={gl} className="flex items-baseline gap-2">
+            <dt className="shrink-0 text-gray-600">{v.nombre || gl}</dt>
+            {/* La guia de puntos ata el nombre con su importe sin una regla ni
+                una columna: a este tamaño, una tabla de cuatro columnas para
+                dos datos pesa mas que el dato. */}
+            <span aria-hidden className="min-w-0 flex-1 translate-y-[-3px] border-b border-dotted border-slate-300" />
+            <dd className="shrink-0 font-mono tabular-nums text-gray-700">{usdExacto(v.total)}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-2">
+        <span className="text-[11px] font-semibold text-gray-700">Total payroll cost</span>
+        <span className="font-mono tabular-nums text-xs font-bold text-rose-600">{usdExacto(total)}</span>
+      </div>
+
+      {fragiles.length > 0 && (
+        /*
+         * Fuera del total y dicho. Si no se enseñara, estas personas caerian en
+         * "no payroll located", y eso seria FALSO -- y falso de la peor manera,
+         * porque se leeria como un hallazgo.
+         */
+        <p className="mt-2 text-[10px] leading-snug text-slate-500">
+          {fragiles.length} more row{fragiles.length !== 1 ? "s" : ""} worth {usdExacto(fragilTotal)}{" "}
+          matched with low confidence and are <span className="font-medium">not</span> in this total.
+        </p>
+      )}
+    </div>
+  );
+}
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
@@ -642,8 +841,11 @@ const SECCIONES: { key: OfficerGroup; label: string; hint: string }[] = [
  * personas exigia cerrar la primera, y la fila que se estaba mirando se movia
  * bajo el cursor al hacerlo.
  *
- * El panel deja la tabla quieta: se abre al lado, se compara con lo que sigue
- * viendose detras, y se cierra sin que nada salte.
+ * ⚠ Y EL PANEL NO TIENE BARRA PROPIA. Tenia dos en paralelo --la suya y la de
+ * la tabla de dentro-- y con dos, arrastrar una mueve lo que no se queria
+ * mover. Se fija al alto de la ventana y SOLO la lista de prestamos scrollea:
+ * la cabecera arriba y el resumen abajo se quedan siempre a la vista, que es
+ * donde estan las dos cifras por las que se abre el panel.
  *
  * ⚠ z-[60]/z-[70] Y NO z-40/z-50 A PROPOSITO: esta vista vive TAMBIEN dentro
  * del modal de P&L por sucursal, que ocupa esos dos niveles. Con los mismos, el
@@ -651,19 +853,22 @@ const SECCIONES: { key: OfficerGroup; label: string; hint: string }[] = [
  * nada pareciera roto.
  */
 function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) {
+  const [ayuda, setAyuda] = useState(false);
+
   // Escape cierra. Un panel que solo se cierra con la X se queda abierto en
   // cuanto alguien lo intenta por el camino de siempre.
   useEffect(() => {
-    const alPulsar = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const alPulsar = (e: KeyboardEvent) => {
+      // Con la ayuda abierta, Escape la cierra a ella y no al panel entero:
+      // cerrar los dos de un golpe pierde el sitio donde se estaba mirando.
+      if (e.key === "Escape" && !ayuda) onClose();
+    };
     window.addEventListener("keydown", alPulsar);
     return () => window.removeEventListener("keydown", alPulsar);
-  }, [onClose]);
+  }, [onClose, ayuda]);
 
   const nominaPos = -o.block2Total;
   const localizada = o.payrollStatus !== "not_located";
-  // Comision menos nomina. Informativo: son dos calendarios y no tienen por
-  // que cuadrar. Ver la linea que lo dice dentro de la tarjeta.
-  const diferencia = o.commission - nominaPos;
 
   return (
     <>
@@ -671,241 +876,178 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
       <aside
         role="dialog"
         aria-label={`Detail for ${o.name}`}
-        className="fixed inset-y-0 right-0 z-[70] flex h-full w-full max-w-3xl flex-col border-l border-slate-200 bg-white shadow-2xl"
+        className="fixed right-0 top-[40px] z-[70] flex h-[calc(100vh-80px)] w-full max-w-3xl flex-col justify-between overflow-hidden rounded-l-2xl border border-slate-200 bg-white p-5 shadow-2xl"
       >
-        <header className="flex items-start justify-between gap-3 border-b border-gray-200 px-5 py-3">
-          <div>
-            <h3 className="text-sm font-semibold text-[#001A40]">{o.name}</h3>
-            <p className="mt-0.5 text-[11px] text-gray-500">
+        {/* ── Cabecera ──────────────────────────────────────────────────── */}
+        <header className="flex shrink-0 items-start justify-between gap-3 pb-3">
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold text-[#001A40]">{o.name}</h3>
+            <p className="mt-0.5 truncate text-[11px] text-gray-500">
               {o.position ?? "Role not in the HR roster"}
               {o.area ? ` · ${o.area}` : ""}
               {o.branch ? ` · branch ${o.branch}` : ""}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-            aria-label="Close"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {/*
+              * ⚠ UN SOLO BOTON PARA TODA LA PROSA. Los parrafos estaban
+              * repartidos entre las tarjetas y eran lo que impedia que el panel
+              * cupiera; aqui no se pierde ninguno y el panel se queda con
+              * numeros.
+              */}
+            <button
+              onClick={() => setAyuda(true)}
+              className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-2.5 py-1 text-[10px] text-gray-500 hover:bg-gray-50"
+            >
+              <Info size={11} />
+              How this P&amp;L is calculated
+            </button>
+            <button onClick={onClose} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100" aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          {/* ── A · Lo que produjo, prestamo a prestamo ───────────────────── */}
-          <section>
-            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-              What they produced · {o.loanCount} loan{o.loanCount !== 1 ? "s" : ""}
+        {/* ── Tarjeta 1 · Produccion. La unica que scrollea ──────────────── */}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 items-baseline justify-between pb-1">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+              Production · {o.loanCount} loan{o.loanCount !== 1 ? "s" : ""}
             </h4>
-            {/*
-              * ⚠ EL CONTADOR DICE LAS DOS COSAS. Uno que solo pusiera "2
-              * pendientes" esconderia que ya hay coste apuntado, y el lector
-              * supondria que no hay nada hasta que cargue el mes.
-              */}
             {o.loansPendingPl > 0 && (
-              <p className="mt-1 text-[11px] text-amber-700">
-                {o.loansPendingPl} closing{o.loansPendingPl === 1 ? "" : "s"} with no P&amp;L loaded
-                for their month — {usdExacto(Math.abs(o.pendingPlBooked))} of origination cost is
-                already booked, the margin is not. Left out of the figures below.
-              </p>
+              <span className="text-[10px] text-amber-700"
+                    title={`${usdExacto(Math.abs(o.pendingPlBooked))} of origination cost is already booked on them; the margin is not. Left out of the figures.`}>
+                {o.loansPendingPl} pending P&amp;L
+              </span>
             )}
-            <div className="mt-2 rounded-lg border border-gray-200 overflow-hidden">
-              <BloquePrestamos loans={o.loans} />
-            </div>
-          </section>
+          </div>
+          {/*
+            * min-h-0 es lo que hace que esto scrollee en vez de empujar: sin
+            * el, un hijo flex no baja de su alto de contenido y la tarjeta del
+            * resumen se sale por debajo de la ventana.
+            */}
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-gray-200">
+            <BloquePrestamos loans={o.loans} />
+          </div>
+        </div>
 
-          {/* ── B · Lo que costo, por cuenta ──────────────────────────────── */}
-          <section>
-            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-              What they cost · payroll by account
-            </h4>
-            <p className="mt-1 text-[11px] text-gray-500">
-              Not tied to any loan. This is the whole payroll the P&amp;L records for this person in
-              the selected period.
-            </p>
-            <div className="mt-2 rounded-lg border border-gray-200 overflow-hidden">
-              <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
-            </div>
-          </section>
+        {/* ── Tarjeta 2 · Nomina del periodo ─────────────────────────────── */}
+        <div className="shrink-0 pt-3">
+          <h4 className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            Payroll this period
+          </h4>
+          <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
+        </div>
 
-          {/* ── C · La escalera, y debajo la nomina que no cuelga de nada ──── */}
-          <section>
-            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-              The account
-            </h4>
-            <div className="mt-2 rounded-xl bg-[#001A40] px-5 py-4 text-white">
-              {/*
-                * ⚠ LOS COSTES DIRECTOS SUMAN Y LA ETIQUETA NO DICE "MENOS".
-                * Salen en positivo porque se le cobran al prestatario y vuelven
-                * a la sucursal; un "−" delante de un numero positivo diria lo
-                * contrario de lo que pasa. Por eso el signo va pegado al
-                * importe y no a la etiqueta, en este escalon y solo en este.
-                */}
-              <dl className="space-y-1.5 text-xs">
-                <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-white/70">Branch gross revenue</dt>
-                  <dd className="font-mono tabular-nums">{usdExacto(o.block1Revenue)}</dd>
-                </div>
-                <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-white/70">
-                    Direct production costs
-                    <span className="ml-1.5 text-[10px] text-white/40">appraisal, credit, verification</span>
-                  </dt>
-                  <dd className="font-mono tabular-nums">{usdExacto(o.block1DirectCosts)}</dd>
-                </div>
-                {o.block1OtherBooked !== 0 && (
+        {/* ── Tarjeta 3 · El resumen, al pie ─────────────────────────────── */}
+        <div className="mt-3 shrink-0 rounded-xl bg-[#001A40] p-3.5 text-xs text-white">
+          {/*
+            * ⚠ LOS COSTES DIRECTOS SUMAN Y LA ETIQUETA NO DICE "MENOS". Salen
+            * en positivo porque se le cobran al prestatario y vuelven a la
+            * sucursal; un "−" delante de un numero positivo diria lo contrario
+            * de lo que pasa.
+            */}
+          <dl className="space-y-1">
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-white/70">Branch gross revenue</dt>
+              <dd className="font-mono tabular-nums">{usdExacto(o.block1Revenue)}</dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-white/70">+ Direct production costs</dt>
+              <dd className="font-mono tabular-nums">{usdExacto(o.block1DirectCosts)}</dd>
+            </div>
+            {o.block1OtherBooked !== 0 && (
+              <div className="flex items-baseline justify-between gap-4">
+                <dt className="text-white/70">+ Other booked to their loans</dt>
+                <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBooked)}</dd>
+              </div>
+            )}
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-white/70">− LO commission</dt>
+              <dd className="font-mono tabular-nums">{usdExacto(-o.commission)}</dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-4 border-t border-white/25 pt-1.5">
+              <dt className="font-semibold uppercase tracking-wide">= Total loan contribution</dt>
+              <dd className={`font-mono tabular-nums text-sm font-bold ${
+                o.contribution > 0 ? "text-emerald-300" : o.contribution < 0 ? "text-red-300" : "text-white/70"
+              }`}>
+                {usdExacto(o.contribution)}
+              </dd>
+            </div>
+          </dl>
+
+          {/*
+            * ⚠ LO DE LA 700 VA DESPUES DEL TOTAL, NUNCA ANTES NI EN MEDIO. La
+            * sucursal cierra su cuenta en Total loan contribution; lo de
+            * corporativo es contexto y se enseña detras. Puesto antes o
+            * intercalado parece que participa en la resta, que es exactamente
+            * lo que no se entendia.
+            *
+            * Y la etiqueta lo dice UNA VEZ, en la cabecera de la seccion, no en
+            * cada fila.
+            */}
+          {o.block1Elsewhere !== 0 && (
+            <div className="mt-3 border-t-2 border-white/25 pt-2.5">
+              <p className="text-[10px] uppercase tracking-wide text-white/40">
+                Not part of this branch&rsquo;s contribution
+              </p>
+              <dl className="mt-1 space-y-0.5 text-[11px] text-white/50">
+                {o.block1KeptByDivision !== 0 && (
                   <div className="flex items-baseline justify-between gap-4">
-                    <dt className="text-white/70">
-                      Other booked to their loans
-                      <span className="ml-1.5 text-[10px] text-white/40">neither of the two above</span>
-                    </dt>
-                    <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBooked)}</dd>
+                    <dt>Kept by the division (700)</dt>
+                    <dd className="font-mono tabular-nums">{usdExacto(o.block1KeptByDivision)}</dd>
                   </div>
                 )}
-                <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-white/70">− LO commission</dt>
-                  <dd className="font-mono tabular-nums">{usdExacto(-o.commission)}</dd>
-                </div>
-                <div className="flex items-baseline justify-between gap-4 border-t border-white/20 pt-2">
-                  <dt className="font-semibold">= Total contribution</dt>
-                  <dd className={`font-mono tabular-nums text-base font-semibold ${
-                    o.contribution > 0 ? "text-emerald-300" : o.contribution < 0 ? "text-red-300" : "text-white/70"
-                  }`}>
-                    {usdExacto(o.contribution)}
-                  </dd>
-                </div>
+                {o.block1OtherBranch !== 0 && (
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt>Booked in another branch</dt>
+                    <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBranch)}</dd>
+                  </div>
+                )}
               </dl>
-
-              {/*
-                * ⚠ DEBAJO DEL TOTAL Y FUERA DE LA <dl> DE LA ESCALERA, no
-                * intercalado entre sus lineas. Dentro parecia un escalon mas y
-                * era lo contrario: lo unico que NO entra.
-                *
-                * Dos lineas porque son dos cosas. La 700 es el reparto normal
-                * --1.138.272,02 en la division, casi todo DM Margin--; una
-                * tercera sucursal son 85.073,08 de margen apuntado donde no
-                * toca y traslados de compensacion, y eso si merece mirarse.
-                */}
-              {o.block1Elsewhere !== 0 && (
-                <div className="mt-3 border-t border-white/15 pt-2.5">
-                  <p className="text-[10px] uppercase tracking-wide text-white/40">
-                    Not part of this branch&rsquo;s contribution
-                  </p>
-                  <dl className="mt-1.5 space-y-1 text-[11px] text-white/50">
-                    {o.block1KeptByDivision !== 0 && (
-                      <div className="flex items-baseline justify-between gap-4">
-                        <dt>Kept by the division (700)</dt>
-                        <dd className="font-mono tabular-nums">{usdExacto(o.block1KeptByDivision)}</dd>
-                      </div>
-                    )}
-                    {o.block1OtherBranch !== 0 && (
-                      <div className="flex items-baseline justify-between gap-4">
-                        <dt>
-                          Booked in another branch
-                          <span className="ml-1.5 text-[10px] text-white/35">neither theirs nor 700</span>
-                        </dt>
-                        <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBranch)}</dd>
-                      </div>
-                    )}
-                  </dl>
-                </div>
-              )}
-
-              {/*
-                * ─────────────────────────────────────────────────────────────
-                * ⚠ LA SEGUNDA CUENTA NO ES LA CONTINUACION DE LA PRIMERA
-                * ─────────────────────────────────────────────────────────────
-                *
-                * Encadenarlas --restarle la nomina a Total contribution-- es el
-                * error que mas caro sale en esta pantalla, porque el resultado
-                * parece razonable: la comision se PAGA POR LA NOMINA, asi que
-                * restarla en la escalera Y ADEMAS restar la nomina entera resta
-                * el mismo dinero dos veces.
-                *
-                * Medido en la division: 1.163.656,81 de comision dentro de una
-                * nomina de 5.362.891,98 -- el 21,7% del coste, contado otra vez.
-                * En Gian Laino serian 91.440,93 que lo dejarian pareciendo casi
-                * cien mil peor de lo que es.
-                *
-                * Por eso el Net de abajo arranca otra vez de lo PRODUCIDO, no de
-                * la contribucion, y la linea que las separa lo dice.
-                */}
-              <div className="mt-4 border-t-2 border-white/25 pt-3">
-                <p className="text-[10px] uppercase tracking-wide text-white/40">
-                  Does this person pay for themselves — a separate question
-                </p>
-                <dl className="mt-2 space-y-1.5 text-xs">
-                  <div className="flex items-baseline justify-between gap-4">
-                    {/*
-                      * ⚠ LA ETIQUETA DICE "su propia sucursal" Y NO SOLO
-                      * "produced". Quien compare esta cifra con Compensafe la
-                      * va a encontrar mas baja y va a pensar que falta algo; lo
-                      * que falta esta dos lineas mas arriba, en booked
-                      * elsewhere, y la etiqueta tiene que llevar a ella.
-                      */}
-                    <dt className="text-white/70">
-                      Produced
-                      <span className="ml-1.5 text-[10px] text-white/40">
-                        booked in their loans’ own branch — not everything they generated
-                      </span>
-                    </dt>
-                    <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-4">
-                    <dt className="text-white/70">
-                      − Payroll paid
-                      <span className="ml-1.5 text-[10px] text-white/40">salary, taxes, insurance — and the commission</span>
-                    </dt>
-                    <dd className="font-mono tabular-nums">
-                      {localizada ? usdExacto(nominaPos) : (
-                        <span className="text-amber-300" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
-                          not located
-                        </span>
-                      )}
-                    </dd>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-4 border-t border-white/20 pt-2">
-                    <dt className="font-semibold">= Net</dt>
-                    <dd className={`font-mono tabular-nums text-base font-semibold ${
-                      o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
-                    }`}>
-                      {usdExacto(o.total)}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-
-              <div className="mt-3 space-y-1 border-t border-white/15 pt-3 text-[11px] text-white/60">
-                <p className="leading-relaxed">
-                  <span className="text-white/80">The two totals do not chain.</span> The commission
-                  is subtracted in the ladder above and is <span className="text-white/80">also</span>{" "}
-                  inside the payroll below — it is paid through payroll. Subtracting it from the
-                  contribution as well would count the same money twice.
-                </p>
-                <div className="flex items-baseline justify-between gap-4 pt-1.5">
-                  <span>Difference: commission vs payroll paid</span>
-                  <span className="font-mono tabular-nums">
-                    {localizada ? usdExacto(diferencia) : "—"}
-                  </span>
-                </div>
-                <p className="leading-relaxed">
-                  They are two calendars and are not meant to match: Compensafe groups commission by{" "}
-                  <span className="text-white/80">closing date</span> and the P&amp;L records payroll
-                  by <span className="text-white/80">payment date</span>, so a loan closed at the end
-                  of a month is paid in the next period.
-                </p>
-                {o.loansWithoutCommission > 0 && (
-                  <p className="leading-relaxed">
-                    {o.loansWithoutCommission} of these loans do not cross with Compensafe, so no
-                    commission is known for them. Not the same as a zero — and the contribution above
-                    leaves them out rather than counting them as free.
-                  </p>
-                )}
-              </div>
             </div>
-          </section>
+          )}
+
+          {/*
+            * ⚠ LA SEGUNDA CUENTA NO ES LA CONTINUACION DE LA PRIMERA, y
+            * encadenarlas es el error que mas caro sale aqui porque el
+            * resultado parece razonable: la comision se PAGA POR LA NOMINA, asi
+            * que restarla arriba y ademas restar la nomina entera resta el
+            * mismo dinero dos veces. El porque, con las cifras, en la ayuda.
+            */}
+          <div className="mt-3 border-t-2 border-white/25 pt-2.5">
+            <p className="text-[10px] uppercase tracking-wide text-white/40">
+              Does this person pay for themselves — a separate question
+            </p>
+            <dl className="mt-1 space-y-1">
+              <div className="flex items-baseline justify-between gap-4">
+                <dt className="text-white/70">Produced</dt>
+                <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-4">
+                <dt className="text-white/70">− Payroll not tied to loans</dt>
+                <dd className="font-mono tabular-nums">
+                  {localizada ? usdExacto(nominaPos) : (
+                    <span className="text-amber-300" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
+                      not located
+                    </span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-4 border-t border-white/25 pt-1.5">
+                <dt className="font-semibold uppercase tracking-wide">= Net</dt>
+                <dd className={`font-mono tabular-nums text-sm font-bold ${
+                  o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
+                }`}>
+                  {usdExacto(o.total)}
+                </dd>
+              </div>
+            </dl>
+          </div>
         </div>
       </aside>
+
+      {ayuda && <AyudaPnl onClose={() => setAyuda(false)} />}
     </>
   );
 }
