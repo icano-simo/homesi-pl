@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { X, ArrowUpDown, LayoutGrid, Rows3 } from "lucide-react";
+import { X, ArrowUpDown, LayoutGrid, Rows3, UserCircle } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
+import { LoPnlView } from "@/components/lo-pnl-view";
 import {
   ALL_MARGIN_ACCOUNTS,
   NET_GROUPS,
@@ -140,7 +141,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
   const [sortDesc, setSortDesc]   = useState(true);
-  const [view, setView] = useState<"cards" | "table">("cards");
+  const [view, setView] = useState<"cards" | "table" | "officers">("cards");
   /**
    * Branch filter inside the window, over the branch each loan was produced on.
    *
@@ -300,6 +301,17 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
             <div className="flex items-center gap-1 rounded-full bg-slate-100 p-1">
               <ViewTab active={view === "cards"} onClick={() => setView("cards")} icon={<LayoutGrid size={12} />} label="Mini P&L Cards" />
               <ViewTab active={view === "table"} onClick={() => setView("table")} icon={<Rows3 size={12} />} label="Table List" />
+              {/*
+                * ⚠ AQUI Y NO EN UNA PANTALLA APARTE, porque es donde se trabaja.
+                * El modulo existe tambien en /lo-pnl, pero la pregunta "¿quien
+                * de MI sucursal se paga solo?" se hace mirando el P&L de la
+                * sucursal, no navegando a otro sitio.
+                *
+                * Comparte el calculo con la pantalla propia -- un solo
+                * componente, LoPnlView. Dos copias serian dos definiciones de
+                * "cuanto produce esta persona" separandose sin que nada falle.
+                */}
+              <ViewTab active={view === "officers"} onClick={() => setView("officers")} icon={<UserCircle size={12} />} label="P&L by Loan Officer" />
             </div>
             {branchOptions.length > 1 && (
               <ReportFilter label="Branch" options={branchOptions}
@@ -351,6 +363,20 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                 <SummaryCard s={data.summary} month={data.month} />
               )}
               {sorted.map((l) => <MiniPL key={l.loan_number} l={l} />)}
+            </div>
+          )}
+
+          {view === "officers" && (
+            /*
+              * ⚠ LA SUCURSAL SALE DEL FILTRO DEL MODAL, Y SOLO CUANDO HAY UNA.
+              *
+              * Con varias seleccionadas o ninguna se enseñan todas: "los loan
+              * officers de estas tres sucursales" no es una pregunta que esta
+              * tabla conteste bien, y acotarla a la primera seria elegir por el
+              * usuario en silencio.
+              */
+            <div className="px-1 py-2">
+              <LoPnlView branch={branchFilter.length === 1 ? branchFilter[0] : null} />
             </div>
           )}
 

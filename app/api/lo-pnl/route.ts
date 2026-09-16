@@ -545,6 +545,20 @@ export async function GET(req: NextRequest) {
    * del dato. Elegir "el periodo mas nuevo cargado" haria que la pantalla
    * cambiara de tema sola en cuanto entrara un archivo.
    */
+  /*
+   * ⚠ LA SUCURSAL SE HEREDA DEL MODAL; EL MES, NO.
+   *
+   * Cuando esta vista vive dentro del P&L de una sucursal, la sucursal la
+   * impone el modal. El mes NO, y es deliberado: la pregunta del modal es "que
+   * paso en este mes" y la de aqui es "cuanto produce y cuanto cuesta esta
+   * persona", que solo tiene sentido a lo largo del tiempo.
+   *
+   * Medido: Sergio Vermejo cerro UNA VEZ en noviembre de 2025 y siguio costando
+   * hasta mayo de 2026. En cualquier vista mensual posterior desaparece, y con
+   * el el unico caso que enseña por que este modulo existe.
+   */
+  const branches = searchParams.getAll("branch").filter(Boolean);
+
   const all = searchParams.get("all") === "1";
   const def = closePeriod();
   const month = all ? null : searchParams.get("month") ?? def.month;
@@ -566,7 +580,17 @@ export async function GET(req: NextRequest) {
    * counts_for_division-- vive en lib/loan-source y no se reescribe aqui.
    */
   const [cerrados, plCoverage, rosterRows] = await Promise.all([
-    getClosedLoans({ month, year }),
+    /*
+     * ⚠ EL FILTRO DE SUCURSAL ACOTA LOS CIERRES, NO LA NOMINA. La nomina de una
+     * persona no tiene sucursal de produccion: sale de las cuentas de
+     * compensacion, que se contabilizan donde se contabilizan. Filtrarla
+     * tambien dejaria a la gente de la sucursal con sus cierres y sin su coste,
+     * que es justo el numero que el modulo existe para enseñar.
+     *
+     * Asi que dentro de una sucursal se lee: "estos son SUS loan officers, con
+     * lo que produjeron aqui y lo que cuestan en total".
+     */
+    getClosedLoans({ month, year, branches: branches.length ? branches : null }),
     getPlCoverage(),
     /*
      * El cargo de cada persona. Que falle NO puede tumbar la pantalla: sin
@@ -959,7 +983,23 @@ export async function GET(req: NextRequest) {
    * enseñaria nunca. Es la mitad inversa del caso de Brian Heibel, y las dos
    * tienen que saltar a la vista.
    */
+  /*
+   * ⚠ DENTRO DE UNA SUCURSAL NO SE AÑADE A QUIEN SOLO TIENE NOMINA.
+   *
+   * La nomina de una persona NO tiene sucursal de produccion: sale de las
+   * cuentas de compensacion y no se puede repartir. Sin esto, cada sucursal
+   * enseñaba a las 132 personas de la empresa --37 productores en las cuatro
+   * que se midieron-- con su coste entero contra la produccion de esa sola
+   * sucursal, y el neto salia en -2,6 millones en todas. Leido literal, cada
+   * sucursal parecia hundida.
+   *
+   * Dentro de una sucursal la pregunta es "quien cerro AQUI", asi que solo
+   * salen los que tienen cierres en ella.
+   */
+  const soloConCierres = branches.length > 0;
+
   for (const [id, filas] of nominaPorPersona) {
+    if (soloConCierres) continue;
     if (usados.has(id)) continue;
     const persona = censo.people.find((p) => idDe(p) === id);
     const fragil = nominaFragil.get(id) ?? [];
