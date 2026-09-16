@@ -600,6 +600,15 @@ export interface PayrollRow {
   gl_name: string | null;
   month: string | null;
   year: number | null;
+  /**
+   * La sucursal donde se contabiliza el apunte.
+   *
+   * ⚠ NO ES LA SUCURSAL DE LA PERSONA -- esa sale del roster y no de aqui. Se
+   * devuelve para poder acotar el aviso de nomina sin atribuir a la sucursal
+   * que se esta mirando: ver 41.737,58 sin persona en la 716 es accionable,
+   * verlo en un total global de 523.207,01 no.
+   */
+  branch: string | null;
   amount: number;
   shape: DescriptionShape;
   method: MatchMethod | null;
@@ -1067,7 +1076,7 @@ export async function GET(req: NextRequest) {
   const sinPrestamo = await paginar<Record<string, unknown>>(() => {
     let q = supabase
       .from("pl_transactions")
-      .select("check_description,gl_code,gl_name,movement,month,year,loan_number")
+      .select("check_description,gl_code,gl_name,branch,movement,month,year,loan_number")
       .is("loan_number", null);
     if (month) q = q.eq("month", month);
     if (year) q = q.eq("year", year);
@@ -1095,6 +1104,7 @@ export async function GET(req: NextRequest) {
       gl_name: t.gl_name as string | null,
       month: t.month as string | null,
       year: t.year as number | null,
+      branch: (t.branch as string | null) ?? null,
       amount: Number(t.movement ?? 0),
       shape: parsed.shape,
       method: m.method,
@@ -1688,10 +1698,29 @@ export async function GET(req: NextRequest) {
 
   const result: LoPnlResult = {
     officers,
-    unattributed: {
-      rows: sinAtribuir,
-      total: sinAtribuir.reduce((s, r) => s + r.amount, 0),
-    },
+    /*
+     * ⚠ ACOTADA A LA SUCURSAL QUE SE MIRA, no global. Medido el 2026-09-16:
+     * 523.207,01 de nomina con forma de nombre que no llega a ninguna persona,
+     * en 84 nombres distintos. En un total global eso no es accionable; por
+     * sucursal si -- 41.737,58 sin persona en la 716 es una lista que alguien
+     * puede repasar.
+     *
+     * ⚠ Y AQUI LA SUCURSAL ES LA DEL APUNTE, no la de la persona. Es la unica
+     * que hay: si se supiera de quien es la fila, no estaria en este cubo.
+     *
+     * El grueso NO es de la division y conviene saberlo antes de alarmarse: de
+     * los 523.207,01, hay 379.764,07 --el 72,6%-- en siete sucursales que no
+     * tienen NI UNA persona en el roster (718, 701, 741, 771, 712, 702, 721).
+     * La 718 sola son 173.478,67. Esas vistas no se abren desde este modulo,
+     * asi que su cubo no se ve; el que se ve es el de las once sucursales con
+     * gente, 143.442,94 entre todas.
+     */
+    unattributed: (() => {
+      const filas = branches.length
+        ? sinAtribuir.filter((r) => r.branch != null && branches.includes(r.branch))
+        : sinAtribuir;
+      return { rows: filas, total: filas.reduce((s, r) => s + r.amount, 0) };
+    })(),
     collapsedPairs,
     splitByShape,
     period: { month, year: year ?? null, all },

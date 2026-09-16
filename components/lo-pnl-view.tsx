@@ -1867,10 +1867,32 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
 
                 {data.unattributed.rows.length > 0 && (
                   <div>
-                    <span className="font-semibold text-gray-700">Not attributed to anyone.</span>{" "}
-                    {data.unattributed.rows.length} rows, {usdExacto(data.unattributed.total)}. Names the
-                    matcher could not resolve to one person. They are never split across people and never
-                    silently dropped into someone’s total.
+                    <span className="font-semibold text-gray-700">
+                      Not attributed to anyone{branch ? ` in branch ${branch}` : ""}.
+                    </span>{" "}
+                    {data.unattributed.rows.length} rows, {usdExacto(data.unattributed.total)} —{" "}
+                    {new Set(data.unattributed.rows.map((r) => r.check_description)).size} distinct
+                    descriptions. Payroll the matcher could not resolve to one person. It is never split
+                    across people and never dropped into someone’s total, so it is missing from every
+                    figure above.
+                    {/*
+                      * ⚠ LA LISTA, NO SOLO EL TOTAL, y solo dentro de una
+                      * sucursal. Un total global de 523.207,01 en 84 nombres no
+                      * es accionable; los de UNA sucursal son una lista que
+                      * alguien puede repasar y arreglar en el roster.
+                      */}
+                    {branch && (
+                      <ul className="mt-1 max-h-32 overflow-y-auto pl-4 text-[10px] text-gray-500">
+                        {[...new Map(data.unattributed.rows.map((r) => [r.check_description, r])).values()]
+                          .sort((a, b) => a.amount - b.amount)
+                          .slice(0, 20)
+                          .map((r) => (
+                            <li key={r.check_description} className="truncate">
+                              {r.check_description}
+                            </li>
+                          ))}
+                      </ul>
+                    )}
                   </div>
                 )}
               </div>
