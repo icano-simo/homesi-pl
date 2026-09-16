@@ -318,12 +318,17 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
                 * los cierres del periodo-- y NO la nomina. La nomina se resta
                 * en la otra cuenta, la de abajo, que es otra pregunta.
                 */}
-              <span className="uppercase tracking-wide">
-                &minus; Commission on loans
-                <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
-                  from Compensafe, not payroll
-                </span>
-              </span>
+              {/*
+                * ⚠ SIN "from Compensafe" AQUI. Es cierto y hace falta decirlo,
+                * pero repetido en cada tarjeta de una fila de sesenta y cinco
+                * deja de leerse y ocupa el sitio del dato. Se dice UNA VEZ,
+                * junto al boton de ayuda de la cabecera.
+                *
+                * Lo que SI se queda es que resta "Commission on loans" y no la
+                * nomina: eso distingue dos cifras de la misma tarjeta y tiene
+                * que estar en la linea que resta.
+                */}
+              <span className="uppercase tracking-wide">&minus; Commission on loans</span>
               <span className="font-mono tabular-nums text-rose-700">
                 {p.commission == null
                   ? <span className="text-slate-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>

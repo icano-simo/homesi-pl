@@ -1645,11 +1645,28 @@ export async function GET(req: NextRequest) {
    * sigue saliendo, en "Role unknown" y con su motivo. Inventarle una sucursal
    * a partir de sus cierres es exactamente lo que esta regla viene a prohibir.
    */
-  const officersEnAlcance = branches.length
-    ? officers.filter((o) => o.branch != null && branches.includes(o.branch))
-    : officers;
-  officers.length = 0;
-  officers.push(...officersEnAlcance);
+  /*
+   * ⚠ SE FILTRA EN SITIO Y NO POR REASIGNACION, Y AQUI HUBO UN BUG QUE DEJABA
+   * LA PANTALLA ENTERA EN BLANCO.
+   *
+   * Estaba escrito asi:
+   *
+   *     const enAlcance = branches.length ? officers.filter(...) : officers;
+   *     officers.length = 0;
+   *     officers.push(...enAlcance);
+   *
+   * Sin filtro de sucursal, `enAlcance` NO era una copia: era el mismo array
+   * que `officers`. El `officers.length = 0` lo vaciaba, y el push volvia a
+   * meter... nada. Resultado: con sucursal funcionaba y SIN sucursal devolvia
+   * cero officers, que es la vista por defecto.
+   *
+   * `splice` sobre el propio array evita el alias entero: no hay un segundo
+   * nombre para la misma lista que pueda quedarse vacio por debajo.
+   */
+  if (branches.length) {
+    const fuera = officers.filter((o) => o.branch == null || !branches.includes(o.branch));
+    for (const o of fuera) officers.splice(officers.indexOf(o), 1);
+  }
 
   officers.sort((a, b) => a.total - b.total);
 

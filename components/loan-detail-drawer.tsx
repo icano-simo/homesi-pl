@@ -349,8 +349,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               <ArrowUpDown size={11} />
               Net bps {sortDesc ? "high → low" : "low → high"}
             </button>
-            <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+            {/*
+              * ⚠ LA NOTA DE COMPENSAFE, UNA SOLA VEZ Y AQUI. Estaba repetida en
+              * cada tarjeta del mini P&L: con sesenta y cinco en la fila deja de
+              * leerse y ocupa el sitio del dato. Dicha en la definicion del
+              * total vale para toda la pantalla, que es su alcance real.
+              */}
+            <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500"
+                  title="The commission comes from Compensafe, not from the P&L: it has no GL account and cannot be reconciled against the ledger like the rest of the card.">
               Contribution = {(data?.net_groups ?? NET_GROUPS).join(" + ")} − LO commission
+              <span className="ml-1.5 font-normal text-slate-400">from Compensafe, not a P&amp;L account</span>
             </span>
             {/* A whole column of dashes reads as a broken column, and that is
                 how this one was reported. It is not broken: July 2026 is the
@@ -390,16 +398,25 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
 
           {view === "officers" && (
             /*
-              * ⚠ LA SUCURSAL SALE DEL FILTRO DEL MODAL, Y SOLO CUANDO HAY UNA.
+              * ⚠ LA SUCURSAL SALE DEL INFORME, Y EL FILTRO DE DENTRO SOLO LA
+              * ESTRECHA. Miraba SOLO `branchFilter` -- el filtro de dentro del
+              * modal, que arranca vacio-- asi que abrir el P&L de la 716 y
+              * pulsar la pestaña daba `branch = null`: la vista de todas las
+              * sucursales, dentro de la ventana de una.
               *
-              * Con varias seleccionadas o ninguna se enseñan todas: "los loan
-              * officers de estas tres sucursales" no es una pregunta que esta
-              * tabla conteste bien, y acotarla a la primera seria elegir por el
-              * usuario en silencio.
+              * `branches` es lo que el informe ya tiene acotado cuando se abre
+              * la ventana. Con varias seleccionadas por cualquiera de los dos
+              * lados se enseñan todas: "los loan officers de estas tres
+              * sucursales" no es una pregunta que esta tabla conteste bien, y
+              * quedarse con la primera seria elegir por el usuario en silencio.
               */
             <div className="px-1 py-2">
               <LoPnlView
-                branch={branchFilter.length === 1 ? branchFilter[0] : null}
+                branch={
+                  branchFilter.length === 1 ? branchFilter[0]
+                    : branchFilter.length === 0 && branches.length === 1 ? branches[0]
+                    : null
+                }
                 month={data?.month ?? month}
                 year={data?.year ?? year}
               />
@@ -451,7 +468,6 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                       que es exactamente el fallo que la nota de arriba describe. */}
                   <Th className="text-right">
                     LO comm.
-                    <span className="block font-normal normal-case text-[9px] text-slate-500">from Compensafe</span>
                   </Th>
                   <Th className="text-right bg-[#001A40]/5">
                     Contribution
@@ -781,12 +797,9 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
           {/* La comision del mes, con su origen dicho: en esta pantalla nadie
               espera una cifra que no este en la contabilidad. */}
           <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
-            <span className="uppercase tracking-wide">
-              &minus; LO commission
-              <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
-                from Compensafe — not a P&amp;L account
-              </span>
-            </span>
+            {/* El mismo nombre que en las tarjetas de prestamo, y sin repetir
+                el origen: eso se dice una vez, en la definicion del total. */}
+            <span className="uppercase tracking-wide">&minus; Commission on loans</span>
             <span className="font-mono tabular-nums text-rose-700">{fmt(-s.commission)}</span>
           </div>
           {s.loans_without_commission > 0 && (
@@ -851,9 +864,14 @@ function ViewTab({ active, onClick, icon, label }: {
 function Signals({ l }: { l: LoanRow }) {
   return (
     <span className="inline-flex items-center gap-0.5">
-      {l.b2b && <Signal label="B2B" />}
-      {l.support_on_demand && <Signal label="On Demand" />}
-      {l.processing && <Signal label="Processing" />}
+      {/*
+       * ⚠ B2B / ON DEMAND / PROCESSING SALEN DE LA TARJETA, NO DE AQUI, y por
+       * eso se quitaron: la tarjeta compartida ya los pinta desde sus propias
+       * props, y este componente se le pasa ademas como `signals`, asi que los
+       * tres salian DOS VECES en la misma ficha.
+       *
+       * Aqui se quedan solo los avisos que la tarjeta no conoce.
+       */}
       {l.pl_pending && (
         <span title="No P&L is loaded for this month yet, so the commission is subtracted from revenue that has not been booked. Not a loss: a missing period."
               className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
