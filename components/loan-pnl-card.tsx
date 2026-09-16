@@ -224,14 +224,20 @@ function Linea({ x, importeBase, sucursal }: {
           </span>
         )}
       </span>
+      {/*
+        * ⚠ ANCHO FIJO EN LAS DOS CIFRAS, no solo alineadas a la derecha. Con el
+        * ancho del contenido, "9.602,39" y "-71,76" acaban en el mismo borde
+        * pero sus comas caen en columnas distintas, y entonces la columna no se
+        * puede recorrer de un vistazo -- que es para lo que existe `tabular-nums`.
+        * Con el ancho fijo, los decimales quedan en la misma vertical en todas
+        * las filas de todas las tarjetas.
+        */}
       <span
         title={x.check_description ?? (x.amount > 0 ? "Adds to the net" : x.amount < 0 ? "Takes from the net" : "No amount")}
-        className={`shrink-0 font-mono tabular-nums text-xs ${colorImporte(x.amount)}`}
+        className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums text-[11px]"
       >
-        {usdExacto(x.amount)}
-        <span className="ml-1 font-mono text-[11px] font-normal text-slate-500">
-          {bps(x.amount, importeBase)}
-        </span>
+        <span className={`w-[5.5rem] text-right ${colorImporte(x.amount)}`}>{usdExacto(x.amount)}</span>
+        <span className="w-[4rem] text-right font-normal text-slate-400">{bps(x.amount, importeBase)}</span>
       </span>
     </div>
   );
@@ -334,11 +340,28 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
             const subtotal = filas.reduce((s, x) => s + x.amount, 0);
             return (
               <Fragment key={esc.key}>
-                <div className="my-1.5 flex items-center justify-between rounded-lg border border-emerald-200/60 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-900">
-                  <span className="uppercase tracking-wide">{esc.label}</span>
-                  <span className={`font-mono tabular-nums ${subtotal < 0 ? "text-rose-700" : ""}`}>
-                    {usdExacto(subtotal)}
-                    <span className="ml-1 font-normal opacity-70">{bps(subtotal, p.amount)}</span>
+                {/*
+                  * ⚠ UNA LINEA CON REGLA, NO UNA CAJA. Eran cajas con fondo y
+                  * borde que ocupaban dos renglones, y con tres peldaños por
+                  * tarjeta la caja pesaba mas que la cifra que anunciaba: lo
+                  * que se venia a leer --el subtotal-- quedaba subordinado al
+                  * marco que lo rodeaba.
+                  *
+                  * La etiqueta se achica y la cifra manda, en la misma linea.
+                  */}
+                <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-200 px-3 pb-1 pt-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                    {esc.label}
+                  </span>
+                  <span className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
+                    <span className={`w-[5.5rem] text-right text-xs font-bold ${
+                      subtotal < 0 ? "text-rose-700" : "text-[#001A40]"
+                    }`}>
+                      {usdExacto(subtotal)}
+                    </span>
+                    <span className="w-[4rem] text-right text-[11px] font-normal text-slate-400">
+                      {bps(subtotal, p.amount)}
+                    </span>
                   </span>
                 </div>
                 {filas.map((x, i) => (
@@ -356,7 +379,10 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
             * fallo de carga.
             */}
           {p.commission !== undefined && (
-            <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
+            /* La comision comparte forma con los peldaños: es el ultimo antes
+               del total, y dejarla en caja mientras los otros son linea la
+               habria hecho parecer otra cosa. */
+            <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-200 px-3 pb-1 pt-2">
               {/*
                 * ⚠ LA ETIQUETA NOMBRA EXACTAMENTE LO QUE RESTA, y con las
                 * mismas palabras que la linea de donde sale. Decia "LO
@@ -378,14 +404,16 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
                 * nomina: eso distingue dos cifras de la misma tarjeta y tiene
                 * que estar en la linea que resta.
                 */}
-              <span className="uppercase tracking-wide">&minus; Commission on loans</span>
-              <span className="font-mono tabular-nums text-rose-700">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                &minus; Commission on loans
+              </span>
+              <span className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
                 {p.commission == null
-                  ? <span className="text-slate-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>
-                  : <>
-                      {usdExacto(-p.commission)}
-                      <span className="ml-1 font-normal opacity-70">{bps(-p.commission, p.amount)}</span>
-                    </>}
+                  ? <span className="w-[5.5rem] text-right text-xs text-slate-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>
+                  : <span className="w-[5.5rem] text-right text-xs font-bold text-rose-700">{usdExacto(-p.commission)}</span>}
+                <span className="w-[4rem] text-right text-[11px] font-normal text-slate-400">
+                  {p.commission == null ? "" : bps(-p.commission, p.amount)}
+                </span>
               </span>
             </div>
           )}
@@ -404,23 +432,27 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         * 29.509,80 - 123,93 - 15.370,22 = 14.015,65 y los 8.124,38 quedan
         * fuera. Que se vea por la POSICION y no solo por la etiqueta.
         */}
+      {/*
+        * ⚠ UNA SOLA LINEA Y py-2. Era `p-4` con la cifra y sus bps apilados, o
+        * sea tres renglones de alto para decir una cosa: la caja pesaba mas que
+        * el numero. Compacta y en horizontal, la cifra sigue siendo la mayor de
+        * la tarjeta sin necesitar tanto sitio.
+        */}
       <div
-        className={`flex shrink-0 items-center justify-between p-3 text-xs font-bold shadow-xs ${
-          perdida ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"
+        className={`flex shrink-0 items-center justify-between gap-2 px-4 py-2 shadow-xs ${
+          perdida ? "border-t border-rose-200 bg-rose-100" : "bg-[#001A40]"
         }`}
       >
-        <span className="text-[10px] uppercase leading-tight tracking-wide opacity-80">
+        <span className={`text-[11px] font-bold uppercase tracking-wider ${
+          perdida ? "text-rose-800" : "text-slate-300"
+        }`}>
           {p.total.label}
         </span>
-        <span className="text-right">
-          {/* ⚠ LA CIFRA MAS GRANDE DE LA TARJETA. Es la respuesta, y al mismo
-              cuerpo que una linea de cuenta se perdia entre ellas. */}
-          <span className={`block font-mono text-xl font-bold leading-none tabular-nums ${
-            perdida ? "text-rose-700" : "text-emerald-300"
-          }`}>
+        <span className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
+          <span className={`text-base font-extrabold ${perdida ? "text-rose-700" : "text-[#A6DEFF]"}`}>
             {p.total.value == null ? "—" : usdExacto(p.total.value)}
           </span>
-          <span className={`mt-0.5 block font-mono text-[11px] ${perdida ? "text-rose-800" : "text-emerald-400"}`}>
+          <span className={`w-[4rem] text-right text-[11px] ${perdida ? "text-rose-800" : "text-slate-400"}`}>
             {p.total.value == null ? "— bps" : bps(p.total.value, p.amount)}
           </span>
         </span>
