@@ -19,6 +19,7 @@ import {
   Percent,
   PenLine,
   MessageSquare,
+  UserCircle,
   type LucideIcon,
 } from "lucide-react";
 import { useActiveBranches } from "@/components/branch-filter-provider";
@@ -41,6 +42,9 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Offshore Allocations", href: "/offshore-allocations", icon: Globe },
   { label: "Manual Entry", href: "/manual-entry", icon: PenLine },
   { label: "Loan Count", href: "/loan-count", icon: BookOpen },
+  // Va detras de Loan Count porque lee de ahi: los cierres de cada persona son
+  // el bloque 1 de su P&L.
+  { label: "P&L by Loan Officer", href: "/lo-pnl", icon: UserCircle },
   {
     label: "Cost Centers",
     icon: Target,

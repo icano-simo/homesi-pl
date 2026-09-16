@@ -50,7 +50,13 @@ con `xlsx` desde el CDN de SheetJS. Todo trabajo posterior.
 **Regla:** una rama a medias más de un día, o se mergea o se anota aquí y se
 borra. Cuatro ramas sueltas es como se llegó a tener una 33 commits atrás.
 
-### `feature/lo-commission-in-pl` — **viva, NO borrar**
+### `feature/lo-commission-in-pl` — ⚠ YA NO: borrada el 2026-09-16
+
+> **Esto dejó de ser cierto.** Su contenido SÍ llegó por otra vía —el mini P&L
+> pasó a restar la comisión el 2026-09-16— y la rama se borró. El registro de
+> la retirada, con lo que se conservó y lo que se revirtió, está al final de
+> este documento. Lo de abajo se deja tal cual se escribió, porque es el
+> razonamiento que la mantuvo viva y explica por qué acabó absorbida.
 
 2 commits, ninguno en `main`, y **su contenido no llegó por otra vía**:
 `app/api/loan-detail/route.ts` en `main` no menciona la comisión ni una vez, y
@@ -90,3 +96,61 @@ Decisiones suyas que conviene no perder:
 `cherry-pick` o reescritura. Y el sitio natural es el modal de detalle — que es
 exactamente donde va a vivir la pestaña del P&L por Loan Officer, así que las
 dos cosas se pueden pensar juntas.
+
+---
+
+## `feature/lo-commission-in-pl` — borrada el 2026-09-16
+
+**Estado al borrarla:** 2 commits por delante de `main`, **31 por detrás**.
+
+Esta es la rama que el registro anterior marcaba como **«viva, NO borrar»**. Se
+borra porque su contenido ya está absorbido, no porque se descarte: lo que hacía
+—restar la comisión del loan officer en el mini P&L del P&L por sucursal— es
+exactamente lo que se implementó el 2026-09-16, por decisión del usuario, en
+`app/api/loan-detail/route.ts` y `components/loan-pnl-card.tsx`.
+
+### Qué de la rama está cubierto
+
+| Lo suyo | Dónde está ahora |
+|---|---|
+| `lo_pay` por préstamo, de `comp.loan_commission` | `LoanDetailRow.commission` |
+| El neto después de la comisión | `LoanDetailRow.contribution`, y el banner `TOTAL CONTRIBUTION` |
+| `createServerClient(schema)` para leer `comp` | ya estaba en `main` |
+| «No intenta detectar P&L incompleto» | **se hace lo contrario, y medido**: ver abajo |
+
+Sus tres decisiones se conservan, y las tres viven hoy en el código:
+
+- **`lo_pay`, nunca `total_pay`**, porque `total_pay` incluye el *override* que
+  se le paga al manager del LO. Escrito en la nota de `commissionByLoan`.
+- **El neto se reconstruye de los dos números que tiene al lado.** Por eso `net`
+  siguió siendo revenue + costes directos y la contribución es un campo APARTE:
+  la tabla deriva «Other revenue» como `net − margin_net`, y meter la comisión
+  dentro de `net` la habría escondido ahí en silencio.
+- **Decirlo, no esconderlo.** La comisión lleva en pantalla «from Compensafe —
+  not a P&L account», porque no tiene `gl_code` y no cuadra contra el libro
+  mayor como el resto de la tarjeta.
+
+### La decisión que SÍ se revierte, y por qué
+
+La rama decía: *«No intenta detectar "P&L incompleto". Salen 47 negativos de 270
+y se muestran tal cual; cuando se cargue el margen que falta se corrigen solos.»*
+
+Medido el 2026-09-16, eso no aguanta: de los **13 préstamos que pasan a negativo**
+al restar la comisión, **NUEVE cerraron en septiembre de 2026 y no tienen ni una
+línea de P&L**. Compensafe ya pagó y el margen no se ha contabilizado. Uno sale a
+−11.488,07 y lo único que pasa es que falta cargar el mes.
+
+Nueve de trece no es ruido de fondo: es la mayoría del hallazgo, y presentado
+«tal cual» dice que esos préstamos perdieron dinero. Llevan marca `P&L pending`.
+
+### Lo único suyo que NO se trae, y es deliberado
+
+`corporate_revenue` / `branch_revenue` — el reparto entre lo que se queda
+corporativo y lo que se queda la sucursal. Existe hoy, pero **solo en el módulo
+de P&L por Loan Officer**, como la sección «Not part of this branch's
+contribution». Que el mini P&L del P&L por sucursal NO la lleve es una decisión
+del usuario del 2026-09-16, no un olvido: esa pantalla cierra su cuenta en
+`TOTAL CONTRIBUTION` y el reparto con la 700 es contexto del otro módulo.
+
+También queda fuera `lo_effective_bps`, un campo de Compensafe que ninguna
+pantalla enseña.

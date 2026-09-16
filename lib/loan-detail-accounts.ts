@@ -32,6 +32,123 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * LAS CUENTAS POR LAS QUE SE LE PAGA A ALGUIEN POR PRODUCIR
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠ SON LAS UNICAS COMPARABLES CON LA COMISION DE COMPENSAFE. Lo demas de la
+ * nomina --impuestos, seguros, telefono-- es el coste de tener a la persona
+ * como empleado, no dinero que ella reciba: enfrentarlo a la comision producia
+ * una diferencia que no significaba nada.
+ *
+ * Medido en Nathan Martinez, julio de 2026:
+ *
+ *     comision de sus cierres        13.996,51
+ *     60105 Loan Officer Payroll    -13.996,51   <- identico al centimo
+ *     ------------------------------------------
+ *     diferencia                             0
+ *
+ *     contra la nomina COMPLETA
+ *     64100 Payroll Tax              -1.018,72
+ *     62305 Employee Insurance       -1.178,32
+ *     62304 Credit From Payroll         +732,74
+ *     62301 Vision                        -8,65
+ *     ------------------------------------------
+ *     diferencia                     -1.472,95   <- impuestos y seguros
+ *
+ * ⚠ TRES CUENTAS Y NO UNA, porque no todos cobran por la misma. Un branch
+ * manager que produce cobra en 60115 --Badovinac-- y un sales manager en 60117
+ * --Mariano Claudio--. Preguntar solo por 60105 los deja a los dos fuera.
+ * Medido sobre los 39 officers con comision, contando los que casan al euro:
+ *
+ *     60105 solo                6/39    desvio 782.514,14
+ *     60105 + 60115 + 60117     7/39    desvio 496.123,48
+ *     + 60127                   7/39    desvio 496.123,48   (nadie lo usa)
+ *     toda la nomina            1/39    desvio 1.112.220,41
+ *
+ * ⚠ Y NO CUADRA SIEMPRE, NI DEBE ESPERARSE QUE CUADRE. Son 7 de 39 sobre todos
+ * los periodos y 4 de 17 en julio: los que casan son aquellos cuya comision se
+ * pago dentro del mismo periodo. Compensafe agrupa por FECHA DE CIERRE y el
+ * P&L por FECHA DE PAGO, asi que un cierre de fin de mes se paga en el
+ * siguiente. La comparacion pasa de no significar nada a significar "lo que
+ * falta por pagar o se pago de antes", que es una pregunta real.
+ *
+ * ⚠ NO SE INCLUYE 60112 (BM Operating Entity - Salary) NI 60126 (Regional -
+ * Salary): son sueldo fijo, no pago por produccion. Ni 60118, que es el
+ * asistente del loan officer y es otra persona.
+ */
+export const PRODUCTION_PAY_GL_CODES: readonly string[] = ["60105", "60115", "60117"];
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EL ORDEN EN QUE SE LEEN LAS CUENTAS DE UN PRESTAMO, SIEMPRE EL MISMO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠ FIJO Y NO POR IMPORTE, y esa es toda la razon de que exista. Ordenadas por
+ * importe, cada prestamo saca las cuentas en un sitio distinto: dos tarjetas
+ * una al lado de otra no se pueden leer en horizontal, y comparar exige
+ * buscar la misma linea en dos alturas distintas. Con el orden fijo, "Back-end
+ * Margin" esta siempre en el mismo renglon de todas las tarjetas.
+ *
+ * ⚠ LA LISTA MEZCLA LOS DOS NIVELES DEL DATO A PROPOSITO, Y HAY QUE SABERLO
+ * ANTES DE TOCARLA. Cuatro de sus nombres son `category_7` y dos son `gl_name`:
+ *
+ *     Back-end Margin              category_7 de 41306, cuyo gl_name es
+ *                                  "BM Margin" -- el nombre contable, no el del
+ *                                  negocio
+ *     Front-end Margin             category_7 de 41305, gl_name "LO Margin",
+ *                                  que ademas es enganoso: 41305 NO es
+ *                                  compensacion del loan officer
+ *     Discount Income              coinciden los dos
+ *     Brokered Origination Income  coinciden los dos
+ *
+ *     Lender Credits               gl_name de 41225. Su category_7 es
+ *                                  "Fee Income, Net"
+ *     Other HUD Fees, Net          gl_name de 41205. Su category_7 TAMBIEN es
+ *                                  "Fee Income, Net"
+ *
+ * O sea que "usa category_7 y no gl_name" NO se puede aplicar a ciegas: las dos
+ * ultimas colapsarian en una sola linea llamada "Fee Income, Net" -- junto con
+ * Cures (41215), que es la tercera cuenta de ese mismo concepto-- y entonces el
+ * orden que se pide entre ellas no se podria ni expresar.
+ *
+ * Por eso `conceptLabel()` de abajo busca PRIMERO el gl_name y luego el
+ * category_7, y ordena por lo que encuentre. Asi los dos niveles conviven y
+ * cada cuenta sale con el nombre por el que se la conoce.
+ *
+ * Una cuenta que no aparece en la lista va detras, y entre ellas por importe.
+ * Una que no existe en el prestamo simplemente no sale: no se pinta el hueco.
+ */
+export const CONCEPT_ORDER: readonly string[] = [
+  "Back-end Margin",
+  "Front-end Margin",
+  "Discount Income",
+  "Lender Credits",
+  "Brokered Origination Income",
+  "Other HUD Fees, Net",
+  "DM Margin",
+  "RM Margin",
+  "Processing Income",
+];
+
+/**
+ * El nombre con el que se enseña y se ordena una linea.
+ *
+ * El gl_name manda cuando esta en la lista --"Lender Credits"-- y si no, el
+ * category_7 --"Back-end Margin" en vez de "BM Margin"--. Fuera de la lista
+ * gana el gl_name, que es el especifico: para 41215 eso es "Cures" y no
+ * "Fee Income, Net", que es el cajon de tres cuentas donde cae.
+ */
+export function conceptLabel(
+  glName: string | null | undefined,
+  category7: string | null | undefined,
+): string {
+  if (glName && CONCEPT_ORDER.includes(glName)) return glName;
+  if (category7 && CONCEPT_ORDER.includes(category7)) return category7;
+  return glName ?? category7 ?? "—";
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * TRES DEFINICIONES DE "MARGEN", LAS TRES CORRECTAS
  * ═══════════════════════════════════════════════════════════════════════════
  *
@@ -287,11 +404,42 @@ export function expectedMarginAccounts(branch: string): readonly string[] {
  * charging it to one would make the loan look worse for something outside its
  * control.
  */
-export const NET_GROUPS: readonly string[] = ["Revenue"];
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * QUE ENTRA EN EL RESULTADO DE UN PRESTAMO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠ ERA SOLO "Revenue", Y ESO HACIA QUE ESTA PANTALLA Y EL P&L POR LOAN
+ * OFFICER DIERAN NUMEROS DISTINTOS PARA EL MISMO PRESTAMO. En 710002042266,
+ * 7.986,43 aqui contra 8.403,13 alli, y la diferencia eran tres costes
+ * --tasacion, informe de credito, condominio-- que SI causa el prestamo.
+ *
+ * Dos definiciones de "lo que dejo este prestamo" viviendo en dos pantallas es
+ * el patron que este proyecto lleva desmontando desde el principio: no falla
+ * nada, las dos parecen correctas, y se descubre comparando.
+ *
+ * ─── LO QUE MUEVE EL CAMBIO, MEDIDO EL 2026-09-15 ──────────────────────────
+ *
+ *   neto agregado    5.592.262,71  ->  5.624.133,60   +31.870,89   (+0,57%)
+ *   prestamos que cambian de cifra                542 de 712
+ *   prestamos CON revenue que cambian de signo      0
+ *   prestamos sin ninguna linea de revenue        121, que pasan de no tener
+ *                                                 cifra a tener -20.721,45
+ *                                                 entre todos
+ *
+ * Ni un solo prestamo con ingresos pasa a negativo. Los 121 que aparecen en
+ * rojo son prestamos que hoy no enseñan nada y SI tienen coste apuntado: verlo
+ * es el objetivo, no un efecto secundario.
+ *
+ * ⚠ SG&A Y PERSONNEL SIGUEN FUERA, y por su razon original: una campaña de
+ * marketing no la causa un prestamo. Ademas no cambiarian nada -- 70100
+ * Marketing son 270 lineas en 100 prestamos que suman EXACTAMENTE 0,00, y
+ * 60125 Operations Payroll otras 24 en 12, igual.
+ */
+export const NET_GROUPS: readonly string[] = ["Revenue", "Direct Production Costs"];
 
 /** Groups deliberately absent from this view entirely. */
 export const NON_NET_GROUPS: readonly string[] = [
-  "Direct Production Costs",
   "Selling, General & Administrative (S, G & A)",
   "Personnel Costs",
 ];

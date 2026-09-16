@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { X, ArrowUpDown, LayoutGrid, Rows3 } from "lucide-react";
+import { X, ArrowUpDown, LayoutGrid, Rows3, UserCircle } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
+import { LoPnlView } from "@/components/lo-pnl-view";
+import { LoanPnlCard } from "@/components/loan-pnl-card";
 import {
   ALL_MARGIN_ACCOUNTS,
   NET_GROUPS,
+  conceptLabel,
   expectedMarginAccounts,
 } from "@/lib/loan-detail-accounts";
 
@@ -13,6 +16,10 @@ interface LoanLine {
   gl_code: string;
   gl_name: string;
   category_7: string;
+  /** El grupo contable: reparte la linea en su peldaño. */
+  category_6: string | null;
+  /** La sucursal del apunte. Null en el resumen, que suma varias. */
+  branch: string | null;
   amount: number;
 }
 
@@ -36,6 +43,13 @@ interface LoanRow {
   costs: number;
   net: number;
   net_bps: number | null;
+  /** De comp.loan_commission. Null = no cruza, que NO es cero. */
+  commission: number | null;
+  /** net - commission. Null cuando la comision no se conoce. */
+  contribution: number | null;
+  contribution_bps: number | null;
+  /** Su mes no tiene P&L cargado: la contribucion sale negativa por eso. */
+  pl_pending: boolean;
   no_margin: boolean;
   /** Every margin account, and only margin. See margin_net in the endpoint. */
   margin_net: number;
@@ -52,6 +66,10 @@ interface Summary {
   costs: number;
   net: number;
   net_bps: number | null;
+  commission: number;
+  loans_without_commission: number;
+  contribution: number;
+  contribution_bps: number | null;
 }
 
 interface DetailData {
@@ -140,7 +158,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
   const [sortDesc, setSortDesc]   = useState(true);
-  const [view, setView] = useState<"cards" | "table">("cards");
+  const [view, setView] = useState<"cards" | "table" | "officers">("cards");
   /**
    * Branch filter inside the window, over the branch each loan was produced on.
    *
@@ -233,12 +251,17 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
     for (const l of inScope) for (const [k, v] of Object.entries(l.concepts)) concepts[k] = (concepts[k] ?? 0) + v;
     const net = inScope.reduce((s, l) => s + l.net, 0);
     const marginNet = inScope.reduce((s, l) => s + l.margin_net, 0);
+    // Solo las comisiones conocidas. Un null contado como cero diria que ese
+    // prestamo no le costo nada a la sucursal.
+    const commission = inScope.reduce((s, l) => s + (l.commission ?? 0), 0);
+    const contribution = net - commission;
     return {
       loan_count: inScope.length,
       without_margin: inScope.filter((l) => l.no_margin).length,
-      volume, concepts, net, marginNet,
+      volume, concepts, net, marginNet, commission, contribution,
       net_bps:    volume ? (net / volume) * 10000 : null,
       margin_bps: volume ? (marginNet / volume) * 10000 : null,
+      contribution_bps: volume ? (contribution / volume) * 10000 : null,
     };
   }, [inScope]);
 
@@ -273,7 +296,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
       <div
         role="dialog"
         aria-label="Loan detail"
-        className="fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-6xl flex-col border-l border-slate-200 bg-white shadow-2xl"
+        className="fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-7xl flex-col border-l border-slate-200 bg-white shadow-2xl"
       >
         <div className="border-b border-slate-200 px-5 py-4">
           <div className="flex items-start justify-between gap-3">
@@ -300,6 +323,17 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
             <div className="flex items-center gap-1 rounded-full bg-slate-100 p-1">
               <ViewTab active={view === "cards"} onClick={() => setView("cards")} icon={<LayoutGrid size={12} />} label="Mini P&L Cards" />
               <ViewTab active={view === "table"} onClick={() => setView("table")} icon={<Rows3 size={12} />} label="Table List" />
+              {/*
+                * ⚠ AQUI Y NO EN UNA PANTALLA APARTE, porque es donde se trabaja.
+                * El modulo existe tambien en /lo-pnl, pero la pregunta "¿quien
+                * de MI sucursal se paga solo?" se hace mirando el P&L de la
+                * sucursal, no navegando a otro sitio.
+                *
+                * Comparte el calculo con la pantalla propia -- un solo
+                * componente, LoPnlView. Dos copias serian dos definiciones de
+                * "cuanto produce esta persona" separandose sin que nada falle.
+                */}
+              <ViewTab active={view === "officers"} onClick={() => setView("officers")} icon={<UserCircle size={12} />} label="P&L by Loan Officer" />
             </div>
             {branchOptions.length > 1 && (
               <ReportFilter label="Branch" options={branchOptions}
@@ -315,8 +349,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
               <ArrowUpDown size={11} />
               Net bps {sortDesc ? "high → low" : "low → high"}
             </button>
-            <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
-              Net = {(data?.net_groups ?? NET_GROUPS).join(" + ")}
+            {/*
+              * ⚠ LA NOTA DE COMPENSAFE, UNA SOLA VEZ Y AQUI. Estaba repetida en
+              * cada tarjeta del mini P&L: con sesenta y cinco en la fila deja de
+              * leerse y ocupa el sitio del dato. Dicha en la definicion del
+              * total vale para toda la pantalla, que es su alcance real.
+              */}
+            <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500"
+                  title="The commission comes from Compensafe, not from the P&L: it has no GL account and cannot be reconciled against the ledger like the rest of the card.">
+              Contribution = {(data?.net_groups ?? NET_GROUPS).join(" + ")} − LO commission
+              <span className="ml-1.5 font-normal text-slate-400">from Compensafe, not a P&amp;L account</span>
             </span>
             {/* A whole column of dashes reads as a broken column, and that is
                 how this one was reported. It is not broken: July 2026 is the
@@ -346,11 +388,38 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
           {error && <p className="m-5 rounded-xl border border-red-100 bg-red-50 px-4 py-2 text-xs text-red-600">{error}</p>}
 
           {data && !loading && view === "cards" && (
-            <div className="scrollbar-thin-slate flex max-w-full flex-row gap-4 overflow-x-auto p-4 pb-6">
+            <div className="scrollbar-thin-slate flex max-w-full flex-row items-stretch gap-4 overflow-x-auto p-4 pb-6">
               {data.summary.loan_count > 0 && (
                 <SummaryCard s={data.summary} month={data.month} />
               )}
               {sorted.map((l) => <MiniPL key={l.loan_number} l={l} />)}
+            </div>
+          )}
+
+          {view === "officers" && (
+            /*
+              * ⚠ LA SUCURSAL SALE DEL INFORME, Y EL FILTRO DE DENTRO SOLO LA
+              * ESTRECHA. Miraba SOLO `branchFilter` -- el filtro de dentro del
+              * modal, que arranca vacio-- asi que abrir el P&L de la 716 y
+              * pulsar la pestaña daba `branch = null`: la vista de todas las
+              * sucursales, dentro de la ventana de una.
+              *
+              * `branches` es lo que el informe ya tiene acotado cuando se abre
+              * la ventana. Con varias seleccionadas por cualquiera de los dos
+              * lados se enseñan todas: "los loan officers de estas tres
+              * sucursales" no es una pregunta que esta tabla conteste bien, y
+              * quedarse con la primera seria elegir por el usuario en silencio.
+              */
+            <div className="px-1 py-2">
+              <LoPnlView
+                branch={
+                  branchFilter.length === 1 ? branchFilter[0]
+                    : branchFilter.length === 0 && branches.length === 1 ? branches[0]
+                    : null
+                }
+                month={data?.month ?? month}
+                year={data?.year ?? year}
+              />
             </div>
           )}
 
@@ -392,7 +461,19 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                     Total revenue
                     <span className="block font-normal normal-case text-[9px] text-slate-500">margin + other</span>
                   </Th>
-                  <Th className="text-right">Total bps</Th>
+                  {/* ⚠ LA COMISION Y LA CONTRIBUCION TAMBIEN EN LA TABLA, no
+                      solo en las tarjetas. Con el total de las tarjetas restando
+                      la comision y el de la tabla sin restarla, la misma pantalla
+                      daria dos cifras con nombres parecidos en dos pestañas --
+                      que es exactamente el fallo que la nota de arriba describe. */}
+                  <Th className="text-right">
+                    LO comm.
+                  </Th>
+                  <Th className="text-right bg-[#001A40]/5">
+                    Contribution
+                    <span className="block font-normal normal-case text-[9px] text-slate-500">after paying the LO</span>
+                  </Th>
+                  <Th className="text-right bg-[#001A40]/5">Contrib. bps</Th>
                 </tr>
               </thead>
               <tbody>
@@ -419,7 +500,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                     <Amount v={l.net - l.margin_net} amount={l.loan_amount}
                             title={otherRevenueDetail(l)} />
                     <Amount v={l.net} amount={l.loan_amount} bold />
-                    <Td className={`text-right font-mono tabular-nums font-bold ${num(l.net)}`}>{fmtBps(l.net_bps)}</Td>
+                    {/* Null no es cero: el prestamo no cruza con Compensafe. */}
+                    {l.commission == null
+                      ? <Td className="text-right font-mono text-slate-300" title="This loan does not cross with Compensafe. Not the same as a zero commission.">—</Td>
+                      : <Amount v={-l.commission} amount={l.loan_amount} />}
+                    {l.contribution == null
+                      ? <Td className="bg-[#001A40]/5 text-right font-mono text-slate-300" title="Without a known commission there is no contribution to compute. Showing the gross here would say nobody was paid.">—</Td>
+                      : <Amount v={l.contribution} amount={l.loan_amount} bold />}
+                    <Td className={`bg-[#001A40]/5 text-right font-mono tabular-nums font-bold ${num(l.contribution ?? 0)}`}>
+                      {fmtBps(l.contribution_bps)}
+                    </Td>
                   </tr>
                 ))}
               </tbody>
@@ -452,8 +542,10 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                   <Amount v={totals.net - totals.marginNet} amount={totals.volume} bold
                           title={otherConcepts.length ? `Concepts outside margin: ${otherConcepts.join(", ")}` : undefined} />
                   <Amount v={totals.net} amount={totals.volume} bold />
-                  <Td className={`text-right font-mono font-bold tabular-nums ${num(totals.net)}`}>
-                    {fmtBps(totals.net_bps)}
+                  <Amount v={-totals.commission} amount={totals.volume} bold />
+                  <Amount v={totals.contribution} amount={totals.volume} bold />
+                  <Td className={`bg-[#001A40]/5 text-right font-mono font-bold tabular-nums ${num(totals.contribution)}`}>
+                    {fmtBps(totals.contribution_bps)}
                   </Td>
                 </tr>
               </tfoot>
@@ -569,38 +661,34 @@ function StraySection({ bucket, title, note }: { bucket: StrayBucket | null; tit
 
 // ─── Mini P&L card ────────────────────────────────────────────────────────────
 
+/**
+ * La tarjeta de un prestamo. La pinta `LoanPnlCard`, el MISMO componente que el
+ * modulo de P&L por Loan Officer, para que las dos pantallas no se separen.
+ *
+ * ⚠ AQUI NO SE PASA `commission`, y esa es la unica diferencia de fondo entre
+ * las dos: esta pantalla contesta "¿que dejo el prestamo?" y el modulo de LO
+ * contesta "¿que dejo DESPUES de pagar al loan officer?". Por eso el banner
+ * dice TOTAL REVENUE y no TOTAL CONTRIBUTION, y por eso el numero es otro.
+ * Unificarlo es una decision de negocio sobre el P&L de sucursal, no un detalle
+ * de presentacion.
+ */
 function MiniPL({ l }: { l: LoanRow }) {
-  // Everything between Revenue and Direct Production Costs, always. Nothing
-  // folded away, so the block totals are by construction the sum of what is on
-  // screen — the reader can add the column up and get the badge.
-
   return (
-    <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
-      <div>
-        <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-100/90 p-3.5 text-xs font-bold text-[#001A40]">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-mono">{l.loan_number}</span>
-            <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{l.branch}</span>
-          </div>
-          <span className="truncate font-semibold text-slate-600">{l.borrower_name ?? "—"}</span>
-          {/* Program and officer read as identity, not as data: they answer
-              "whose loan is this and of what kind" before any figure. */}
-          <span className="truncate text-[10px] font-normal text-slate-500">
-            {l.loan_program ?? "—"} · {l.loan_officer ?? "—"}
-          </span>
-          <div className="flex items-center justify-between">
-            <span className="font-mono tabular-nums text-slate-500">{money(l.loan_amount)}</span>
-            <Signals l={l} />
-          </div>
-        </div>
-
-        <div className="px-3 pt-2">
-          <Block title="Total revenue" total={l.revenue} amount={l.loan_amount} lines={l.lines} loan={l} />
-        </div>
-      </div>
-
-      <NetBanner net={l.net} netBps={l.net_bps} />
-    </div>
+    <LoanPnlCard
+      title={l.loan_number}
+      tag={l.branch}
+      subtitle={l.borrower_name}
+      meta={[l.loan_program, l.loan_info_channel, l.loan_officer].filter(Boolean).join(" · ") || null}
+      amount={l.loan_amount}
+      branch={l.branch}
+      b2b={l.b2b}
+      processing={l.processing}
+      support_on_demand={l.support_on_demand}
+      signals={<Signals l={l} />}
+      lineas={l.lines}
+      commission={l.commission}
+      total={{ label: "TOTAL CONTRIBUTION", value: l.contribution }}
+    />
   );
 }
 
@@ -626,25 +714,37 @@ function Block({ title, total, amount, lines, loan }: {
       {lines.length === 0 && (
         <p className="px-3 pb-1 text-[10px] italic text-slate-400">None</p>
       )}
-      {lines.map(({ gl_code, gl_name, category_7, amount: v }) => {
-        const booked = loan?.concept_branches[category_7] ?? [];
-        // Where the amount is booked, shown only when it is not the loan's own
-        // branch — DM Margin lives in 700 for loans every branch originates, and
-        // the reader needs to know that without being told it on every line.
-        const elsewhere = loan ? booked.filter((b) => b !== loan.branch) : [];
+      {/*
+        * ⚠ LA KEY ES EL INDICE Y NO EL gl_code, y es la consecuencia visible de
+        * que las lineas vengan crudas: un prestamo puede traer TRES filas de
+        * 41205 --el cobro, su salida de una sucursal y su entrada en otra-- y
+        * con el gl_code por key React pintaria una sola.
+        */}
+      {lines.map(({ gl_code, gl_name, category_7, branch, amount: v }, i) => {
+        /*
+         * ⚠ LA SUCURSAL SALE DE LA LINEA, NO DE `concept_branches`. Ese mapa es
+         * por category_7, asi que decia "@700" en TODAS las filas de "Fee
+         * Income, Net" en cuanto una sola estuviera en la 700 -- y con las
+         * lineas crudas eso es justo lo que hay que distinguir: cual de las tres
+         * filas de 41205 es la de corporativo.
+         */
+        const elsewhere = loan && branch && branch !== loan.branch ? branch : null;
         const flagged = loan ? loan.unexpected_accounts.includes(category_7) : false;
         return (
-          <div key={gl_code} className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
+          <div key={`${gl_code}-${i}`} className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
             <span className={`truncate ${flagged ? "text-amber-700" : "text-slate-600"}`}>
               {/* The GL code, so a line can be tied back to the ledger.
                   category_7 nets several accounts into one figure that
                   reconciles against nothing. */}
               <span className="mr-1.5 font-mono text-[9px] text-slate-400">{gl_code}</span>
-              {gl_name}
-              {elsewhere.length > 0 && (
-                <span title={`Booked in branch ${elsewhere.join(", ")}`}
+              {/* El mismo nombre que en la tarjeta, por el mismo helper:
+                  "Back-end Margin" antes que "BM Margin", pero "Lender Credits"
+                  antes que su category_7, que lo fundiria con otras dos. */}
+              {conceptLabel(gl_name, category_7)}
+              {elsewhere && (
+                <span title={`Booked in branch ${elsewhere}, while the loan is branch ${loan?.branch}. Common and not an error: part of the margin is booked in 700 by design.`}
                   className="ml-1 rounded bg-slate-200/70 px-1 py-0.5 font-mono text-[9px] text-slate-600">
-                  @{elsewhere.join(",")}
+                  @{elsewhere}
                 </span>
               )}
               {flagged && (
@@ -693,10 +793,25 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
           )}
         </div>
         <div className="px-3 pt-2">
-          <Block title="Total revenue" total={s.revenue} amount={s.volume} lines={s.lines} />
+          <Block title="Revenue and direct costs" total={s.revenue} amount={s.volume} lines={s.lines} />
+          {/* La comision del mes, con su origen dicho: en esta pantalla nadie
+              espera una cifra que no este en la contabilidad. */}
+          <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
+            {/* El mismo nombre que en las tarjetas de prestamo, y sin repetir
+                el origen: eso se dice una vez, en la definicion del total. */}
+            <span className="uppercase tracking-wide">&minus; Commission on loans</span>
+            <span className="font-mono tabular-nums text-rose-700">{fmt(-s.commission)}</span>
+          </div>
+          {s.loans_without_commission > 0 && (
+            <p className="px-3 pb-1 text-[10px] text-slate-500">
+              {s.loans_without_commission} loan{s.loans_without_commission === 1 ? " does" : "s do"} not cross
+              with Compensafe, so no commission is known for {s.loans_without_commission === 1 ? "it" : "them"} —
+              left out rather than counted as zero.
+            </p>
+          )}
         </div>
       </div>
-      <NetBanner net={s.net} netBps={s.net_bps} />
+      <NetBanner net={s.contribution} netBps={s.contribution_bps} />
     </div>
   );
 }
@@ -721,7 +836,7 @@ function NetBanner({ net, netBps }: { net: number; netBps: number | null }) {
           le daba a esta misma cifra. Que el numero que coincide entre las dos
           vistas se llamara de dos formas, mientras los dos que NO coinciden
           compartian la palabra "net", es lo que hacia parecer que no cuadraban. */}
-      <span>TOTAL REVENUE</span>
+      <span>TOTAL CONTRIBUTION</span>
       <span>
         <span className={`font-mono font-bold tabular-nums ${loss ? "text-rose-700" : "text-emerald-300"}`}>
           {fmt(net)}
@@ -749,9 +864,20 @@ function ViewTab({ active, onClick, icon, label }: {
 function Signals({ l }: { l: LoanRow }) {
   return (
     <span className="inline-flex items-center gap-0.5">
-      {l.b2b && <Signal label="B2B" />}
-      {l.support_on_demand && <Signal label="On Demand" />}
-      {l.processing && <Signal label="Processing" />}
+      {/*
+       * ⚠ B2B / ON DEMAND / PROCESSING SALEN DE LA TARJETA, NO DE AQUI, y por
+       * eso se quitaron: la tarjeta compartida ya los pinta desde sus propias
+       * props, y este componente se le pasa ademas como `signals`, asi que los
+       * tres salian DOS VECES en la misma ficha.
+       *
+       * Aqui se quedan solo los avisos que la tarjeta no conoce.
+       */}
+      {l.pl_pending && (
+        <span title="No P&L is loaded for this month yet, so the commission is subtracted from revenue that has not been booked. Not a loss: a missing period."
+              className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+          P&L pending
+        </span>
+      )}
       {l.no_margin && (
         <span className="ml-1 rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">
           no margin

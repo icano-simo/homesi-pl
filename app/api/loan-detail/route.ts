@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
-import { getClosedLoans } from "@/lib/loan-source";
+import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   ALL_MARGIN_ACCOUNTS,
+  CONCEPT_ORDER,
   isBankedChannel,
   MARGIN_FOR_PERIOD,
   NET_GROUPS,
@@ -33,6 +34,19 @@ export interface LoanDetailLine {
   gl_code: string;
   gl_name: string;
   category_7: string;
+  /**
+   * El grupo contable, que reparte la linea en su peldaño dentro de la tarjeta.
+   * Sin el, las dos pantallas pintarian la misma tarjeta con bloques distintos.
+   */
+  category_6: string | null;
+  /**
+   * La sucursal DEL APUNTE, que no siempre es la del prestamo.
+   *
+   * Sin ella, dos filas de la misma cuenta con signos opuestos se leen como un
+   * duplicado; con ella se ve que una sale de una sucursal y la otra entra en
+   * otra. Es la columna que convierte el ruido en informacion.
+   */
+  branch: string | null;
   amount: number;
 }
 
@@ -48,7 +62,15 @@ export interface LoanDetailLine {
  * Processing Fees (55275) — with the larger concepts first and, inside each,
  * the larger amounts first.
  */
-const LINE_ORDER: readonly string[] = ["Back-end Margin", "Discount Income", "Front-end Margin"];
+/*
+ * ⚠ ERA UNA LISTA DE TRES Y AHORA ES LA CANONICA, `CONCEPT_ORDER`. Tres
+ * anclas dejaban el resto ordenado por importe, asi que de la cuarta linea en
+ * adelante cada tarjeta sacaba las cuentas en un sitio distinto -- justo lo que
+ * el orden fijo viene a evitar. La lista vive en lib/loan-detail-accounts.ts,
+ * que es donde vive todo lo que se sabe de las cuentas, y la comparten esta
+ * ruta y el componente de tarjeta.
+ */
+const LINE_ORDER: readonly string[] = CONCEPT_ORDER;
 
 function orderLines(lines: LoanDetailLine[]): LoanDetailLine[] {
   const anchored: LoanDetailLine[] = [];
@@ -96,6 +118,36 @@ export interface LoanDetailRow {
   costs: number;
   net: number;
   net_bps: number | null;
+  /*
+   * ─── LA COMISION DEL LOAN OFFICER, Y LO QUE QUEDA DESPUES ────────────────
+   *
+   * ⚠ NO SALE DEL P&L SINO DE `comp.loan_commission`, asi que no tiene gl_code
+   * y no se puede cuadrar contra el libro mayor como el resto de la tarjeta. La
+   * linea lo dice en pantalla: en esta pantalla nadie espera una cifra que no
+   * este en la contabilidad.
+   *
+   * ⚠ NULL NO ES CERO. Un prestamo que no cruza con Compensafe tiene comision
+   * DESCONOCIDA, y por eso su contribucion tambien es null en vez de igual al
+   * revenue: enseñar el bruto ahi diria que no se le pago a nadie.
+   */
+  commission: number | null;
+  contribution: number | null;
+  contribution_bps: number | null;
+  /**
+   * El mes de este prestamo no tiene P&L cargado todavia.
+   *
+   * ⚠ SIN ESTA MARCA, RESTAR LA COMISION CONVIERTE NUEVE CIERRES EN PERDIDAS
+   * QUE NO EXISTEN. Medido el 2026-09-16: de los 13 prestamos que pasan a
+   * negativo al restar la comision, NUEVE cerraron en septiembre de 2026 y no
+   * tienen NI UNA linea de P&L -- Compensafe ya pago y el margen aun no se ha
+   * contabilizado. Uno de ellos sale a -11.488,07 y lo unico que pasa es que
+   * falta cargar el mes.
+   *
+   * Es el mismo caso que el modulo de LO ya aparta con `plPending`, y aqui
+   * aparece solo ahora: hasta que el total no restaba nada, un prestamo sin
+   * lineas daba cero y no llamaba la atencion.
+   */
+  pl_pending: boolean;
   /** No margin account carries an amount. The question this view answers. */
   no_margin: boolean;
 }
@@ -170,6 +222,41 @@ export async function GET(req: NextRequest) {
 
     const loanNumbers = loans.map((l) => l.loan_number as string);
 
+    // Hasta que mes llega el P&L cargado, para poder decir "falta el mes" en vez
+    // de enseñar una perdida que no existe. Mismo helper que el modulo de LO.
+    const plCoverage = await getPlCoverage();
+
+    /*
+     * La comision del loan officer, de `comp.loan_commission`.
+     *
+     * ⚠ QUE FALLE NO PUEDE TUMBAR LA PANTALLA, igual que en el modulo de LO:
+     * sin Compensafe las comisiones salen null --que es "no se sabe", no
+     * "cero"-- y el resto de la tarjeta se ve igual.
+     *
+     * ⚠ `lo_pay`, NUNCA `total_pay`. `total_pay` incluye `other_pay`, que es el
+     * override y se le paga al MANAGER del loan officer -- las descripciones del
+     * origen lo dicen literalmente ("BR 770 - Override on Badovinac"). Sumarlo
+     * atribuiria el pago de uno a otro.
+     */
+    const commissionByLoan = new Map<string, number>();
+    try {
+      const comp = createServerClient("comp");
+      for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
+        const chunk = loanNumbers.slice(i, i + IN_CHUNK);
+        if (chunk.length === 0) break;
+        const { data, error } = await comp
+          .from("loan_commission")
+          .select("loan_number,lo_pay")
+          .in("loan_number", chunk);
+        if (error) throw new Error(error.message);
+        for (const r of data ?? []) {
+          if (r.lo_pay != null) commissionByLoan.set(r.loan_number as string, Number(r.lo_pay));
+        }
+      }
+    } catch (e) {
+      console.error("[loan-detail] comp.loan_commission no disponible:", e);
+    }
+
     // ── What those loans earned, in the books the filter asks for ───────────
     // The raw branch filter, NOT resolveBaseBranches. The two answer different
     // questions: resolveBaseBranches decides which loans belong to the card,
@@ -204,19 +291,65 @@ export async function GET(req: NextRequest) {
       txs.push(...rows);
     }
 
-    // ── Aggregate by loan and concept ───────────────────────────────────────
-    // By concept, never by row. There are genuine reversal pairs in the data —
-    // one loan carries Processing Income +1,736.17 and -1,736.17, another Fee
-    // Income +333 and -333 — which are reclassifications. Listed as rows they
-    // read as duplicates; summed by category_7 they cancel, which is what they
-    // mean.
+    /*
+     * ═══════════════════════════════════════════════════════════════════════
+     * LAS LINEAS VAN CRUDAS, UNA POR APUNTE, Y ANTES SE SUMABAN POR gl_code
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * ⚠ AQUI DECIA "By concept, never by row", y la razon que daba era que los
+     * pares opuestos son RECLASIFICACIONES: listados como filas se leen como
+     * duplicados, sumados se anulan, que es lo que significan. Se revierte
+     * porque los dos ejemplos que citaba resultaron no ser reclasificaciones,
+     * medido el 2026-09-16 contra la base:
+     *
+     * ── 1. EL PAR DE 41205 EN 710002042266 ES UN TRASLADO A LA 700 ─────────
+     *
+     *     2026-05-08  710  +389,00  "710002042266|PEREZ | UBALDO"
+     *     2026-05-31  710  -333,00  "ADMIN FEE ON FILE 710002042266"
+     *     2026-05-31  700  +333,00  "ADMIN FEE ON FILE 710002042266"
+     *
+     *   No se anula: la 710 cede 333,00 y la 700 los recibe, el mismo dia y con
+     *   la misma descripcion. Sumado por cuenta queda "+56,00" y desaparece que
+     *   ese ingreso se lo llevo corporativo.
+     *
+     * ── 2. UN PRESTAMO ENTERO QUE CAMBIA DE SUCURSAL, 728002018954 ─────────
+     *
+     *     41306 BM Margin  733  +7.215,25   se apunta en la 733
+     *     41306 BM Margin  733  -7.215,25   se saca de la 733
+     *     41306 BM Margin  728  +7.215,25   se mete en la 728
+     *
+     *   Mismo patron en nueve cuentas, 18 filas. Las dos primeras PARECEN una
+     *   reclasificacion --misma cuenta, misma sucursal, mismo dia, misma
+     *   descripcion-- y son la pata de salida de un traslado. Agrupado, la 733
+     *   queda en cero y se pierde que el prestamo se movio de sucursal.
+     *
+     * ── 3. RECLASIFICACIONES DE VERDAD SI HAY, Y NO ENTRAN EN EL NETO ──────
+     *
+     *   Buscadas con el test estricto --mismo prestamo, misma cuenta, misma
+     *   sucursal, misma fecha, misma descripcion, signos opuestos-- salen 76
+     *   filas en 18 prestamos. Descontados los dos casos de arriba, las
+     *   genuinas son UNA SOLA CUENTA:
+     *
+     *     70100 Marketing Expense   48 filas   12 prestamos   18.751,42
+     *
+     *   El B2B success fee, apuntado y anulado entero en las dos sucursales
+     *   (+640/-640 en la 733 y +640/-640 en la 700). Y 70100 es SG&A, que esta
+     *   pantalla excluye por NET_GROUPS: o sea que las unicas reversiones
+     *   reales estan en la unica cuenta que este neto no cuenta.
+     *
+     * Por eso las filas crudas no le quitan nada a nadie: lo que se leia como
+     * duplicado resulto ser un traslado entre sucursales, y para verlo hace
+     * falta la columna `branch` que antes no viajaba por linea.
+     *
+     * ⚠ LA TARJETA RESUMEN SIGUE SUMANDO, y no es una incoherencia: ahi se
+     * juntan cientos de prestamos y una fila cruda suelta no significa nada. La
+     * fila cruda contesta "que le paso a ESTE prestamo"; la suma contesta
+     * "cuanto pesa esta cuenta". Son dos preguntas.
+     */
     type Agg = {
       concepts: Record<string, number>;
-      /** gl_code -> one displayable line. category_7 groups several GL
-       *  accounts into one figure that cannot be tied back to the ledger:
-       *  "Fee Income, Net" is Cures (41215) and Other HUD Fees (41205)
-       *  netted together, and only the GL split reconciles. */
-      lines: Record<string, { gl_code: string; gl_name: string; category_7: string; amount: number }>;
+      /** Un apunte por fila, en el orden en que llegan. Ver la nota de arriba. */
+      lines: LoanDetailLine[];
       groups: Record<string, number>;
       months: Set<string>;
       /** category_7 -> branches the amount is booked in. Not the loan's branch:
@@ -227,12 +360,17 @@ export async function GET(req: NextRequest) {
     for (const t of txs) {
       if (!t.category_7) continue;
       let a = agg.get(t.loan_number);
-      if (!a) { a = { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
+      if (!a) { a = { concepts: {}, lines: [], groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
       const v = money(t.movement);
       a.concepts[t.category_7] = (a.concepts[t.category_7] ?? 0) + v;
-      const gl = t.gl_code ?? "—";
-      const line = (a.lines[gl] ??= { gl_code: gl, gl_name: t.gl_name ?? t.category_7, category_7: t.category_7, amount: 0 });
-      line.amount += v;
+      a.lines.push({
+        gl_code: t.gl_code ?? "—",
+        gl_name: t.gl_name ?? t.category_7,
+        category_7: t.category_7,
+        category_6: t.category_6 ?? null,
+        branch: t.branch ?? null,
+        amount: v,
+      });
       if (t.branch) (a.conceptBranches[t.category_7] ??= new Set()).add(t.branch);
       const g = t.category_6 ?? "(none)";
       a.groups[g] = (a.groups[g] ?? 0) + v;
@@ -247,14 +385,43 @@ export async function GET(req: NextRequest) {
     }
 
     const rows: LoanDetailRow[] = loans.map((l) => {
-      const a = agg.get(l.loan_number) ?? { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
+      const a: Agg = agg.get(l.loan_number) ?? { concepts: {}, lines: [], groups: {}, months: new Set<string>(), conceptBranches: {} };
       const amount = money(l.loan_amount);
 
-      // Revenue is the whole story here: NET_GROUPS holds one group, so the
-      // net is its total. costs stays at zero for the shape of the payload.
-      const revenue = a.groups["Revenue"] ?? 0;
+      /*
+       * ⚠ SE SUMA SOBRE NET_GROUPS, NO SOBRE "Revenue" A PELO. Era
+       * `a.groups["Revenue"]`, y cuando NET_GROUPS paso a llevar tambien los
+       * costes directos, esa linea habria seguido devolviendo solo los ingresos
+       * mientras la consulta de arriba YA traia las filas de coste: el total
+       * habria dejado de ser la suma de las lineas que la tarjeta enseña, sin
+       * que nada fallara.
+       *
+       * `costs` se queda en cero porque los costes directos ya van dentro del
+       * neto; existe por la forma del payload, no como segundo grupo.
+       */
+      const revenue = NET_GROUPS.reduce((s, g) => s + (a.groups[g] ?? 0), 0);
       const costs   = 0;
+      /*
+       * ⚠ `net` SIGUE SIENDO revenue + costes directos, SIN la comision, y eso
+       * es a proposito aunque la tarjeta ya enseñe la contribucion.
+       *
+       * La tabla deriva "Other revenue" como `net - margin_net`, de la resta y
+       * no de una segunda suma, para que no pueda discrepar del total que tiene
+       * al lado. Si `net` pasara a llevar la comision restada, esa resta la
+       * metaria dentro de "Other revenue" en silencio: una comision de 5.045,63
+       * apareceria como ingreso ajeno negativo y nadie podria verlo.
+       *
+       * Por eso la comision viaja en su propio campo y la contribucion es una
+       * cifra APARTE, no una redefinicion de esta.
+       */
       const net     = revenue;
+      /** Lo que se le pago al loan officer por este prestamo. Null si no cruza. */
+      const commission = commissionByLoan.has(l.loan_number)
+        ? commissionByLoan.get(l.loan_number)! : null;
+      /** net - commission. Null cuando la comision no se conoce: ver abajo. */
+      const contribution = commission == null ? null : net - commission;
+      /** Su mes no tiene P&L cargado. Ver la nota en LoanDetailRow.pl_pending. */
+      const plPending = !plPeriodLoaded(plCoverage, month, year);
 
       // An account is out of rule when the BRANCH IT IS BOOKED IN does not
       // normally carry it — not when it differs from the loan's branch. DM
@@ -331,6 +498,10 @@ export async function GET(req: NextRequest) {
         foreign_months: [...a.months].sort(),
         revenue, costs, net,
         net_bps: bps(net, amount),
+        commission,
+        contribution,
+        pl_pending: plPending,
+        contribution_bps: contribution == null ? null : bps(contribution, amount),
         no_margin: noMargin,
       };
     });
@@ -347,8 +518,18 @@ export async function GET(req: NextRequest) {
       for (const [c, v] of Object.entries(r.concepts)) {
         summaryConcepts[c] = (summaryConcepts[c] ?? 0) + v;
       }
+      /*
+       * ⚠ LA TARJETA RESUMEN SIGUE SUMANDO POR CUENTA, y ahora que las de cada
+       * prestamo van crudas conviene decir por que no es una incoherencia: aqui
+       * se juntan cientos de prestamos, y una fila cruda suelta entre miles no
+       * es informacion. La fila cruda contesta "¿que le paso a ESTE prestamo?";
+       * la suma contesta "¿cuanto pesa esta cuenta en el mes?".
+       *
+       * Por eso tambien se pierde la sucursal del apunte aqui --se queda la de
+       * la primera fila-- y por eso el resumen no la enseña.
+       */
       for (const ln of r.lines) {
-        const acc = (summaryLines[ln.gl_code] ??= { ...ln, amount: 0 });
+        const acc = (summaryLines[ln.gl_code] ??= { ...ln, branch: null, amount: 0 });
         acc.amount += ln.amount;
       }
     }
@@ -356,6 +537,15 @@ export async function GET(req: NextRequest) {
     const summaryRevenue = rows.reduce((s, r) => s + r.revenue, 0);
     const summaryCosts   = 0;
     const summaryNet     = summaryRevenue;
+    /*
+     * ⚠ SOLO SE SUMAN LAS COMISIONES CONOCIDAS, y se dice cuantas faltan. Un
+     * prestamo que no cruza con Compensafe vale null, no cero: contarlo como
+     * cero diria que ese prestamo no le costo nada a la sucursal, y el total de
+     * contribucion saldria mejor que la realidad.
+     */
+    const summaryCommission = rows.reduce((s, r) => s + (r.commission ?? 0), 0);
+    const loansWithoutCommission = rows.filter((r) => r.commission == null).length;
+    const summaryContribution = summaryNet - summaryCommission;
 
     const summary = {
       loan_count: rows.length,
@@ -371,6 +561,10 @@ export async function GET(req: NextRequest) {
       costs: summaryCosts,
       net: summaryNet,
       net_bps: bps(summaryNet, summaryVolume),
+      commission: summaryCommission,
+      loans_without_commission: loansWithoutCommission,
+      contribution: summaryContribution,
+      contribution_bps: bps(summaryContribution, summaryVolume),
     };
 
     // ── Margin in these books that is not on one of this card's loans ───────
