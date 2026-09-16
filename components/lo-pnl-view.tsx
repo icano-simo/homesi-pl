@@ -164,11 +164,15 @@ function DesglosePrestamo({ l }: { l: LoanRow }) {
   // primero. El orden del P&L de origen no dice nada, y el alfabetico por cuenta
   // esconde el tamaño.
   const porEscalon = new Map<string, LoanLine[]>();
+  const fuera: LoanLine[] = [];
   for (const x of l.lines) {
+    // Fuera de su sucursal no cae en ningun escalon: se enseña aparte y no suma.
+    if (!x.in_branch) { fuera.push(x); continue; }
     const k = escalonDe(x.category_6);
     porEscalon.set(k, [...(porEscalon.get(k) ?? []), x]);
   }
   for (const v of porEscalon.values()) v.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  fuera.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
 
   const subtotal = (k: string) => (porEscalon.get(k) ?? []).reduce((s, x) => s + x.amount, 0);
 
@@ -187,6 +191,11 @@ function DesglosePrestamo({ l }: { l: LoanRow }) {
                   <tr className="border-t-2 border-gray-300 bg-white/70">
                     <td className="px-2 py-1 font-semibold uppercase tracking-wide text-gray-600" colSpan={4}>
                       <span title={esc.hint} className="cursor-help">{esc.label}</span>
+                      {esc.key === "revenue" && l.branch && (
+                        <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-400">
+                          branch {l.branch}
+                        </span>
+                      )}
                     </td>
                     <td className={`px-2 py-1 text-right font-mono tabular-nums font-semibold ${
                       colorNeto(subtotal(esc.key))
@@ -245,6 +254,51 @@ function DesglosePrestamo({ l }: { l: LoanRow }) {
                 </Fragment>
               );
             })}
+
+            {/*
+              * ─────────────────────────────────────────────────────────────
+              * LO QUE NO SE QUEDA ESTA SUCURSAL: SE VE, PERO NO SUMA
+              * ─────────────────────────────────────────────────────────────
+              *
+              * ⚠ ES REVENUE REAL DEL PRESTAMO, y esconderlo seria mentir en la
+              * direccion mas facil de creerse: la escalera cuadraria sola y
+              * nadie sabria que falta nada. En la division son 1.280.161,00 --
+              * el 22,8% de lo que producen los cierres-- casi todo margen de
+              * division contabilizado en la 700.
+              *
+              * Va DESPUES de los escalones y ANTES de la comision, con su
+              * subtotal y en gris, para que se lea como lo que es: dinero del
+              * prestamo que se fue a otro sitio.
+              */}
+            {fuera.length > 0 && (
+              <>
+                <tr className="border-t-2 border-gray-300 bg-white/70">
+                  <td className="px-2 py-1 font-semibold uppercase tracking-wide text-gray-400" colSpan={4}>
+                    Booked elsewhere
+                    <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-400">
+                      not counted here — real revenue on this loan that another branch keeps
+                    </span>
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-gray-400">
+                    {usdExacto(fuera.reduce((s, x) => s + x.amount, 0))}
+                  </td>
+                </tr>
+                {fuera.map((x, i) => (
+                  <tr key={`fuera-${i}`} className="border-t border-gray-200/70 text-gray-400">
+                    <td className="px-2 py-1 pl-5 font-mono">{x.gl_code ?? "—"}</td>
+                    <td className="px-2 py-1" title={x.check_description ?? undefined}>{x.gl_name ?? "—"}</td>
+                    <td className="px-2 py-1">{x.category_7 ?? "—"}</td>
+                    <td className="px-2 py-1">
+                      <span className="rounded border border-slate-300 bg-white px-1 font-mono text-slate-600"
+                            title={`Booked in branch ${x.branch}, while the loan is branch ${l.branch}.`}>
+                        {x.branch ?? "—"}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1 text-right font-mono tabular-nums">{usdExacto(x.amount)}</td>
+                  </tr>
+                ))}
+              </>
+            )}
 
             {/*
               * ⚠ LA COMISION ES UN ESCALON SIN CUENTAS, Y HAY QUE DECIRLO. No
@@ -340,7 +394,21 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
               </td>
               <td className="px-3 py-1 text-gray-500">{l.month} {l.year}</td>
               <td className="px-3 py-1 text-right text-gray-600">{usd(l.loan_amount)}</td>
-              <td className="px-3 py-1 text-right">{usd(l.grossRevenue)}</td>
+              <td className="px-3 py-1 text-right">
+                {usd(l.grossRevenue)}
+                {/*
+                  * Lo contabilizado en otra sucursal, pegado a la columna que
+                  * lo echa de menos. Sin esto, un prestamo con casi todo su
+                  * margen en la 700 enseña un gross revenue pequeño y no hay
+                  * nada en la fila que explique por que.
+                  */}
+                {l.bookedElsewhere !== 0 && (
+                  <span className="ml-1 text-[10px] text-gray-400"
+                        title="Booked on this loan but in another branch, so it is not counted here. Open the loan to see which accounts.">
+                    {usd(l.bookedElsewhere, { signo: true })} elsewhere
+                  </span>
+                )}
+              </td>
               <td className="px-3 py-1 text-right">
                 {usd(l.directCosts)}
                 {/*
@@ -393,7 +461,14 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
               {loans.length} loan{loans.length === 1 ? "" : "s"}
             </td>
             <td className="px-3 py-1.5 text-right">{usd(sum((l) => l.loan_amount ?? 0))}</td>
-            <td className="px-3 py-1.5 text-right">{usd(sum((l) => l.grossRevenue))}</td>
+            <td className="px-3 py-1.5 text-right">
+              {usd(sum((l) => l.grossRevenue))}
+              {sum((l) => l.bookedElsewhere) !== 0 && (
+                <span className="ml-1 text-[10px] font-normal text-gray-400">
+                  {usd(sum((l) => l.bookedElsewhere), { signo: true })} elsewhere
+                </span>
+              )}
+            </td>
             <td className="px-3 py-1.5 text-right">
               {usd(sum((l) => l.directCosts))}
               {hayOtros && (
@@ -628,6 +703,23 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
                     <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBooked)}</dd>
                   </div>
                 )}
+                {/*
+                  * ⚠ LO QUE SE VA A OTRA SUCURSAL, DICHO Y NO SUMADO. Es el
+                  * 22,8% de lo que producen los cierres de la division
+                  * --1.280.161,00-- y casi todo es margen de division en la
+                  * 700. Sin esta linea, la escalera de alguien que produce
+                  * mucho en la 700 sale pequeña y nada en la tarjeta explica
+                  * por que.
+                  */}
+                {o.block1Elsewhere !== 0 && (
+                  <div className="flex items-baseline justify-between gap-4 text-white/40">
+                    <dt>
+                      Booked elsewhere
+                      <span className="ml-1.5 text-[10px]">not counted — another branch keeps it</span>
+                    </dt>
+                    <dd className="font-mono tabular-nums">{usdExacto(o.block1Elsewhere)}</dd>
+                  </div>
+                )}
                 <div className="flex items-baseline justify-between gap-4">
                   <dt className="text-white/70">− LO commission</dt>
                   <dd className="font-mono tabular-nums">{usdExacto(-o.commission)}</dd>
@@ -669,7 +761,7 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
                   <div className="flex items-baseline justify-between gap-4">
                     <dt className="text-white/70">
                       Produced
-                      <span className="ml-1.5 text-[10px] text-white/40">revenue + direct costs, before commission</span>
+                      <span className="ml-1.5 text-[10px] text-white/40">what their own branch kept, before commission</span>
                     </dt>
                     <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
                   </div>
@@ -840,6 +932,7 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
     otros: officers.reduce((s, o) => s + o.block1OtherBooked, 0),
     comision: officers.reduce((s, o) => s + o.block1Commission, 0),
     contribucion: officers.reduce((s, o) => s + o.contribution, 0),
+    fuera: officers.reduce((s, o) => s + o.block1Elsewhere, 0),
     coste: officers.reduce((s, o) => s + o.block2Total, 0),
     neto: officers.reduce((s, o) => s + o.total, 0),
   }), [officers]);
@@ -938,6 +1031,22 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
             The commission column is shown because it is the business question — what this person
             earned on their closings — but it is <span className="font-medium">not</span> subtracted:
             that money is paid through payroll, and subtracting both would count it twice.
+          </p>
+          {/*
+            * ⚠ ESTA SALVEDAD ES NUEVA Y CAMBIA LO QUE SIGNIFICA CADA CIFRA DE
+            * LA PANTALLA, asi que va la primera. Antes se contaba todo el P&L
+            * del prestamo; ahora solo lo contabilizado en su sucursal, que es
+            * el 77,2%.
+            */}
+          <p>
+            <span className="font-semibold text-gray-700">
+              Only what the loan’s own branch books.
+            </span>{" "}
+            A loan’s revenue is not all booked in the branch that produced it — most of the
+            division margin lands in 700. Those lines are real and they are shown, under
+            “Booked elsewhere”, but they are not counted in any column here: across the division
+            that is {usdExacto(Math.abs(totales.fuera))} of the closings’ revenue. Branch
+            “Affinity” is read as 716, which is where its loans are booked.
           </p>
           <p>
             <span className="font-semibold text-gray-700">
@@ -1204,6 +1313,12 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                         <td className="px-3 py-1.5 text-right text-gray-600">{o.volume ? usd(o.volume) : "—"}</td>
                         <td className="px-3 py-1.5 text-right">
                           {o.loanCount ? usd(o.block1Revenue) : "—"}
+                          {o.block1Elsewhere !== 0 && (
+                            <span className="ml-1 text-[10px] text-gray-400"
+                                  title="Booked on their loans but in another branch — mostly division margin in 700 — so it is not counted here.">
+                              {usd(o.block1Elsewhere, { signo: true })} elsewhere
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-1.5 text-right">
                           {o.loanCount ? usd(o.block1DirectCosts) : "—"}
@@ -1284,7 +1399,15 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                   <td className="px-3 py-2">{officers.length} people</td>
                   <td className="px-3 py-2 text-right">{totales.prestamos}</td>
                   <td className="px-3 py-2 text-right">{usd(totales.volumen)}</td>
-                  <td className="px-3 py-2 text-right">{usd(totales.revenue)}</td>
+                  <td className="px-3 py-2 text-right">
+                    {usd(totales.revenue)}
+                    {totales.fuera !== 0 && (
+                      <span className="ml-1 text-[10px] font-normal text-gray-400"
+                            title="Booked on these loans but in another branch — mostly division margin in 700. Not counted in any column here.">
+                        {usd(totales.fuera, { signo: true })} elsewhere
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right">
                     {usd(totales.costesDirectos)}
                     {totales.otros !== 0 && (

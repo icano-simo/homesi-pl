@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { MARGIN_ALL_GL_LIST } from "@/lib/loan-detail-accounts";
+import { resolveLoanBranchAlias } from "@/lib/loan-branch";
 import { closePeriod } from "@/lib/close-period";
 import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
@@ -348,6 +349,17 @@ export interface LoanLine {
    * 41205 en sucursales distintas parecen un duplicado.
    */
   branch: string | null;
+  /**
+   * La linea esta contabilizada en la sucursal del prestamo, asi que SUMA en
+   * la escalera. Cuando es false la linea se enseña igual, bajo "Booked
+   * elsewhere", pero no entra en ningun escalon.
+   *
+   * ⚠ SE COMPARA CONTRA EL ALIAS, NO CONTRA EL TEXTO CRUDO. "Affinity" es la
+   * 716 en el P&L, y sin resolverlo 39 prestamos saldrian con cero propio y
+   * 326.433,66 desaparecerian sin motivo. Medido: 52 prestamos sin nada propio
+   * antes de resolver el alias, 13 despues.
+   */
+  in_branch: boolean;
   /** El periodo del apunte. No tiene por que ser el del cierre. */
   month: string | null;
   year: number | null;
@@ -397,9 +409,20 @@ export interface LoanRow {
    * se mueven ni un centimo al introducirla.
    */
 
-  /** `category_6 = 'Revenue'`. Lo que el prestamo dejo antes de la comision. */
+  /**
+   * `category_6 = 'Revenue'` CONTABILIZADO EN LA SUCURSAL DEL PRESTAMO.
+   *
+   * ⚠ NO ES TODO EL REVENUE DEL PRESTAMO, y la diferencia es grande: en la
+   * division, 5.633.738,56 de revenue y costes directos contra 4.410.393,46
+   * que se queda su propia sucursal. Un 22% se contabiliza en otro sitio --casi
+   * todo en la 700, que es el margen de division--.
+   *
+   * Lo que se va NO se esconde: viaja en `bookedElsewhere` y el desglose lo
+   * lista con su subtotal. Es revenue real del prestamo; simplemente no se lo
+   * queda esa sucursal.
+   */
   grossRevenue: number;
-  /** `category_6 = 'Direct Production Costs'`. Suma con su signo. */
+  /** `category_6 = 'Direct Production Costs'` en su sucursal. Con su signo. */
   directCosts: number;
   /**
    * Lo que no cae en ninguno de los dos grupos anteriores. Casi siempre cero.
@@ -415,6 +438,15 @@ export interface LoanRow {
    * no es cero.
    */
   otherBooked: number;
+  /**
+   * Todo lo del prestamo contabilizado FUERA de su sucursal. No entra en ningun
+   * escalon ni en la contribucion.
+   *
+   * ⚠ SE DEVUELVE PARA QUE SE VEA, no para sumarlo. Sin este numero el lector
+   * ve una escalera que no cuadra con lo que sabe del prestamo y no tiene forma
+   * de saber cuanto se fue ni adonde.
+   */
+  bookedElsewhere: number;
   /**
    * Lo que se le pago al loan officer por ESTE prestamo, de comp.loan_commission.
    * Null cuando el prestamo no cruza, que NO es cero.
@@ -558,6 +590,15 @@ export interface OfficerBlock {
   block1DirectCosts: number;
   /** Lo que no es ninguno de los dos. Casi siempre cero; ver LoanRow. */
   block1OtherBooked: number;
+  /**
+   * Lo de sus prestamos contabilizado FUERA de la sucursal de cada prestamo.
+   *
+   * ⚠ NO ENTRA EN NINGUN TOTAL. Se devuelve para poder decir cuanto revenue del
+   * prestamo no se queda la sucursal -- 1.280.161,00 en la division, el 22,8%,
+   * casi todo margen de division en la 700. Sin esta cifra la escalera parece
+   * que pierde dinero por el camino.
+   */
+  block1Elsewhere: number;
   /** block1Net - block1Commission. El ultimo escalon, a nivel de persona. */
   contribution: number;
 
@@ -963,6 +1004,24 @@ export async function GET(req: NextRequest) {
     const loans: LoanRow[] = filas.map((f) => {
       const ln = (f.loan_number as string).trim();
       const lineas = lineasPorPrestamo.get(ln) ?? [];
+      /*
+       * ⚠ EL ALIAS SE RESUELVE ANTES DE COMPARAR, Y NO ES UN DETALLE.
+       *
+       * `resolveLoanBranchAlias` --Regla 1 sola-- convierte "Affinity" en 716,
+       * que es donde el P&L contabiliza sus prestamos. Sin resolverlo, los 40
+       * cierres de Affinity saldrian con cero propio y 326.433,66 se irian
+       * enteros a "booked elsewhere" sin ningun motivo real. Medido: 52
+       * prestamos sin nada en su sucursal antes de resolver el alias, 13
+       * despues.
+       *
+       * ⚠ REGLA 1, NO `normalizeLoanBranch`. Esa aplica ademas la Regla 2 y
+       * devuelve null para lo que no empieza por 7 -- las sucursales 150 y 276,
+       * que tienen tres cierres de la division. Con ella, esos tres verian TODO
+       * su revenue como "de otra sucursal" por una regla de alcance contable
+       * que aqui no se esta preguntando.
+       */
+      const sucursalPrestamo = resolveLoanBranchAlias(f.branch as string | null);
+
       let margin = 0;
       let other = 0;
       // Los escalones. Se acumulan en la MISMA pasada que margin/other para que
@@ -971,16 +1030,25 @@ export async function GET(req: NextRequest) {
       let grossRevenue = 0;
       let directCosts = 0;
       let otherBooked = 0;
+      let bookedElsewhere = 0;
       const detail: LoanLine[] = lineas.map((l) => {
         const amt = Number(l.movement ?? 0);
         const esMargen = MARGIN_ALL_GL_LIST.includes((l.gl_code as string) ?? "");
         if (esMargen) margin += amt;
         else other += amt;
-        const grupo = (l.category_6 as string | null) ?? null;
-        if (grupo === GRUPO_REVENUE) grossRevenue += amt;
-        else if (grupo === GRUPO_COSTES_DIRECTOS) directCosts += amt;
-        else otherBooked += amt;
+
+        const enSuSucursal =
+          sucursalPrestamo !== null && (l.branch as string | null) === sucursalPrestamo;
+        if (!enSuSucursal) {
+          bookedElsewhere += amt;
+        } else {
+          const grupo = (l.category_6 as string | null) ?? null;
+          if (grupo === GRUPO_REVENUE) grossRevenue += amt;
+          else if (grupo === GRUPO_COSTES_DIRECTOS) directCosts += amt;
+          else otherBooked += amt;
+        }
         return {
+          in_branch: enSuSucursal,
           gl_code: l.gl_code as string | null,
           gl_name: l.gl_name as string | null,
           category_7: l.category_7 as string | null,
@@ -1005,8 +1073,11 @@ export async function GET(req: NextRequest) {
         grossRevenue,
         directCosts,
         otherBooked,
+        bookedElsewhere,
         commission,
         contribution: commission == null ? null : grossRevenue + directCosts + otherBooked - commission,
+        // `net` ya no es identico a `contribution`: usa TODAS las lineas, esten
+        // donde esten, mientras la contribucion solo cuenta las de su sucursal.
         net: commission == null ? null : margin + other - commission,
         // Su mes de cierre no tiene P&L. Puede tener coste apuntado igual: ver
         // la nota en LoanRow.plPending.
@@ -1053,7 +1124,10 @@ export async function GET(req: NextRequest) {
     const block1OtherBooked = evaluables.reduce((s, l) => s + l.otherBooked, 0);
 
     /** Coste ya apuntado de los pendientes. Negativo, y no entra en el total. */
-    const pendingPlBooked = pendientes.reduce((s, l) => s + l.margin + l.other, 0);
+    // Su propia sucursal, igual que el bloque 1: si contara todas las lineas,
+    // el coste pendiente y el neto se medirian con dos varas distintas.
+    const pendingPlBooked = pendientes.reduce(
+      (s, l) => s + l.grossRevenue + l.directCosts + l.otherBooked, 0);
 
     /*
      * ⚠ LA COMISION NO SE RESTA AQUI, Y ESTO SE MIDIO ANTES DE DECIDIRLO.
@@ -1091,7 +1165,25 @@ export async function GET(req: NextRequest) {
      * Clasificar el 11% y adivinar el resto habria dado un total que resta mal,
      * y eso es peor que dos cifras honestas.
      */
-    const block1Net = block1Margin + block1Other;
+    /*
+     * ⚠ EL BLOQUE 1 ES AHORA SOLO LO DE SU PROPIA SUCURSAL, y esto mueve el
+     * neto de TODO EL MUNDO. Era `block1Margin + block1Other`, o sea todas las
+     * lineas del prestamo estuvieran donde estuvieran.
+     *
+     * Medido sobre los 494 cierres de la division:
+     *
+     *     todas las lineas          5.625.016,96
+     *     solo su propia sucursal   4.344.855,96
+     *     contabilizado fuera       1.280.161,00   (el 22,8%)
+     *
+     * En Gian Laino, produced pasa de 274.719,19 a 194.780,97.
+     *
+     * La razon es que la pregunta es "¿que se queda ESTA sucursal?", y el
+     * margen de division que se contabiliza en la 700 no se lo queda. Lo que
+     * se va no se borra: `block1Elsewhere` lo lleva y la pantalla lo enseña.
+     */
+    const block1Elsewhere = evaluables.reduce((s, l) => s + l.bookedElsewhere, 0);
+    const block1Net = block1Revenue + block1DirectCosts + block1OtherBooked;
 
     const payroll = nominaPorPersona.get(id) ?? [];
     const payrollFragile = nominaFragil.get(id) ?? [];
@@ -1178,6 +1270,7 @@ export async function GET(req: NextRequest) {
       block1Revenue,
       block1DirectCosts,
       block1OtherBooked,
+      block1Elsewhere,
       contribution: block1Net - block1Commission,
       block1Commission,
       loansWithoutCommission,
@@ -1253,6 +1346,7 @@ export async function GET(req: NextRequest) {
       block1Revenue: 0,
       block1DirectCosts: 0,
       block1OtherBooked: 0,
+      block1Elsewhere: 0,
       contribution: 0,
       block1Commission: 0,
       loansWithoutCommission: 0,

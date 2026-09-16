@@ -41,6 +41,34 @@ const BRANCH_ALIASES: Record<string, string> = {
 
 /*
  * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠ HAY DOS SUCURSALES MAS QUE NO EXISTEN EN EL P&L, Y NO SE LES PONE ALIAS
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Encontradas el 2026-09-15 al restringir el revenue de cada prestamo a su
+ * propia sucursal: `pl_transactions` NO TIENE NI UNA LINEA en la 776 ni en la
+ * 150, asi que sus prestamos no pueden tener revenue propio -- exactamente la
+ * situacion que el alias de Affinity existe para arreglar.
+ *
+ *     776    8 cierres de la division, 7 sin nada en su sucursal
+ *            (todos de Silvio Arteaga). Su revenue esta en 700 y 733.
+ *     150    2 cierres, los dos sin nada propio (Anthony Robert DiToma).
+ *            Su revenue esta en 733.
+ *
+ * Y varios de los prestamos de la 776 llevan numero `733...`, lo que apunta en
+ * la misma direccion.
+ *
+ * ⚠ NO SE MAPEAN, Y ESO ES LA DECISION. Affinity se pudo mapear porque TODO su
+ * revenue estaba en una sola sucursal, la 716. El de la 776 se reparte entre la
+ * 700 y la 733, asi que elegir una seria inventarse a donde pertenece y mover
+ * dinero de una sucursal a otra sobre una corazonada. Los 9 prestamos se ven
+ * hoy como "todo booked elsewhere", que es cierto y es visible.
+ *
+ * Quien tenga la respuesta es quien monta el catalogo de sucursales, no esta
+ * pantalla.
+ */
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
  * REGLA DE NEGOCIO SIN CODIGO: la exoneracion del B2B success fee
  * ─────────────────────────────────────────────────────────────────────────────
  *
