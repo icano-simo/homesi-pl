@@ -19,6 +19,17 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Los dos grupos contables que forman los dos primeros escalones.
+ *
+ * Literales y no importados de `NON_NET_GROUPS`: esa lista dice lo que el
+ * detalle de prestamos DEJA FUERA, y usarla aqui ataria esta escalera a una
+ * decision que es de la otra pantalla. Si alli se cambia, aqui no debe moverse
+ * solo.
+ */
+const GRUPO_REVENUE = "Revenue";
+const GRUPO_COSTES_DIRECTOS = "Direct Production Costs";
+
 const MESES_NOMBRE = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
@@ -276,12 +287,15 @@ export interface LoanLine {
   /** El grupo contable, tal cual. No se reagrupa nada por el: se enseña. */
   category_7: string | null;
   /**
-   * ⚠ EL GRUPO QUE EXPLICA POR QUE ESTA PANTALLA Y LA DE DETALLE DE PRESTAMOS
-   * DAN NUMEROS DISTINTOS PARA EL MISMO PRESTAMO.
+   * El grupo contable, que es lo que reparte cada linea en su escalon.
    *
-   * `app/api/loan-detail/route.ts` filtra por `category_6 in NET_GROUPS`, y
-   * NET_GROUPS tiene un solo grupo: "Revenue". Este modulo cuenta TODAS las
-   * lineas del prestamo. Sobre 710002042266:
+   * ⚠ AQUI VIVIA UNA DISCREPANCIA CON EL DETALLE DE PRESTAMOS, YA RESUELTA.
+   * Aquella pantalla contaba solo `category_6 = "Revenue"` y esta contaba todas
+   * las lineas, asi que el mismo prestamo daba dos cifras. Desde el 2026-09-15
+   * `NET_GROUPS` lleva tambien "Direct Production Costs" y las dos coinciden.
+   * Se deja escrito el calculo porque es el que justifica el cambio, y porque
+   * el dia que alguien toque NET_GROUPS tiene que saber que hay otra pantalla
+   * al otro lado. Sobre 710002042266:
    *
    *     Revenue                  7.986,43   11 filas   41200 41205 41215
    *                                                    41305 41306 41309
@@ -291,12 +305,7 @@ export interface LoanLine {
    *                                                    55600 Credit Report
    *     TOTAL                    8.403,13   14 filas
    *
-   * ⚠ NO SE UNIFICAN AQUI, y las dos son defendibles: el detalle de prestamos
-   * deja fuera lo que no causa el prestamo --SG&A, personal-- pero de paso deja
-   * fuera tambien los costes directos, que SI lo causan. Cual de las dos es la
-   * buena es una decision de negocio, no un bug que se arregle de pasada.
-   *
-   * ─── CUANTO PESA LA DIFERENCIA, MEDIDO EL 2026-09-15 ───────────────────────
+   * ─── POR QUE SE DECIDIO ASI, Y NO AL REVES ─────────────────────────────────
    *
    * Sobre los 482 cierres de la division con apuntes:
    *
@@ -362,12 +371,65 @@ export interface LoanRow {
   margin: number;
   /** Todo lo demas del prestamo: Lender Credits, Cures, Processing Fees... */
   other: number;
+
+  /*
+   * ─── LA ESCALERA ──────────────────────────────────────────────────────────
+   *
+   * Los escalones en que se lee el resultado de un prestamo, en orden:
+   *
+   *     Branch gross revenue      lo que dejo, ANTES de pagar al loan officer
+   *   ± Direct production costs   tasacion, informe de credito, verificacion
+   *   ± Other booked to the loan  lo que no es ninguno de los dos
+   *   - LO commission             lo que cobra el loan officer
+   *   = Total contribution
+   *
+   * Medido sobre 710002042266: 7.986,43 + 416,70 + 0 - 5.045,63 = 3.357,50.
+   *
+   * ⚠ LOS COSTES DIRECTOS SUMAN, NO RESTAN, y su etiqueta no puede decir
+   * "menos". Salen en POSITIVO --+416,70 en este prestamo-- porque se le cobran
+   * al prestatario y vuelven a la sucursal. Una etiqueta que dijera "− Direct
+   * production costs" con un numero positivo al lado diria literalmente lo
+   * contrario de lo que pasa. El signo se enseña tal cual viene.
+   *
+   * ⚠ `grossRevenue + directCosts + otherBooked` ES EXACTAMENTE `margin +
+   * other`. La escalera DESCOMPONE lo que ya se contaba; no añade ni quita una
+   * sola linea, y por eso `produced`, `block1Net` y el neto de cada persona no
+   * se mueven ni un centimo al introducirla.
+   */
+
+  /** `category_6 = 'Revenue'`. Lo que el prestamo dejo antes de la comision. */
+  grossRevenue: number;
+  /** `category_6 = 'Direct Production Costs'`. Suma con su signo. */
+  directCosts: number;
+  /**
+   * Lo que no cae en ninguno de los dos grupos anteriores. Casi siempre cero.
+   *
+   * ⚠ EXISTE PARA NO TIRAR NADA. Son SG&A y Personnel: 70100 Marketing con 270
+   * lineas en 100 prestamos y neto EXACTAMENTE 0,00, y 60125 Operations Payroll
+   * con 24 en 12, tambien 0,00 -- pares que se anulan dentro del prestamo. Un
+   * solo prestamo tiene neto distinto de cero aqui, el 700002013844 con
+   * -8.721,60 de Office Expense.
+   *
+   * Un escalon de mas que casi siempre vale cero es barato; una linea que
+   * desaparece de la escalera sin que nadie lo note, no. Solo se enseña cuando
+   * no es cero.
+   */
+  otherBooked: number;
   /**
    * Lo que se le pago al loan officer por ESTE prestamo, de comp.loan_commission.
    * Null cuando el prestamo no cruza, que NO es cero.
    */
   commission: number | null;
-  /** margin + other - commission. Null si la comision no se conoce. */
+  /**
+   * El ultimo escalon: lo que el prestamo dejo a la sucursal DESPUES de pagar
+   * al loan officer.
+   *
+   * Null cuando la comision no se conoce: un prestamo que no cruza con
+   * Compensafe no tiene contribucion calculable, y poner aqui el bruto diria
+   * que no se le pago a nadie.
+   */
+  contribution: number | null;
+  /** margin + other - commission. Identico a `contribution`. */
   net: number | null;
   /**
    * Su mes de cierre no tiene P&L cargado todavia.
@@ -468,6 +530,37 @@ export interface OfficerBlock {
   volume: number;
   block1Margin: number;
   block1Other: number;
+
+  /*
+   * ── LA ESCALERA DE LA PERSONA: LA SUMA DE LA DE SUS PRESTAMOS ─────────────
+   *
+   *     block1Revenue + block1DirectCosts + block1OtherBooked = block1Net
+   *     block1Net - block1Commission                          = contribution
+   *
+   * ⚠ Y `contribution` NO SE PUEDE ENCADENAR CON LA NOMINA. Es la trampa de
+   * este modulo y esta medida: la comision se PAGA POR LA NOMINA, asi que
+   * restarla aqui y ademas restar `block2Total` entero resta el mismo dinero
+   * dos veces. En la division son 1.163.656,81 de comision dentro de una
+   * nomina de 5.362.891,98 -- el 21,7% del coste, contado otra vez.
+   *
+   * Por eso la pantalla enseña DOS finales y no uno encadenado:
+   *
+   *     contribution   ¿que dejo cada PRESTAMO despues de pagar al LO?
+   *     total          ¿se paga sola esta PERSONA?  = block1Net + block2Total
+   *
+   * Son dos preguntas distintas sobre los mismos datos, y la respuesta a una no
+   * es un paso intermedio de la otra.
+   */
+
+  /** `category_6 = 'Revenue'` de sus cierres evaluables. */
+  block1Revenue: number;
+  /** `category_6 = 'Direct Production Costs'`. Con su signo: suele SUMAR. */
+  block1DirectCosts: number;
+  /** Lo que no es ninguno de los dos. Casi siempre cero; ver LoanRow. */
+  block1OtherBooked: number;
+  /** block1Net - block1Commission. El ultimo escalon, a nivel de persona. */
+  contribution: number;
+
   /** Suma de las comisiones conocidas. */
   block1Commission: number;
   /** Prestamos cuya comision no cruzo. Se dice; no se cuenta como cero. */
@@ -872,11 +965,21 @@ export async function GET(req: NextRequest) {
       const lineas = lineasPorPrestamo.get(ln) ?? [];
       let margin = 0;
       let other = 0;
+      // Los escalones. Se acumulan en la MISMA pasada que margin/other para que
+      // no puedan separarse: son dos lecturas de las mismas lineas, y calcularlas
+      // en sitios distintos es como se llega a que dejen de cuadrar.
+      let grossRevenue = 0;
+      let directCosts = 0;
+      let otherBooked = 0;
       const detail: LoanLine[] = lineas.map((l) => {
         const amt = Number(l.movement ?? 0);
         const esMargen = MARGIN_ALL_GL_LIST.includes((l.gl_code as string) ?? "");
         if (esMargen) margin += amt;
         else other += amt;
+        const grupo = (l.category_6 as string | null) ?? null;
+        if (grupo === GRUPO_REVENUE) grossRevenue += amt;
+        else if (grupo === GRUPO_COSTES_DIRECTOS) directCosts += amt;
+        else otherBooked += amt;
         return {
           gl_code: l.gl_code as string | null,
           gl_name: l.gl_name as string | null,
@@ -899,7 +1002,11 @@ export async function GET(req: NextRequest) {
         loan_amount: f.loan_amount as number | null,
         margin,
         other,
+        grossRevenue,
+        directCosts,
+        otherBooked,
         commission,
+        contribution: commission == null ? null : grossRevenue + directCosts + otherBooked - commission,
         net: commission == null ? null : margin + other - commission,
         // Su mes de cierre no tiene P&L. Puede tener coste apuntado igual: ver
         // la nota en LoanRow.plPending.
@@ -939,6 +1046,11 @@ export async function GET(req: NextRequest) {
     const block1Other = evaluables.reduce((s, l) => s + l.other, 0);
     const block1Commission = evaluables.reduce((s, l) => s + (l.commission ?? 0), 0);
     const loansWithoutCommission = evaluables.filter((l) => l.commission == null).length;
+
+    // Los escalones de la persona: la suma de los de sus prestamos.
+    const block1Revenue = evaluables.reduce((s, l) => s + l.grossRevenue, 0);
+    const block1DirectCosts = evaluables.reduce((s, l) => s + l.directCosts, 0);
+    const block1OtherBooked = evaluables.reduce((s, l) => s + l.otherBooked, 0);
 
     /** Coste ya apuntado de los pendientes. Negativo, y no entra en el total. */
     const pendingPlBooked = pendientes.reduce((s, l) => s + l.margin + l.other, 0);
@@ -1063,6 +1175,10 @@ export async function GET(req: NextRequest) {
       volume: loans.reduce((s, l) => s + (l.loan_amount ?? 0), 0),
       block1Margin,
       block1Other,
+      block1Revenue,
+      block1DirectCosts,
+      block1OtherBooked,
+      contribution: block1Net - block1Commission,
       block1Commission,
       loansWithoutCommission,
       block1Net,
@@ -1134,6 +1250,10 @@ export async function GET(req: NextRequest) {
       volume: 0,
       block1Margin: 0,
       block1Other: 0,
+      block1Revenue: 0,
+      block1DirectCosts: 0,
+      block1OtherBooked: 0,
+      contribution: 0,
       block1Commission: 0,
       loansWithoutCommission: 0,
       block1Net: 0,

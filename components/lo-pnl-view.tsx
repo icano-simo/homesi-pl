@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
-import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, PayrollRow } from "@/app/api/lo-pnl/route";
+import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
  * ─────────────────────────────────────────────────────────────────────────────
@@ -95,112 +95,183 @@ function Marca({ children, title, tono = "gris" }: {
  * abiertas en cada uno de 24 prestamos empujarian la nomina y la cuenta fuera
  * de la vista.
  */
-function DesglosePrestamo({ l }: { l: LoanRow }) {
-  // Por importe absoluto descendente: lo que mas mueve, primero. El orden del
-  // P&L de origen no dice nada, y el alfabetico por cuenta esconde el tamaño.
-  const lineas = [...l.lines].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-  const total = lineas.reduce((s, x) => s + x.amount, 0);
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LA ESCALERA: LOS ESCALONES EN QUE SE LEE UN PRESTAMO
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ *     Branch gross revenue      lo que dejo, ANTES de pagar al loan officer
+ *   ± Direct production costs   tasacion, informe de credito, verificacion
+ *   ± Other booked to the loan  lo que no es ninguno de los dos (casi nunca)
+ *   − LO commission             lo que cobra el loan officer
+ *   = Total contribution
+ *
+ * ⚠ LOS COSTES DIRECTOS SUMAN, Y POR ESO LA ETIQUETA NO DICE "MENOS". Salen en
+ * positivo --+416,70 en el prestamo 710002042266-- porque se le cobran al
+ * prestatario y vuelven a la sucursal. Un "− Direct production costs" con un
+ * numero positivo al lado diria lo contrario de lo que pasa. El signo, tal cual.
+ */
+const ESCALONES = [
+  {
+    key: "revenue" as const,
+    label: "Branch gross revenue",
+    hint: "What the loan left before paying the loan officer.",
+    grupo: "Revenue",
+  },
+  {
+    key: "direct" as const,
+    label: "Direct production costs",
+    hint: "Appraisal, credit report, verification. Shown with its own sign — these usually ADD, because they are charged to the borrower and come back to the branch.",
+    grupo: "Direct Production Costs",
+  },
+  {
+    key: "other" as const,
+    label: "Other booked to the loan",
+    hint: "Anything booked against the loan that is neither revenue nor a direct production cost. Almost always zero.",
+    grupo: null,
+  },
+];
 
-  // El reparto por category_6. Solo se enseña cuando hay mas de un grupo: con
-  // uno solo, el subtotal seria el total repetido.
-  const grupos = new Map<string, number>();
-  for (const x of lineas) {
-    const g = x.category_6 ?? "(no group)";
-    grupos.set(g, (grupos.get(g) ?? 0) + x.amount);
+/** A que escalon pertenece una linea. El mismo reparto que hace la ruta. */
+function escalonDe(categoria6: string | null | undefined) {
+  if (categoria6 === "Revenue") return "revenue" as const;
+  if (categoria6 === "Direct Production Costs") return "direct" as const;
+  return "other" as const;
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * EL DESGLOSE DE UN PRESTAMO, CUENTA A CUENTA Y POR ESCALON
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ SIN AGRUPAR POR CUENTA, Y ES LA DECISION QUE DA SENTIDO AL BLOQUE. Medido
+ * sobre los 736 prestamos con apuntes: agrupar por gl_code + sucursal taparia
+ * 590.857,86 de movimiento en 727 grupos, y en 317 de ellos --209 prestamos--
+ * lo tapado son filas que se compensan.
+ *
+ * El caso que lo motiva, 710002042266: dentro de su Branch gross revenue hay un
+ * par de 9.602,39 que se anula entero --41305 LO Margin contra 41200 Discount
+ * Income-- y los dos van en el MISMO escalon, para que se vea anularse.
+ * Agrupando por cuenta desaparecerian ademas otros dos pares dentro de la misma
+ * cuenta: 41205 (+389,00 y −333,00) y 41309 (+448,50 y −280,31).
+ *
+ * ⚠ CERRADO POR DEFECTO. El panel ya lleva tres modulos; catorce lineas
+ * abiertas en cada uno de 24 prestamos empujarian la nomina y la cuenta fuera
+ * de la vista.
+ */
+function DesglosePrestamo({ l }: { l: LoanRow }) {
+  // Por importe absoluto descendente dentro de cada escalon: lo que mas mueve,
+  // primero. El orden del P&L de origen no dice nada, y el alfabetico por cuenta
+  // esconde el tamaño.
+  const porEscalon = new Map<string, LoanLine[]>();
+  for (const x of l.lines) {
+    const k = escalonDe(x.category_6);
+    porEscalon.set(k, [...(porEscalon.get(k) ?? []), x]);
   }
-  const porGrupo = [...grupos.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+  for (const v of porEscalon.values()) v.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+
+  const subtotal = (k: string) => (porEscalon.get(k) ?? []).reduce((s, x) => s + x.amount, 0);
 
   return (
     <tr className="bg-slate-50">
       <td colSpan={7} className="border-b border-gray-200 px-3 py-2">
         <table className="w-full text-[11px]">
-          <thead>
-            <tr className="text-left text-gray-500">
-              <th className="px-2 py-1 font-medium">GL</th>
-              <th className="px-2 py-1 font-medium">Account</th>
-              <th className="px-2 py-1 font-medium">Category 7</th>
-              <th className="px-2 py-1 font-medium" title="The branch of the entry, which is not always the branch of the loan.">
-                Branch
-              </th>
-              <th className="px-2 py-1 font-medium text-right">Amount</th>
-            </tr>
-          </thead>
           <tbody>
-            {lineas.map((x, i) => {
-              /*
-               * ⚠ LA SUCURSAL DEL APUNTE SE DISTINGUE CUANDO NO ES LA DEL
-               * PRESTAMO, PERO EN NEUTRO Y NO EN AMBAR.
-               *
-               * Medido sobre los cierres de la division: 1.999 de 5.536 lineas
-               * --el 36,1%-- se contabilizan en otra sucursal. Parte del margen
-               * va a la 700 por diseño, asi que en ambar un tercio de cada
-               * desglose pareceria un problema y la marca dejaria de significar
-               * nada. Es informacion, y se viste como informacion.
-               *
-               * Es el mismo error del que ya avisa lib/loan-detail-accounts.ts:
-               * comparar contra la sucursal del prestamo marcaba 308 de 374.
-               */
-              const otraSucursal = !!x.branch && !!l.branch && x.branch !== l.branch;
+            {ESCALONES.map((esc) => {
+              const filas = porEscalon.get(esc.key) ?? [];
+              // El escalon "other" solo aparece cuando tiene algo: un renglon
+              // permanente a cero en 481 de 482 prestamos es ruido.
+              if (filas.length === 0) return null;
               return (
-                <tr key={i} className="border-t border-gray-200/70">
-                  <td className="px-2 py-1 font-mono text-gray-600">{x.gl_code ?? "—"}</td>
-                  <td className="px-2 py-1 text-gray-700" title={x.check_description ?? undefined}>
-                    {x.gl_name ?? "—"}
-                  </td>
-                  <td className="px-2 py-1 text-gray-500">{x.category_7 ?? "—"}</td>
-                  <td className="px-2 py-1">
-                    <span
-                      className={otraSucursal
-                        ? "rounded border border-slate-300 bg-white px-1 font-mono text-slate-600"
-                        : "font-mono text-gray-500"}
-                      title={otraSucursal
-                        ? `Booked in branch ${x.branch}, while the loan is branch ${l.branch}. Common and not an error: part of the margin is booked in 700 by design.`
-                        : undefined}
-                    >
-                      {x.branch ?? "—"}
-                    </span>
-                  </td>
-                  {/*
-                    * Al centimo, no redondeado como la tabla de fuera: este
-                    * desglose existe para poder cuadrar contra la contabilidad,
-                    * y con dolares enteros no cuadra.
-                    */}
-                  <td className={`px-2 py-1 text-right font-mono tabular-nums ${
-                    x.amount < 0 ? "text-red-600" : "text-gray-700"
-                  }`}>
-                    {usdExacto(x.amount)}
-                  </td>
-                </tr>
+                <Fragment key={esc.key}>
+                  <tr className="border-t-2 border-gray-300 bg-white/70">
+                    <td className="px-2 py-1 font-semibold uppercase tracking-wide text-gray-600" colSpan={4}>
+                      <span title={esc.hint} className="cursor-help">{esc.label}</span>
+                    </td>
+                    <td className={`px-2 py-1 text-right font-mono tabular-nums font-semibold ${
+                      colorNeto(subtotal(esc.key))
+                    }`}>
+                      {usdExacto(subtotal(esc.key))}
+                    </td>
+                  </tr>
+                  {filas.map((x, i) => {
+                    /*
+                     * ⚠ LA SUCURSAL DEL APUNTE SE DISTINGUE CUANDO NO ES LA DEL
+                     * PRESTAMO, PERO EN NEUTRO Y NO EN AMBAR.
+                     *
+                     * Medido: 1.999 de 5.536 lineas --el 36,1%-- se contabilizan
+                     * en otra sucursal. Parte del margen va a la 700 por diseño,
+                     * asi que en ambar un tercio de cada desglose pareceria un
+                     * problema y la marca dejaria de significar nada. Es
+                     * informacion, y se viste como informacion.
+                     *
+                     * Es el mismo error del que ya avisa
+                     * lib/loan-detail-accounts.ts: comparar contra la sucursal
+                     * del prestamo marcaba 308 de 374.
+                     */
+                    const otraSucursal = !!x.branch && !!l.branch && x.branch !== l.branch;
+                    return (
+                      <tr key={`${esc.key}-${i}`} className="border-t border-gray-200/70">
+                        <td className="px-2 py-1 pl-5 font-mono text-gray-600">{x.gl_code ?? "—"}</td>
+                        <td className="px-2 py-1 text-gray-700" title={x.check_description ?? undefined}>
+                          {x.gl_name ?? "—"}
+                        </td>
+                        <td className="px-2 py-1 text-gray-500">{x.category_7 ?? "—"}</td>
+                        <td className="px-2 py-1">
+                          <span
+                            className={otraSucursal
+                              ? "rounded border border-slate-300 bg-white px-1 font-mono text-slate-600"
+                              : "font-mono text-gray-500"}
+                            title={otraSucursal
+                              ? `Booked in branch ${x.branch}, while the loan is branch ${l.branch}. Common and not an error: part of the margin is booked in 700 by design.`
+                              : undefined}
+                          >
+                            {x.branch ?? "—"}
+                          </span>
+                        </td>
+                        {/*
+                          * Al centimo, no redondeado como la tabla de fuera:
+                          * este desglose existe para poder cuadrar contra la
+                          * contabilidad, y con dolares enteros no cuadra.
+                          */}
+                        <td className={`px-2 py-1 text-right font-mono tabular-nums ${
+                          x.amount < 0 ? "text-red-600" : "text-gray-700"
+                        }`}>
+                          {usdExacto(x.amount)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
               );
             })}
+
+            {/*
+              * ⚠ LA COMISION ES UN ESCALON SIN CUENTAS, Y HAY QUE DECIRLO. No
+              * sale del P&L sino de comp.loan_commission, asi que no tiene
+              * gl_code que enseñar y no se puede cuadrar contra el libro mayor
+              * como las de arriba. Un escalon con la misma pinta que los otros
+              * y sin lineas se leeria como un fallo de carga.
+              */}
+            <tr className="border-t-2 border-gray-300 bg-white/70">
+              <td className="px-2 py-1 font-semibold uppercase tracking-wide text-gray-600" colSpan={4}>
+                LO commission
+                <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-400">
+                  from Compensafe — not a P&amp;L account
+                </span>
+              </td>
+              <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-red-600">
+                {l.commission == null
+                  ? <span className="text-gray-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>
+                  : usdExacto(-l.commission)}
+              </td>
+            </tr>
           </tbody>
           <tfoot>
-            {/*
-              * ⚠ EL TOTAL SE REPARTE POR GRUPO PORQUE ESTA PANTALLA Y LA DE
-              * DETALLE DE PRESTAMOS NO DAN LO MISMO, Y ASI SE VE POR QUE.
-              *
-              * `app/api/loan-detail/route.ts` cuenta solo `category_6 =
-              * "Revenue"`; este modulo cuenta todas las lineas del prestamo.
-              * En 710002042266 eso es 7.986,43 contra 8.403,13, y los 416,70
-              * de diferencia son tres costes directos --tasacion, informe de
-              * credito, condominio-- que SI los causa el prestamo.
-              *
-              * No se unifica desde aqui: cual de las dos definiciones es la
-              * buena es una decision de negocio. Lo que no puede pasar es que
-              * se descubra por sorpresa comparando dos pantallas.
-              */}
-            {porGrupo.length > 1 && porGrupo.map(([grupo, suma]) => (
-              <tr key={grupo} className="border-t border-gray-200 text-gray-500">
-                <td className="px-2 py-1" colSpan={4}>{grupo}</td>
-                <td className="px-2 py-1 text-right font-mono tabular-nums">{usdExacto(suma)}</td>
-              </tr>
-            ))}
-            <tr className="border-t-2 border-gray-300 font-semibold text-gray-700">
-              <td className="px-2 py-1" colSpan={4}>
-                {lineas.length} entr{lineas.length === 1 ? "y" : "ies"}
-              </td>
-              <td className={`px-2 py-1 text-right font-mono tabular-nums ${colorNeto(total)}`}>
-                {usdExacto(total)}
+            <tr className="border-t-2 border-gray-400 font-semibold text-gray-800">
+              <td className="px-2 py-1 uppercase tracking-wide" colSpan={4}>= Total contribution</td>
+              <td className={`px-2 py-1 text-right font-mono tabular-nums ${colorNeto(l.contribution ?? 0)}`}>
+                {l.contribution == null ? "—" : usdExacto(l.contribution)}
               </td>
             </tr>
           </tfoot>
@@ -220,33 +291,35 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
       </div>
     );
   }
+  const sum = (f: (l: LoanRow) => number) => loans.reduce((s, l) => s + f(l), 0);
+  const hayOtros = loans.some((l) => l.otherBooked !== 0);
+
   return (
     <div className="overflow-auto max-h-80">
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-gray-50">
           <tr className="text-left text-gray-500 border-b border-gray-200">
             {/*
-              * ⚠ LAS CABECERAS DECIAN "Margin / Other / Loan net" SIN DECIR DE
-              * QUE HABLABAN, que es el mismo problema que la tabla de arriba
-              * tenia: tres columnas de dinero y ninguna explicando la siguiente.
-              *
-              * Aqui SI se detalla por prestamo --es donde tiene sentido-- pero
-              * cada columna dice que pregunta contesta.
+              * ⚠ LAS COLUMNAS SON LOS ESCALONES, LAS MISMAS QUE LA FILA DE LA
+              * PERSONA Y LAS MISMAS QUE EL DESGLOSE DE DENTRO. Antes decian
+              * "Margin earned / Other loan costs / What it left", que es un
+              * reparto distinto del que usa el total de arriba: el prestamo se
+              * leia de una forma y la persona de otra, sobre los mismos datos.
               */}
             <th className="px-3 py-1.5 font-medium">Loan</th>
             <th className="px-3 py-1.5 font-medium">Closed</th>
             <th className="px-3 py-1.5 font-medium text-right">Loan amount</th>
-            <th className="px-3 py-1.5 font-medium text-right" title="The five margin accounts, same definition as Loan Validation.">
-              Margin earned
+            <th className="px-3 py-1.5 font-medium text-right" title="What the loan left before paying the loan officer.">
+              Gross revenue
             </th>
-            <th className="px-3 py-1.5 font-medium text-right" title="Everything else booked against this loan: lender credits, cures, processing fees.">
-              Other loan costs
-            </th>
-            <th className="px-3 py-1.5 font-medium text-right" title="Margin earned plus other loan costs. What this one loan left.">
-              What it left
+            <th className="px-3 py-1.5 font-medium text-right" title="Appraisal, credit report, verification. Shown with its own sign — these usually ADD, because they are charged to the borrower and come back to the branch.">
+              Direct costs
             </th>
             <th className="px-3 py-1.5 font-medium text-right" title="Paid to the loan officer for this loan, from Compensafe.">
-              Paid to the LO
+              LO commission
+            </th>
+            <th className="px-3 py-1.5 font-medium text-right" title="Gross revenue plus direct costs, minus the commission. What this loan left the branch after paying the loan officer.">
+              Contribution
             </th>
           </tr>
         </thead>
@@ -267,10 +340,22 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
               </td>
               <td className="px-3 py-1 text-gray-500">{l.month} {l.year}</td>
               <td className="px-3 py-1 text-right text-gray-600">{usd(l.loan_amount)}</td>
-              <td className="px-3 py-1 text-right">{usd(l.margin)}</td>
-              <td className="px-3 py-1 text-right">{usd(l.other)}</td>
-              <td className={`px-3 py-1 text-right font-medium ${colorNeto(l.margin + l.other)}`}>
-                {usd(l.margin + l.other)}
+              <td className="px-3 py-1 text-right">{usd(l.grossRevenue)}</td>
+              <td className="px-3 py-1 text-right">
+                {usd(l.directCosts)}
+                {/*
+                  * Lo que no cae en ninguno de los dos grupos viaja pegado a los
+                  * costes directos y DICHO, no sumado en silencio. Es un solo
+                  * prestamo en toda la division --el 700002013844, con -8.721,60
+                  * de Office Expense-- y esconderlo por raro seria justo el
+                  * error que el desglose existe para no cometer.
+                  */}
+                {l.otherBooked !== 0 && (
+                  <span className="ml-1 text-[10px] text-slate-500"
+                        title="Booked against this loan but neither revenue nor a direct production cost. It is inside the contribution.">
+                    {usd(l.otherBooked, { signo: true })} other
+                  </span>
+                )}
               </td>
               <td className="px-3 py-1 text-right text-gray-500">
                 {/*
@@ -280,7 +365,12 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
                 {l.commission == null
                   ? <span title="This loan does not cross with Compensafe. Not the same as a zero commission."
                           className="text-gray-300">—</span>
-                  : usd(l.commission)}
+                  : usd(-l.commission)}
+              </td>
+              <td className={`px-3 py-1 text-right font-mono tabular-nums font-medium ${colorNeto(l.contribution ?? 0)}`}>
+                {l.contribution == null
+                  ? <span className="text-gray-300" title="Without a known commission there is no contribution to compute. Showing the gross here would say nobody was paid.">—</span>
+                  : usd(l.contribution)}
               </td>
             </tr>
             {abre && <DesglosePrestamo l={l} />}
@@ -289,36 +379,32 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
           })}
         </tbody>
         {/*
-          * ⚠ LA FILA DE TOTALES ES LO QUE ATA ESTE BLOQUE A LA TABLA DE FUERA.
+          * ⚠ LA FILA DE TOTALES ES LO QUE ATA ESTE BLOQUE A LA FILA DE FUERA.
           * Sin ella hay que sumar 24 prestamos a mano para comprobar de donde
-          * sale el "Produced" de la fila, y entonces el detalle no demuestra
-          * nada: solo acompaña.
+          * sale la contribucion de la persona, y entonces el detalle no
+          * demuestra nada: solo acompaña.
           *
           * La comision se suma SOLO de los prestamos que cruzaron. Los que no
-          * cruzan valen null, no cero, y el aviso de cuantos son vive en la
-          * tarjeta de la cuenta.
+          * cruzan valen null, no cero, y cuantos son se dice en la tarjeta.
           */}
         <tfoot className="sticky bottom-0 bg-gray-50">
           <tr className="border-t-2 border-gray-300 font-semibold text-gray-700">
             <td className="px-3 py-1.5" colSpan={2}>
               {loans.length} loan{loans.length === 1 ? "" : "s"}
             </td>
+            <td className="px-3 py-1.5 text-right">{usd(sum((l) => l.loan_amount ?? 0))}</td>
+            <td className="px-3 py-1.5 text-right">{usd(sum((l) => l.grossRevenue))}</td>
             <td className="px-3 py-1.5 text-right">
-              {usd(loans.reduce((s, l) => s + (l.loan_amount ?? 0), 0))}
+              {usd(sum((l) => l.directCosts))}
+              {hayOtros && (
+                <span className="ml-1 text-[10px] font-normal text-slate-500">
+                  {usd(sum((l) => l.otherBooked), { signo: true })} other
+                </span>
+              )}
             </td>
-            <td className="px-3 py-1.5 text-right">
-              {usd(loans.reduce((s, l) => s + l.margin, 0))}
-            </td>
-            <td className="px-3 py-1.5 text-right">
-              {usd(loans.reduce((s, l) => s + l.other, 0))}
-            </td>
-            <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${
-              colorNeto(loans.reduce((s, l) => s + l.margin + l.other, 0))
-            }`}>
-              {usd(loans.reduce((s, l) => s + l.margin + l.other, 0))}
-            </td>
-            <td className="px-3 py-1.5 text-right text-gray-500">
-              {usd(loans.reduce((s, l) => s + (l.commission ?? 0), 0))}
+            <td className="px-3 py-1.5 text-right">{usd(-sum((l) => l.commission ?? 0))}</td>
+            <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${colorNeto(sum((l) => l.contribution ?? 0))}`}>
+              {usd(sum((l) => l.contribution ?? 0))}
             </td>
           </tr>
         </tfoot>
@@ -508,70 +594,133 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
             </div>
           </section>
 
-          {/* ── C · La cuenta, en tres lineas ─────────────────────────────── */}
+          {/* ── C · La escalera, y debajo la nomina que no cuelga de nada ──── */}
           <section>
             <h4 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
               The account
             </h4>
             <div className="mt-2 rounded-xl bg-[#001A40] px-5 py-4 text-white">
+              {/*
+                * ⚠ LOS COSTES DIRECTOS SUMAN Y LA ETIQUETA NO DICE "MENOS".
+                * Salen en positivo porque se le cobran al prestatario y vuelven
+                * a la sucursal; un "−" delante de un numero positivo diria lo
+                * contrario de lo que pasa. Por eso el signo va pegado al
+                * importe y no a la etiqueta, en este escalon y solo en este.
+                */}
               <dl className="space-y-1.5 text-xs">
                 <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-white/70">Produced</dt>
-                  <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
+                  <dt className="text-white/70">Branch gross revenue</dt>
+                  <dd className="font-mono tabular-nums">{usdExacto(o.block1Revenue)}</dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-4">
-                  <dt className="text-white/70">− Payroll paid</dt>
-                  <dd className="font-mono tabular-nums">
-                    {localizada ? usdExacto(nominaPos) : (
-                      <span className="text-amber-300" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
-                        not located
-                      </span>
-                    )}
-                  </dd>
+                  <dt className="text-white/70">
+                    Direct production costs
+                    <span className="ml-1.5 text-[10px] text-white/40">appraisal, credit, verification</span>
+                  </dt>
+                  <dd className="font-mono tabular-nums">{usdExacto(o.block1DirectCosts)}</dd>
+                </div>
+                {o.block1OtherBooked !== 0 && (
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt className="text-white/70">
+                      Other booked to their loans
+                      <span className="ml-1.5 text-[10px] text-white/40">neither of the two above</span>
+                    </dt>
+                    <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBooked)}</dd>
+                  </div>
+                )}
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-white/70">− LO commission</dt>
+                  <dd className="font-mono tabular-nums">{usdExacto(-o.commission)}</dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-4 border-t border-white/20 pt-2">
-                  <dt className="font-semibold">= Net</dt>
+                  <dt className="font-semibold">= Total contribution</dt>
                   <dd className={`font-mono tabular-nums text-base font-semibold ${
-                    o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
+                    o.contribution > 0 ? "text-emerald-300" : o.contribution < 0 ? "text-red-300" : "text-white/70"
                   }`}>
-                    {usdExacto(o.total)}
+                    {usdExacto(o.contribution)}
                   </dd>
                 </div>
               </dl>
 
               {/*
-                * ⚠ LO INFORMATIVO, SEPARADO POR UNA LINEA Y DICHO. La comision
-                * esta AQUI PORQUE ES LA PREGUNTA DEL NEGOCIO --"¿cuanto gano
-                * este LO por sus cierres?"-- pero NO forma parte de la resta de
-                * arriba: ese dinero se paga a traves de la nomina, y restarlo
-                * ademas lo contaria dos veces.
+                * ─────────────────────────────────────────────────────────────
+                * ⚠ LA SEGUNDA CUENTA NO ES LA CONTINUACION DE LA PRIMERA
+                * ─────────────────────────────────────────────────────────────
                 *
-                * Y la diferencia se enseña porque alguien la va a calcular de
-                * todas formas al ver los dos numeros juntos. Enseñada con su
-                * explicacion al lado, no invita a restarla; ausente, invita.
+                * Encadenarlas --restarle la nomina a Total contribution-- es el
+                * error que mas caro sale en esta pantalla, porque el resultado
+                * parece razonable: la comision se PAGA POR LA NOMINA, asi que
+                * restarla en la escalera Y ADEMAS restar la nomina entera resta
+                * el mismo dinero dos veces.
+                *
+                * Medido en la division: 1.163.656,81 de comision dentro de una
+                * nomina de 5.362.891,98 -- el 21,7% del coste, contado otra vez.
+                * En Gian Laino serian 91.440,93 que lo dejarian pareciendo casi
+                * cien mil peor de lo que es.
+                *
+                * Por eso el Net de abajo arranca otra vez de lo PRODUCIDO, no de
+                * la contribucion, y la linea que las separa lo dice.
                 */}
+              <div className="mt-4 border-t-2 border-white/25 pt-3">
+                <p className="text-[10px] uppercase tracking-wide text-white/40">
+                  Does this person pay for themselves — a separate question
+                </p>
+                <dl className="mt-2 space-y-1.5 text-xs">
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt className="text-white/70">
+                      Produced
+                      <span className="ml-1.5 text-[10px] text-white/40">revenue + direct costs, before commission</span>
+                    </dt>
+                    <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4">
+                    <dt className="text-white/70">
+                      − Payroll paid
+                      <span className="ml-1.5 text-[10px] text-white/40">salary, taxes, insurance — and the commission</span>
+                    </dt>
+                    <dd className="font-mono tabular-nums">
+                      {localizada ? usdExacto(nominaPos) : (
+                        <span className="text-amber-300" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
+                          not located
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-4 border-t border-white/20 pt-2">
+                    <dt className="font-semibold">= Net</dt>
+                    <dd className={`font-mono tabular-nums text-base font-semibold ${
+                      o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
+                    }`}>
+                      {usdExacto(o.total)}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
               <div className="mt-3 space-y-1 border-t border-white/15 pt-3 text-[11px] text-white/60">
-                <div className="flex items-baseline justify-between gap-4">
-                  <span>Commission earned on these loans</span>
-                  <span className="font-mono tabular-nums">{usdExacto(o.commission)}</span>
-                </div>
-                <div className="flex items-baseline justify-between gap-4">
-                  <span>Difference vs payroll paid</span>
+                <p className="leading-relaxed">
+                  <span className="text-white/80">The two totals do not chain.</span> The commission
+                  is subtracted in the ladder above and is <span className="text-white/80">also</span>{" "}
+                  inside the payroll below — it is paid through payroll. Subtracting it from the
+                  contribution as well would count the same money twice.
+                </p>
+                <div className="flex items-baseline justify-between gap-4 pt-1.5">
+                  <span>Difference: commission vs payroll paid</span>
                   <span className="font-mono tabular-nums">
                     {localizada ? usdExacto(diferencia) : "—"}
                   </span>
                 </div>
-                <p className="pt-1.5 leading-relaxed">
-                  Neither figure enters the Net above. They are two calendars: Compensafe groups
-                  commission by <span className="text-white/80">closing date</span> and the P&amp;L
-                  records payroll by <span className="text-white/80">payment date</span>, so a loan
-                  closed at the end of a month is paid in the next period. They are not meant to
-                  match.
+                <p className="leading-relaxed">
+                  They are two calendars and are not meant to match: Compensafe groups commission by{" "}
+                  <span className="text-white/80">closing date</span> and the P&amp;L records payroll
+                  by <span className="text-white/80">payment date</span>, so a loan closed at the end
+                  of a month is paid in the next period.
                 </p>
                 {o.loansWithoutCommission > 0 && (
                   <p className="leading-relaxed">
                     {o.loansWithoutCommission} of these loans do not cross with Compensafe, so no
-                    commission is known for them. Not the same as a zero.
+                    commission is known for them. Not the same as a zero — and the contribution above
+                    leaves them out rather than counting them as free.
                   </p>
                 )}
               </div>
@@ -686,6 +835,11 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
     prestamos: officers.reduce((s, o) => s + o.loanCount, 0),
     volumen: officers.reduce((s, o) => s + o.volume, 0),
     produccion: officers.reduce((s, o) => s + o.block1Net, 0),
+    revenue: officers.reduce((s, o) => s + o.block1Revenue, 0),
+    costesDirectos: officers.reduce((s, o) => s + o.block1DirectCosts, 0),
+    otros: officers.reduce((s, o) => s + o.block1OtherBooked, 0),
+    comision: officers.reduce((s, o) => s + o.block1Commission, 0),
+    contribucion: officers.reduce((s, o) => s + o.contribution, 0),
     coste: officers.reduce((s, o) => s + o.block2Total, 0),
     neto: officers.reduce((s, o) => s + o.total, 0),
   }), [officers]);
@@ -872,32 +1026,42 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                   <th className="px-3 py-2 font-medium text-right">Loans</th>
                   <th className="px-3 py-2 font-medium text-right">Volume</th>
                   {/*
-                    * ⚠ EL NETO SALE DE PAYROLL PAID, NO DE COMMISSION, Y ES LO
-                    * QUE MAS FACIL SERIA EQUIVOCAR.
+                    * ─────────────────────────────────────────────────────────
+                    * DOS FINALES, Y NO SE PUEDEN ENCADENAR
+                    * ─────────────────────────────────────────────────────────
                     *
-                    * La comision se PAGA A TRAVES de la nomina: restarla ademas
-                    * de la nomina contaria el mismo dinero dos veces. Por eso
-                    * `Commission` se enseña --es la pregunta del negocio,
-                    * "cuanto gano este LO por sus cierres"-- pero NO entra en la
-                    * resta, y la cabecera del neto lo dice.
+                    * La escalera --gross revenue, costes directos, comision--
+                    * termina en CONTRIBUTION: lo que dejaron sus prestamos
+                    * despues de pagarle a el. Es una pregunta sobre PRESTAMOS.
                     *
-                    * ⚠ Y NO CUADRAN ENTRE SI, que es lo que hace tentador
-                    * restarlas. Son dos calendarios: Compensafe agrupa por FECHA
-                    * DE CIERRE y el P&L por FECHA DE PAGO, asi que un prestamo
-                    * de mayo se paga en la quincena siguiente. Medido en Luis
-                    * Silva: 21.690,19 de comision sobre los prestamos que el
-                    * modulo ve, contra 11.601,18 en la cuenta 60105.
+                    * El NET termina en otro sitio: produced menos la nomina
+                    * entera. Es una pregunta sobre la PERSONA.
+                    *
+                    * ⚠ Y RESTARLE LA NOMINA A CONTRIBUTION CONTARIA LA COMISION
+                    * DOS VECES, porque la comision SE PAGA POR LA NOMINA. Esta
+                    * medido: 1.163.656,81 de comision viven dentro de una nomina
+                    * de 5.362.891,98 -- encadenar los dos finales duplicaria el
+                    * 21,7% del coste de la division.
+                    *
+                    * Por eso las dos cifras estan separadas por una linea y cada
+                    * una dice de que sale. No son dos pasos: son dos preguntas.
                     */}
-                  <th className="px-3 py-2 font-medium text-right" title="What their closed loans left: margin plus other loan income and costs.">
-                    Produced
+                  <th className="px-3 py-2 font-medium text-right" title="What the loans left before paying the loan officer. category_6 = 'Revenue'.">
+                    Gross revenue
                   </th>
-                  <th className="px-3 py-2 font-medium text-right text-gray-500" title="What Compensafe paid them for those loans. Shown because it is the business question — NOT subtracted here, because this money is paid through payroll and subtracting both would count it twice.">
-                    Commission
+                  <th className="px-3 py-2 font-medium text-right" title="Appraisal, credit report, verification. Shown with its own sign — these usually ADD, because they are charged to the borrower and come back to the branch.">
+                    Direct costs
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="What the P&L records as paid to this person: salary, commission, bonus, taxes, insurance, equipment.">
+                  <th className="px-3 py-2 font-medium text-right" title="What Compensafe paid them for those loans.">
+                    LO commission
+                  </th>
+                  <th className="px-3 py-2 font-medium text-right border-r border-gray-300" title="Gross revenue plus direct costs, minus the commission. What their loans left the branch after paying them.">
+                    Contribution
+                  </th>
+                  <th className="px-3 py-2 font-medium text-right" title="What the P&L records as paid to this person: salary, commission, bonus, taxes, insurance, equipment. The commission above is already inside this figure.">
                     Payroll paid
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="Produced minus payroll paid. Commission is not subtracted again — it is already inside payroll.">
+                  <th className="px-3 py-2 font-medium text-right" title="Gross revenue plus direct costs, minus payroll paid. The commission is NOT subtracted again here — it is already inside payroll.">
                     Net <span className="font-normal text-gray-400">= Produced − Payroll</span>
                   </th>
                 </tr>
@@ -909,6 +1073,8 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                   const seccionAbierta = gruposAbiertos.has(sec.key);
                   const netoSeccion = miembros.reduce((s, o) => s + o.total, 0);
                   const cierresSeccion = miembros.reduce((s, o) => s + o.loanCount, 0);
+                  const contribucionSeccion = miembros.reduce((s, o) => s + o.contribution, 0);
+                  const nominaSeccion = miembros.reduce((s, o) => s + o.block2Total, 0);
 
                   return (
                     <Fragment key={sec.key}>
@@ -954,6 +1120,17 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                           </span>
                         </td>
                         <td className="px-3 py-2 text-right" colSpan={3} />
+                        {/*
+                          * La cabecera plegada lleva los DOS finales, no solo
+                          * el neto. Con uno solo, plegar la seccion escondia
+                          * cual de las dos preguntas se estaba contestando.
+                          */}
+                        <td className="px-3 py-2 text-right border-r border-gray-300">
+                          <span className={`font-semibold font-mono tabular-nums ${contribucionSeccion < 0 ? "text-red-600" : "text-gray-700"}`}>
+                            {usd(contribucionSeccion)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right text-gray-600">{usd(-nominaSeccion)}</td>
                         <td className="px-3 py-2 text-right">
                           <span className={`font-semibold font-mono tabular-nums ${netoSeccion < 0 ? "text-red-600" : "text-gray-800"}`}>
                             {usd(netoSeccion)}
@@ -1025,9 +1202,29 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                         </td>
                         <td className="px-3 py-1.5 text-right text-gray-600">{o.loanCount || "—"}</td>
                         <td className="px-3 py-1.5 text-right text-gray-600">{o.volume ? usd(o.volume) : "—"}</td>
-                        <td className="px-3 py-1.5 text-right">{o.loanCount ? usd(o.produced) : "—"}</td>
+                        <td className="px-3 py-1.5 text-right">
+                          {o.loanCount ? usd(o.block1Revenue) : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right">
+                          {o.loanCount ? usd(o.block1DirectCosts) : "—"}
+                          {/*
+                            * Lo que no cae en ninguno de los dos grupos va
+                            * pegado aqui y DICHO, no sumado en silencio: es un
+                            * solo prestamo en toda la division y esconderlo por
+                            * raro seria el error que la escalera evita.
+                            */}
+                          {o.block1OtherBooked !== 0 && (
+                            <span className="ml-1 text-[10px] text-slate-500"
+                                  title="Booked against their loans but neither revenue nor a direct production cost. It is inside the contribution.">
+                              {usd(o.block1OtherBooked, { signo: true })} other
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-1.5 text-right text-gray-500">
-                          {o.commission ? usd(o.commission) : "—"}
+                          {o.commission ? usd(-o.commission) : "—"}
+                        </td>
+                        <td className={`px-3 py-1.5 text-right border-r border-gray-200 font-mono tabular-nums ${colorNeto(o.contribution)}`}>
+                          {o.loanCount ? usd(o.contribution) : "—"}
                         </td>
                         <td className="px-3 py-1.5 text-right">
                           {o.payrollStatus === "not_located" ? (
@@ -1054,11 +1251,14 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                           )}
                         </td>
                         {/*
-                          * ⚠ `total`, NO `net`. Las dos cifras son la misma
-                          * --produced menos la nomina-- pero `total` la calcula
-                          * de los dos numeros que la fila enseña al lado, y
-                          * `net` la rodea pasando por la comision. La columna
-                          * tiene que poderse reconstruir de lo que se ve.
+                          * ⚠ `total`, NO `net`, Y NO SALE DE `contribution`.
+                          *
+                          * total = produced - nomina, donde produced es gross
+                          * revenue + costes directos + otros. Se reconstruye de
+                          * las columnas que tiene al lado SALTANDOSE la comision
+                          * y la contribucion, a proposito: la comision ya esta
+                          * dentro de la nomina, y restarla otra vez duplicaria
+                          * 1.163.656,81 en la division.
                           */}
                         <td className={`px-3 py-1.5 text-right font-semibold font-mono tabular-nums ${colorNeto(o.total)}`}>
                           {usd(o.total)}
@@ -1084,14 +1284,27 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                   <td className="px-3 py-2">{officers.length} people</td>
                   <td className="px-3 py-2 text-right">{totales.prestamos}</td>
                   <td className="px-3 py-2 text-right">{usd(totales.volumen)}</td>
-                  <td className="px-3 py-2 text-right">{usd(totales.produccion)}</td>
+                  <td className="px-3 py-2 text-right">{usd(totales.revenue)}</td>
+                  <td className="px-3 py-2 text-right">
+                    {usd(totales.costesDirectos)}
+                    {totales.otros !== 0 && (
+                      <span className="ml-1 text-[10px] font-normal text-slate-500">
+                        {usd(totales.otros, { signo: true })} other
+                      </span>
+                    )}
+                  </td>
                   {/*
-                    * La comision NO se totaliza a proposito. Sumada aqui, al
-                    * lado de una resta de la que no forma parte, invitaria a
-                    * restarla; y ademas se mide en otro calendario que el resto
-                    * de la fila, asi que el total no seria comparable con nada.
+                    * ⚠ AHORA SI SE TOTALIZA LA COMISION, y antes no. La razon de
+                    * no hacerlo era que estaba al lado de una resta de la que no
+                    * formaba parte, asi que sumarla invitaba a restarla. Con la
+                    * escalera SI forma parte de la resta de su columna --la
+                    * contribucion-- y callar su total dejaria el unico escalon
+                    * sin cerrar.
                     */}
-                  <td className="px-3 py-2 text-right text-gray-400 font-normal">—</td>
+                  <td className="px-3 py-2 text-right">{usd(-totales.comision)}</td>
+                  <td className={`px-3 py-2 text-right border-r border-gray-300 font-mono tabular-nums ${colorNeto(totales.contribucion)}`}>
+                    {usd(totales.contribucion)}
+                  </td>
                   <td className="px-3 py-2 text-right">{usd(-totales.coste)}</td>
                   <td className={`px-3 py-2 text-right font-mono tabular-nums ${colorNeto(totales.neto)}`}>{usd(totales.neto)}</td>
                 </tr>

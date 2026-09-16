@@ -621,7 +621,10 @@ function MiniPL({ l }: { l: LoanRow }) {
         </div>
 
         <div className="px-3 pt-2">
-          <Block title="Total revenue" total={l.revenue} amount={l.loan_amount} lines={l.lines} loan={l} />
+          {/* El titulo nombra los DOS grupos porque el bloque lista los dos: desde
+              que los costes directos entran en el neto, "Total revenue" prometia
+              menos de lo que la columna de debajo enseña. */}
+          <Block title="Revenue and direct costs" total={l.revenue} amount={l.loan_amount} lines={l.lines} loan={l} />
         </div>
       </div>
 
@@ -719,7 +722,7 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
           )}
         </div>
         <div className="px-3 pt-2">
-          <Block title="Total revenue" total={s.revenue} amount={s.volume} lines={s.lines} />
+          <Block title="Revenue and direct costs" total={s.revenue} amount={s.volume} lines={s.lines} />
         </div>
       </div>
       <NetBanner net={s.net} netBps={s.net_bps} />

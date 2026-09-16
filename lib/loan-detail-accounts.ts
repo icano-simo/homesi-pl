@@ -287,11 +287,42 @@ export function expectedMarginAccounts(branch: string): readonly string[] {
  * charging it to one would make the loan look worse for something outside its
  * control.
  */
-export const NET_GROUPS: readonly string[] = ["Revenue"];
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * QUE ENTRA EN EL RESULTADO DE UN PRESTAMO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠ ERA SOLO "Revenue", Y ESO HACIA QUE ESTA PANTALLA Y EL P&L POR LOAN
+ * OFFICER DIERAN NUMEROS DISTINTOS PARA EL MISMO PRESTAMO. En 710002042266,
+ * 7.986,43 aqui contra 8.403,13 alli, y la diferencia eran tres costes
+ * --tasacion, informe de credito, condominio-- que SI causa el prestamo.
+ *
+ * Dos definiciones de "lo que dejo este prestamo" viviendo en dos pantallas es
+ * el patron que este proyecto lleva desmontando desde el principio: no falla
+ * nada, las dos parecen correctas, y se descubre comparando.
+ *
+ * ─── LO QUE MUEVE EL CAMBIO, MEDIDO EL 2026-09-15 ──────────────────────────
+ *
+ *   neto agregado    5.592.262,71  ->  5.624.133,60   +31.870,89   (+0,57%)
+ *   prestamos que cambian de cifra                542 de 712
+ *   prestamos CON revenue que cambian de signo      0
+ *   prestamos sin ninguna linea de revenue        121, que pasan de no tener
+ *                                                 cifra a tener -20.721,45
+ *                                                 entre todos
+ *
+ * Ni un solo prestamo con ingresos pasa a negativo. Los 121 que aparecen en
+ * rojo son prestamos que hoy no enseñan nada y SI tienen coste apuntado: verlo
+ * es el objetivo, no un efecto secundario.
+ *
+ * ⚠ SG&A Y PERSONNEL SIGUEN FUERA, y por su razon original: una campaña de
+ * marketing no la causa un prestamo. Ademas no cambiarian nada -- 70100
+ * Marketing son 270 lineas en 100 prestamos que suman EXACTAMENTE 0,00, y
+ * 60125 Operations Payroll otras 24 en 12, igual.
+ */
+export const NET_GROUPS: readonly string[] = ["Revenue", "Direct Production Costs"];
 
 /** Groups deliberately absent from this view entirely. */
 export const NON_NET_GROUPS: readonly string[] = [
-  "Direct Production Costs",
   "Selling, General & Administrative (S, G & A)",
   "Personnel Costs",
 ];

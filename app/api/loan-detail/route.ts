@@ -250,9 +250,18 @@ export async function GET(req: NextRequest) {
       const a = agg.get(l.loan_number) ?? { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
       const amount = money(l.loan_amount);
 
-      // Revenue is the whole story here: NET_GROUPS holds one group, so the
-      // net is its total. costs stays at zero for the shape of the payload.
-      const revenue = a.groups["Revenue"] ?? 0;
+      /*
+       * ⚠ SE SUMA SOBRE NET_GROUPS, NO SOBRE "Revenue" A PELO. Era
+       * `a.groups["Revenue"]`, y cuando NET_GROUPS paso a llevar tambien los
+       * costes directos, esa linea habria seguido devolviendo solo los ingresos
+       * mientras la consulta de arriba YA traia las filas de coste: el total
+       * habria dejado de ser la suma de las lineas que la tarjeta enseña, sin
+       * que nada fallara.
+       *
+       * `costs` se queda en cero porque los costes directos ya van dentro del
+       * neto; existe por la forma del payload, no como segundo grupo.
+       */
+      const revenue = NET_GROUPS.reduce((s, g) => s + (a.groups[g] ?? 0), 0);
       const costs   = 0;
       const net     = revenue;
 
