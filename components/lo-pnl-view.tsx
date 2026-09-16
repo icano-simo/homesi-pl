@@ -183,423 +183,6 @@ const DESTINOS = [
 ];
 
 /**
- * ─────────────────────────────────────────────────────────────────────────────
- * EL DESGLOSE DE UN PRESTAMO, CUENTA A CUENTA Y POR ESCALON
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * ⚠ SIN AGRUPAR POR CUENTA, Y ES LA DECISION QUE DA SENTIDO AL BLOQUE. Medido
- * sobre los 736 prestamos con apuntes: agrupar por gl_code + sucursal taparia
- * 590.857,86 de movimiento en 727 grupos, y en 317 de ellos --209 prestamos--
- * lo tapado son filas que se compensan.
- *
- * El caso que lo motiva, 710002042266: dentro de su Branch gross revenue hay un
- * par de 9.602,39 que se anula entero --41305 LO Margin contra 41200 Discount
- * Income-- y los dos van en el MISMO escalon, para que se vea anularse.
- * Agrupando por cuenta desaparecerian ademas otros dos pares dentro de la misma
- * cuenta: 41205 (+389,00 y −333,00) y 41309 (+448,50 y −280,31).
- *
- * ⚠ CERRADO POR DEFECTO. El panel ya lleva tres modulos; catorce lineas
- * abiertas en cada uno de 24 prestamos empujarian la nomina y la cuenta fuera
- * de la vista.
- */
-function DesglosePrestamo({ l }: { l: LoanRow }) {
-  const [destinoAbierto, setDestinoAbierto] = useState<string | null>(null);
-  // Por importe absoluto descendente dentro de cada escalon: lo que mas mueve,
-  // primero. El orden del P&L de origen no dice nada, y el alfabetico por cuenta
-  // esconde el tamaño.
-  const porEscalon = new Map<string, LoanLine[]>();
-  const fuera: LoanLine[] = [];
-  for (const x of l.lines) {
-    // Fuera de su sucursal no cae en ningun escalon: se enseña aparte y no suma.
-    if (!x.in_branch) { fuera.push(x); continue; }
-    const k = escalonDe(x.category_6);
-    porEscalon.set(k, [...(porEscalon.get(k) ?? []), x]);
-  }
-  for (const v of porEscalon.values()) v.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-  fuera.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-
-  const subtotal = (k: string) => (porEscalon.get(k) ?? []).reduce((s, x) => s + x.amount, 0);
-
-  return (
-    <tr className="bg-slate-50">
-      <td colSpan={7} className="border-b border-gray-200 px-3 py-2">
-        <table className="w-full text-[11px]">
-          <tbody>
-            {ESCALONES.map((esc) => {
-              const filas = porEscalon.get(esc.key) ?? [];
-              // El escalon "other" solo aparece cuando tiene algo: un renglon
-              // permanente a cero en 481 de 482 prestamos es ruido.
-              if (filas.length === 0) return null;
-              return (
-                <Fragment key={esc.key}>
-                  <tr className="border-t-2 border-gray-300 bg-white/70">
-                    <td className="px-2 py-1 font-semibold uppercase tracking-wide text-gray-600" colSpan={4}>
-                      <span title={esc.hint} className="cursor-help">{esc.label}</span>
-                      {esc.key === "revenue" && l.branch && (
-                        <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-400">
-                          branch {l.branch}
-                        </span>
-                      )}
-                    </td>
-                    <td className={`px-2 py-1 text-right font-mono tabular-nums font-semibold ${
-                      colorNeto(subtotal(esc.key))
-                    }`}>
-                      {usdExacto(subtotal(esc.key))}
-                    </td>
-                  </tr>
-                  {filas.map((x, i) => {
-                    /*
-                     * ⚠ LA SUCURSAL DEL APUNTE SE DISTINGUE CUANDO NO ES LA DEL
-                     * PRESTAMO, PERO EN NEUTRO Y NO EN AMBAR.
-                     *
-                     * Medido: 1.999 de 5.536 lineas --el 36,1%-- se contabilizan
-                     * en otra sucursal. Parte del margen va a la 700 por diseño,
-                     * asi que en ambar un tercio de cada desglose pareceria un
-                     * problema y la marca dejaria de significar nada. Es
-                     * informacion, y se viste como informacion.
-                     *
-                     * Es el mismo error del que ya avisa
-                     * lib/loan-detail-accounts.ts: comparar contra la sucursal
-                     * del prestamo marcaba 308 de 374.
-                     */
-                    const otraSucursal = !!x.branch && !!l.branch && x.branch !== l.branch;
-                    return (
-                      <tr key={`${esc.key}-${i}`} className="border-t border-gray-200/70">
-                        <td className="px-2 py-1 pl-5 font-mono text-gray-600">{x.gl_code ?? "—"}</td>
-                        <td className="px-2 py-1 text-gray-700" title={x.check_description ?? undefined}>
-                          {x.gl_name ?? "—"}
-                        </td>
-                        <td className="px-2 py-1 text-gray-500">{x.category_7 ?? "—"}</td>
-                        <td className="px-2 py-1">
-                          <span
-                            className={otraSucursal
-                              ? "rounded border border-slate-300 bg-white px-1 font-mono text-slate-600"
-                              : "font-mono text-gray-500"}
-                            title={otraSucursal
-                              ? `Booked in branch ${x.branch}, while the loan is branch ${l.branch}. Common and not an error: part of the margin is booked in 700 by design.`
-                              : undefined}
-                          >
-                            {x.branch ?? "—"}
-                          </span>
-                        </td>
-                        {/*
-                          * Al centimo, no redondeado como la tabla de fuera:
-                          * este desglose existe para poder cuadrar contra la
-                          * contabilidad, y con dolares enteros no cuadra.
-                          */}
-                        <td className={`px-2 py-1 text-right font-mono tabular-nums ${
-                          x.amount < 0 ? "text-red-600" : "text-gray-700"
-                        }`}>
-                          {usdExacto(x.amount)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </Fragment>
-              );
-            })}
-
-            {/*
-              * ⚠ LA COMISION ES UN ESCALON SIN CUENTAS, Y HAY QUE DECIRLO. No
-              * sale del P&L sino de comp.loan_commission, asi que no tiene
-              * gl_code que enseñar y no se puede cuadrar contra el libro mayor
-              * como las de arriba. Un escalon con la misma pinta que los otros
-              * y sin lineas se leeria como un fallo de carga.
-              */}
-            <tr className="border-t-2 border-gray-300 bg-white/70">
-              <td className="px-2 py-1 font-semibold uppercase tracking-wide text-gray-600" colSpan={4}>
-                LO commission
-                <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-400">
-                  from Compensafe — not a P&amp;L account
-                </span>
-              </td>
-              <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-red-600">
-                {l.commission == null
-                  ? <span className="text-gray-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>
-                  : usdExacto(-l.commission)}
-              </td>
-            </tr>
-            <tr className="border-t-2 border-gray-400 font-semibold text-gray-800">
-              <td className="px-2 py-1 uppercase tracking-wide" colSpan={4}>= Total contribution</td>
-              <td className={`px-2 py-1 text-right font-mono tabular-nums ${colorNeto(l.contribution ?? 0)}`}>
-                {l.contribution == null ? "—" : usdExacto(l.contribution)}
-              </td>
-            </tr>
-
-            {/*
-              * ─────────────────────────────────────────────────────────────
-              * FUERA DE ESTA CUENTA, Y DEBAJO DEL TOTAL A PROPOSITO
-              * ─────────────────────────────────────────────────────────────
-              *
-              * ⚠ ESTABA PEGADO A LA COLUMNA DE GROSS REVENUE Y ASI NO SE
-              * ENTENDIA: al lado de un numero que SI suma, parece que suma.
-              * Ahora va despues del total, separado por un hueco, y la
-              * cabecera dice UNA VEZ que no entra -- no cada fila.
-              *
-              * ⚠ Y SON DOS SECCIONES, NO UNA, porque son dos cosas distintas y
-              * bajo la misma etiqueta serian indistinguibles. Medido sobre los
-              * 494 cierres:
-              *
-              *   la 700    1.138.272,02   reparto normal: DM Margin 827.013,69
-              *                            en 411 lineas, Fee Income 168.393,48
-              *                            en 537, Processing Income 104.449,00
-              *   otra         85.073,08   esto SI es anomalo: Back-end Margin
-              *                            167.849,23 en 27 lineas apuntado en
-              *                            una sucursal que no es la del
-              *                            prestamo, y -102.925,78 de
-              *                            Compensation Transfers en 13
-              *
-              * La primera es como funciona la division; la segunda es una
-              * pregunta. Juntarlas esconde la segunda dentro de la primera.
-              */}
-            {fuera.length > 0 && (
-              <>
-                <tr>
-                  <td colSpan={5} className="pt-3">
-                    <div className="border-t border-gray-300 pt-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-                      Not part of this branch&rsquo;s contribution
-                    </div>
-                  </td>
-                </tr>
-                {DESTINOS.map((d) => {
-                  const suyas = fuera.filter((x) => d.suyo(x, l));
-                  // Casi siempre hay algo en la 700; una tercera sucursal es
-                  // raro. La linea a cero no se enseña -- diria que se miro y
-                  // no habia, y lo que hay que decir es lo que si hay.
-                  if (suyas.length === 0) return null;
-                  const abierta = destinoAbierto === d.key;
-                  return (
-                    <Fragment key={d.key}>
-                      <tr onClick={() => setDestinoAbierto(abierta ? null : d.key)}
-                          className="cursor-pointer hover:bg-white/60">
-                        <td className="px-2 py-1 text-gray-500" colSpan={4}>
-                          <span className="inline-flex items-center">
-                            <ChevronRight size={10}
-                              className={`mr-1 shrink-0 transition-transform ${abierta ? "rotate-90 text-blue-600" : "text-gray-400"}`} />
-                            {d.label}
-                            <span className="ml-1.5 text-gray-400">
-                              {suyas.length} line{suyas.length === 1 ? "" : "s"}
-                            </span>
-                          </span>
-                        </td>
-                        <td className="px-2 py-1 text-right font-mono tabular-nums text-gray-500">
-                          {usdExacto(suyas.reduce((s, x) => s + x.amount, 0))}
-                        </td>
-                      </tr>
-                      {abierta && suyas
-                        .slice()
-                        .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
-                        .map((x, i) => (
-                        <tr key={`${d.key}-${i}`} className="text-gray-400">
-                          <td className="px-2 py-1 pl-8 font-mono">{x.gl_code ?? "—"}</td>
-                          <td className="px-2 py-1" title={x.check_description ?? undefined}>{x.gl_name ?? "—"}</td>
-                          <td className="px-2 py-1">{x.category_7 ?? "—"}</td>
-                          <td className="px-2 py-1 font-mono">{x.branch ?? "—"}</td>
-                          <td className="px-2 py-1 text-right font-mono tabular-nums">{usdExacto(x.amount)}</td>
-                        </tr>
-                      ))}
-                    </Fragment>
-                  );
-                })}
-              </>
-            )}
-          </tbody>
-        </table>
-      </td>
-    </tr>
-  );
-}
-
-function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
-  const [abierto, setAbierto] = useState<string | null>(null);
-
-  if (loans.length === 0) {
-    return (
-      <div className="px-4 py-3 text-xs text-gray-400 italic">
-        No closings in this period.
-      </div>
-    );
-  }
-  const sum = (f: (l: LoanRow) => number) => loans.reduce((s, l) => s + f(l), 0);
-  const hayOtros = loans.some((l) => l.otherBooked !== 0);
-
-  return (
-    <table className="w-full table-fixed text-xs">
-      {/*
-        * ⚠ ANCHOS FIJOS Y `table-fixed`. Con anchos automaticos cada persona
-        * sacaba una tabla distinta --el ancho lo decidia el importe mas largo
-        * de SUS prestamos-- asi que al pasar de una a otra las columnas
-        * bailaban y no se podian comparar dos paneles seguidos.
-        */}
-      <colgroup>
-        <col className="w-[22%]" /><col className="w-[14%]" /><col className="w-[8%]" />
-        <col className="w-[14%]" /><col className="w-[14%]" /><col className="w-[14%]" />
-        <col className="w-[14%]" />
-      </colgroup>
-        <thead className="sticky top-0 z-10 bg-gray-50">
-          <tr className="text-left text-gray-500 border-b border-gray-200">
-            {/*
-              * ⚠ LAS COLUMNAS SON LOS ESCALONES, LAS MISMAS QUE LA FILA DE LA
-              * PERSONA Y LAS MISMAS QUE EL DESGLOSE DE DENTRO. Antes decian
-              * "Margin earned / Other loan costs / What it left", que es un
-              * reparto distinto del que usa el total de arriba: el prestamo se
-              * leia de una forma y la persona de otra, sobre los mismos datos.
-              *
-              * ⚠ Y VAN EN EL ORDEN DE LA ESCALERA --revenue, costes directos,
-              * comision, neto-- y no en otro. La fila tiene que poderse
-              * reconstruir de izquierda a derecha; con la comision antes de los
-              * costes se leeria "revenue menos comision mas costes", que no es
-              * una secuencia que nadie sume de cabeza.
-              *
-              * "Closed" deja de ser columna y baja bajo el numero de prestamo:
-              * hace falta --el mes del cierre no es el del apunte-- pero no
-              * necesita una septima columna para dos palabras.
-              */}
-            <th className="px-2 py-1.5 font-medium">Loan</th>
-            <th className="px-2 py-1.5 font-medium text-right">Volume</th>
-            {/*
-              * ⚠ bps DE LA CONTRIBUCION SOBRE EL IMPORTE DE **ESTE** PRESTAMO,
-              * no sobre el volumen del periodo. Es la unica lectura que permite
-              * comparar un prestamo de 200.000 con uno de 900.000: en dolares
-              * el segundo siempre gana, en bps se ve cual rindio.
-              */}
-            <th className="px-2 py-1.5 font-medium text-right" title="Contribution over this loan's own amount, in basis points. Not over the period's volume.">
-              bps
-            </th>
-            <th className="px-2 py-1.5 font-medium text-right" title="What the loan left before paying the loan officer.">
-              Revenue
-            </th>
-            <th className="px-2 py-1.5 font-medium text-right" title="Appraisal, credit report, verification — and branch-to-branch transfers (55601), which is why this line can be unusually large on a single loan. Shown with its own sign: these usually ADD, because they are charged to the borrower and come back to the branch.">
-              Direct costs
-            </th>
-            <th className="px-2 py-1.5 font-medium text-right" title="Paid to the loan officer for this loan, from Compensafe.">
-              Comm.
-            </th>
-            <th className="px-2 py-1.5 font-medium text-right" title="Revenue plus direct costs, minus the commission. What this loan left the branch after paying the loan officer.">
-              Net
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {loans.map((l) => {
-            const abre = abierto === l.loan_number;
-            return (
-            <Fragment key={l.loan_number}>
-            <tr
-              onClick={() => setAbierto(abre ? null : l.loan_number)}
-              className={`cursor-pointer border-b border-gray-100 hover:bg-gray-50 ${abre ? "bg-gray-50" : ""}`}>
-              <td className="px-2 py-1.5">
-                <span className="flex items-center">
-                  <ChevronRight size={11}
-                    className={`mr-1 shrink-0 transition-transform ${abre ? "rotate-90 text-blue-600" : "text-gray-400"}`} />
-                  <span className="min-w-0">
-                    <span className="block truncate font-mono text-gray-700">{l.loan_number}</span>
-                    <span className="block truncate text-[10px] text-gray-400">{l.month} {l.year}</span>
-                  </span>
-                </span>
-              </td>
-              <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-600">{usd(l.loan_amount)}</td>
-              <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-500">{bps(l.contribution, l.loan_amount)}</td>
-              {/*
-                * ⚠ LO DE FUERA YA NO CUELGA DE ESTA COLUMNA. Estaba pegado a
-                * la cifra y eso era justo lo que no se entendia: al lado de un
-                * numero que SI suma, parece que suma. Vive en su propia
-                * seccion, debajo del total, dentro del desglose.
-                *
-                * Lo unico que se queda en la fila es la marca de sucursal
-                * inexistente, que no es una cantidad sino una advertencia sobre
-                * por que la cantidad es cero.
-                */}
-              <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                {usd(l.grossRevenue)}
-                {l.branchNotInPl && (
-                  <span className="ml-1 text-[10px] text-amber-600"
-                        title={`Branch ${l.branch} carries no entries at all in the P&L, so none of this loan's revenue can be booked to it.`}>
-                    branch not in P&amp;L
-                  </span>
-                )}
-              </td>
-              <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                {usd(l.directCosts)}
-                {/*
-                  * Lo que no cae en ninguno de los dos grupos viaja pegado a los
-                  * costes directos y DICHO, no sumado en silencio. Es un solo
-                  * prestamo en toda la division --el 700002013844, con -8.721,60
-                  * de Office Expense-- y esconderlo por raro seria justo el
-                  * error que el desglose existe para no cometer.
-                  */}
-                {l.otherBooked !== 0 && (
-                  <span className="ml-1 text-[10px] text-slate-500"
-                        title="Booked against this loan but neither revenue nor a direct production cost. It is inside the contribution.">
-                    {usd(l.otherBooked, { signo: true })} other
-                  </span>
-                )}
-              </td>
-              <td className="px-2 py-1.5 text-right font-mono tabular-nums text-gray-500">
-                {/*
-                  * Null no es cero: el prestamo no cruzo con Compensafe. Un cero
-                  * aqui diria "no cobro por el", que es otra cosa.
-                  */}
-                {l.commission == null
-                  ? <span title="This loan does not cross with Compensafe. Not the same as a zero commission."
-                          className="text-gray-300">—</span>
-                  : usd(-l.commission)}
-              </td>
-              <td className={`px-2 py-1.5 text-right font-mono tabular-nums font-medium ${colorNeto(l.contribution ?? 0)}`}>
-                {l.contribution == null
-                  ? <span className="text-gray-300" title="Without a known commission there is no contribution to compute. Showing the gross here would say nobody was paid.">—</span>
-                  : usd(l.contribution)}
-              </td>
-            </tr>
-            {abre && <DesglosePrestamo l={l} />}
-            </Fragment>
-            );
-          })}
-        </tbody>
-        {/*
-          * ⚠ LA FILA DE TOTALES ES LO QUE ATA ESTE BLOQUE A LA FILA DE FUERA.
-          * Sin ella hay que sumar 24 prestamos a mano para comprobar de donde
-          * sale la contribucion de la persona, y entonces el detalle no
-          * demuestra nada: solo acompaña.
-          *
-          * La comision se suma SOLO de los prestamos que cruzaron. Los que no
-          * cruzan valen null, no cero, y cuantos son se dice en la tarjeta.
-          */}
-        <tfoot className="sticky bottom-0 bg-slate-50">
-          <tr className="border-t-2 border-slate-300 font-bold text-gray-800">
-            <td className="px-2 py-1.5">
-              {loans.length} loan{loans.length === 1 ? "" : "s"}
-            </td>
-            <td className="px-2 py-1.5 text-right font-mono tabular-nums">{usd(sum((l) => l.loan_amount ?? 0))}</td>
-            {/*
-              * El bps del total va sobre el volumen del total, que es la unica
-              * base que le corresponde: promediar los bps de cada prestamo
-              * daria el mismo peso a uno de 200.000 que a uno de 900.000.
-              */}
-            <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-              {bps(sum((l) => l.contribution ?? 0), sum((l) => l.loan_amount ?? 0))}
-            </td>
-            <td className="px-2 py-1.5 text-right font-mono tabular-nums">{usd(sum((l) => l.grossRevenue))}</td>
-            <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-              {usd(sum((l) => l.directCosts))}
-              {hayOtros && (
-                <span className="ml-1 text-[10px] font-normal text-slate-500">
-                  {usd(sum((l) => l.otherBooked), { signo: true })} other
-                </span>
-              )}
-            </td>
-            <td className="px-2 py-1.5 text-right font-mono tabular-nums">{usd(-sum((l) => l.commission ?? 0))}</td>
-            <td className={`px-2 py-1.5 text-right font-mono tabular-nums ${colorNeto(sum((l) => l.contribution ?? 0))}`}>
-              {usd(sum((l) => l.contribution ?? 0))}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
-  );
-}
-
-
-/**
  * Las cuatro secciones, en el orden en que se leen.
  *
  * ⚠ "Role unknown" VA EL ULTIMO Y NO ES RESIDUAL: son 22 personas con 76
@@ -853,8 +436,408 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
  * panel se abriria DEBAJO del modal que lo contiene -- invisible, y sin que
  * nada pareciera roto.
  */
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * UNA TABLA DE CUENTAS, REPARTIDA POR PELDAÑO
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * La usan las dos tarjetas --la de cada prestamo y la que totaliza-- porque son
+ * la MISMA estructura con distinto contenido. Dos copias se habrian separado:
+ * es exactamente el patron que este modulo lleva desmontando desde el principio.
+ *
+ * ⚠ FILAS CRUDAS EN LA TARJETA DE UN PRESTAMO, SUMADAS EN LA QUE TOTALIZA, y
+ * la diferencia no es una incoherencia. Dentro de un prestamo, agrupar por
+ * cuenta esconde pares que se anulan --590.857,86 en 727 grupos, 317 de ellos
+ * compensandose-- y ver el par es la mitad de por que existe el desglose. En la
+ * tarjeta que suma 64 prestamos, en cambio, la fila cruda no significa nada:
+ * ahi lo que se quiere es cuanto pesa cada cuenta.
+ */
+function TablaCuentas({ lineas, sucursalPrestamo }: {
+  lineas: LoanLine[]; sucursalPrestamo: string | null;
+}) {
+  const porEscalon = new Map<string, LoanLine[]>();
+  for (const x of lineas) {
+    const k = escalonDe(x.category_6);
+    porEscalon.set(k, [...(porEscalon.get(k) ?? []), x]);
+  }
+  for (const v of porEscalon.values()) v.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+
+  return (
+    <>
+      {ESCALONES.map((esc) => {
+        const filas = porEscalon.get(esc.key) ?? [];
+        // El escalon "other" solo aparece cuando tiene algo: un renglon
+        // permanente a cero en 481 de 482 prestamos es ruido.
+        if (filas.length === 0) return null;
+        const subtotal = filas.reduce((s, x) => s + x.amount, 0);
+        return (
+          <Fragment key={esc.key}>
+            <tr className="border-t border-slate-200 bg-slate-50/80">
+              <td className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600" colSpan={4}>
+                <span title={esc.hint} className="cursor-help">{esc.label}</span>
+              </td>
+              <td className={`px-2 py-1 text-right font-mono tabular-nums font-semibold ${colorNeto(subtotal)}`}>
+                {usdExacto(subtotal)}
+              </td>
+            </tr>
+            {filas.map((x, i) => {
+              /*
+               * ⚠ LA SUCURSAL DEL APUNTE EN NEUTRO, NO EN AMBAR. 1.999 de 5.536
+               * lineas --el 36,1%-- se contabilizan en otra sucursal, parte del
+               * margen va a la 700 por diseño, y en ambar un tercio de cada
+               * tarjeta pareceria un problema. Es informacion.
+               */
+              const otra = !!x.branch && !!sucursalPrestamo && x.branch !== sucursalPrestamo;
+              return (
+                <tr key={`${esc.key}-${i}`} className="border-t border-slate-100">
+                  <td className="whitespace-nowrap px-2 py-0.5 pl-4 font-mono text-slate-500">{x.gl_code ?? "—"}</td>
+                  <td className="whitespace-nowrap px-2 py-0.5 text-slate-700" title={x.check_description ?? undefined}>
+                    {x.gl_name ?? "—"}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-0.5 text-slate-400">{x.category_7 ?? "—"}</td>
+                  <td className="whitespace-nowrap px-2 py-0.5">
+                    <span className={otra
+                      ? "rounded border border-slate-300 bg-white px-1 font-mono text-slate-600"
+                      : "font-mono text-slate-400"}
+                      title={otra ? `Booked in branch ${x.branch}, while the loan is branch ${sucursalPrestamo}. Common and not an error: part of the margin is booked in 700 by design.` : undefined}>
+                      {x.branch ?? "—"}
+                    </span>
+                  </td>
+                  <td className={`whitespace-nowrap px-2 py-0.5 text-right font-mono tabular-nums ${
+                    x.amount < 0 ? "text-red-600" : "text-slate-700"
+                  }`}>
+                    {usdExacto(x.amount)}
+                  </td>
+                </tr>
+              );
+            })}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * Lo que no se queda la sucursal, debajo del total y fuera de la cuenta.
+ *
+ * ⚠ DESPUES DEL TOTAL, NUNCA ANTES NI INTERCALADO. La sucursal cierra su cuenta
+ * en Total contribution; lo de corporativo es contexto. Puesto en medio parece
+ * que participa en la resta. Y la etiqueta lo dice UNA VEZ, en su cabecera.
+ */
+function FueraDeLaCuenta({ lineas, sucursalPrestamo }: {
+  lineas: LoanLine[]; sucursalPrestamo: string | null;
+}) {
+  const fuera = lineas.filter((x) => !x.in_branch);
+  if (fuera.length === 0) return null;
+
+  return (
+    <div className="mt-2 border-t-2 border-slate-300 pt-2">
+      <p className="px-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+        Not part of this branch&rsquo;s contribution
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[34rem] text-[11px]">
+          <tbody>
+            {DESTINOS.map((d) => {
+              const suyas = fuera
+                .filter((x) => d.suyo(x, { branch: sucursalPrestamo } as LoanRow))
+                .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+              // La linea a cero no se enseña: diria que se miro y no habia,
+              // cuando lo que hay que decir es lo que si hay.
+              if (suyas.length === 0) return null;
+              return (
+                <Fragment key={d.key}>
+                  <tr>
+                    <td className="px-2 py-1 text-slate-500" colSpan={4}>{d.label}</td>
+                    <td className="px-2 py-1 text-right font-mono tabular-nums text-slate-500">
+                      {usdExacto(suyas.reduce((s, x) => s + x.amount, 0))}
+                    </td>
+                  </tr>
+                  {suyas.map((x, i) => (
+                    <tr key={`${d.key}-${i}`} className="text-slate-400">
+                      <td className="whitespace-nowrap px-2 py-0.5 pl-4 font-mono">{x.gl_code ?? "—"}</td>
+                      <td className="whitespace-nowrap px-2 py-0.5" title={x.check_description ?? undefined}>{x.gl_name ?? "—"}</td>
+                      <td className="whitespace-nowrap px-2 py-0.5">{x.category_7 ?? "—"}</td>
+                      <td className="whitespace-nowrap px-2 py-0.5 font-mono">{x.branch ?? "—"}</td>
+                      <td className="whitespace-nowrap px-2 py-0.5 text-right font-mono tabular-nums">{usdExacto(x.amount)}</td>
+                    </tr>
+                  ))}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** El cierre de la escalera: la comision y el total, iguales en las dos tarjetas. */
+function CierreEscalera({ commission, contribution }: {
+  commission: number | null; contribution: number | null;
+}) {
+  return (
+    <>
+      <tr className="border-t border-slate-200 bg-slate-50/80">
+        <td className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600" colSpan={4}>
+          &minus; LO commission
+          <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
+            from Compensafe — not a P&amp;L account
+          </span>
+        </td>
+        <td className="px-2 py-1 text-right font-mono tabular-nums font-semibold text-red-600">
+          {commission == null
+            ? <span className="text-slate-400" title="This loan does not cross with Compensafe. Not the same as a zero commission.">not known</span>
+            : usdExacto(-commission)}
+        </td>
+      </tr>
+      <tr className="border-t-2 border-slate-400 bg-slate-50">
+        <td className="px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-[#001A40]" colSpan={4}>
+          = Total contribution
+        </td>
+        <td className={`px-2 py-1.5 text-right font-mono tabular-nums text-sm font-bold ${colorNeto(contribution ?? 0)}`}>
+          {contribution == null ? "—" : usdExacto(contribution)}
+        </td>
+      </tr>
+    </>
+  );
+}
+
+/**
+ * La tarjeta de UN prestamo: su identidad, sus cuentas por peldaño, y su total.
+ *
+ * ⚠ ABIERTA POR DEFECTO, y con `abrible` para poder plegarlas todas de golpe.
+ * Nathan Martinez cierra 65 prestamos con 840 filas de cuenta entre todos --13,9
+ * de media y 28 en el peor--, asi que abiertas son mas de mil filas en una sola
+ * pantalla. La cabecera de cada tarjeta lleva ya su importe, sus bps y su
+ * contribucion, de modo que plegarlas no esconde ninguna cifra: solo el detalle.
+ */
+function TarjetaPrestamo({ l, abierta, onToggle }: {
+  l: LoanRow; abierta: boolean; onToggle: () => void;
+}) {
+  return (
+    <article className="rounded-xl border border-slate-200 bg-white shadow-xs">
+      <header
+        onClick={onToggle}
+        className="flex cursor-pointer flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-slate-200 bg-slate-100/70 px-3 py-2 hover:bg-slate-100"
+      >
+        <div className="flex min-w-0 items-baseline gap-2">
+          <ChevronRight size={12}
+            className={`shrink-0 transition-transform ${abierta ? "rotate-90 text-blue-600" : "text-slate-400"}`} />
+          <span className="font-mono text-xs font-semibold text-[#001A40]">{l.loan_number}</span>
+          <span className="truncate text-[11px] text-slate-500">{l.borrower_name ?? "—"}</span>
+          <span className="whitespace-nowrap text-[11px] text-slate-400">{l.month} {l.year}</span>
+          {l.branch && <span className="whitespace-nowrap font-mono text-[10px] text-slate-400">br {l.branch}</span>}
+          {l.plPending && (
+            <span className="whitespace-nowrap rounded border border-amber-200 bg-amber-50 px-1 text-[9px] font-medium text-amber-700"
+                  title="No P&L is loaded for this loan's closing month. Left out of the totals; its origination cost may already be booked.">
+              pending P&amp;L
+            </span>
+          )}
+        </div>
+        <div className="flex items-baseline gap-4 text-[11px]">
+          <span className="font-mono tabular-nums text-slate-500">{usd(l.loan_amount)}</span>
+          <span className="font-mono tabular-nums text-slate-500"
+                title="Contribution over this loan's own amount, in basis points.">
+            {bps(l.contribution, l.loan_amount)} bps
+          </span>
+          <span className={`font-mono tabular-nums text-xs font-bold ${colorNeto(l.contribution ?? 0)}`}>
+            {l.contribution == null ? "—" : usd(l.contribution)}
+          </span>
+        </div>
+      </header>
+
+      {abierta && (
+        <div className="px-1 py-1">
+          {/* Scroll HORIZONTAL si las cinco columnas no caben. Es el unico
+              aceptable: el vertical seria un panel dentro de otro. */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[34rem] text-[11px]">
+              <tbody>
+                <TablaCuentas lineas={l.lines} sucursalPrestamo={l.branch} />
+                <CierreEscalera commission={l.commission} contribution={l.contribution} />
+              </tbody>
+            </table>
+          </div>
+          <FueraDeLaCuenta lineas={l.lines} sucursalPrestamo={l.branch} />
+        </div>
+      )}
+    </article>
+  );
+}
+
+/**
+ * La tarjeta que totaliza: la MISMA estructura, sumando todos sus prestamos.
+ *
+ * Y lo unico que solo puede estar aqui: la nomina, que no cuelga de ningun
+ * prestamo, y las dos cifras que hay que poder ver juntas -- lo que generaron
+ * sus cierres contra lo que el P&L registra pagado.
+ */
+function TarjetaTotales({ o }: { o: OfficerBlock }) {
+  /*
+   * Aqui SI se agrupa por cuenta y sucursal, al contrario que en la tarjeta de
+   * un prestamo. Sumando 64 prestamos la fila cruda no dice nada --habria 840--
+   * y lo que se quiere saber es cuanto pesa cada cuenta. El par que se anula,
+   * que es la razon de las filas crudas, se ve en la tarjeta del prestamo.
+   */
+  const agrupadas = useMemo(() => {
+    const m = new Map<string, LoanLine>();
+    for (const l of o.loans) {
+      for (const x of l.lines) {
+        const k = `${x.gl_code}|${x.branch}|${x.category_6}|${x.in_branch}`;
+        const e = m.get(k);
+        if (e) e.amount += x.amount;
+        else m.set(k, { ...x, check_description: null });
+      }
+    }
+    return [...m.values()];
+  }, [o.loans]);
+
+  const nominaPos = -o.block2Total;
+  const localizada = o.payrollStatus !== "not_located";
+
+  return (
+    <article className="rounded-xl border-2 border-[#001A40]/25 bg-white shadow-sm">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-t-xl border-b border-slate-200 bg-[#001A40] px-3 py-2 text-white">
+        <span className="text-xs font-semibold uppercase tracking-wide">
+          All {o.loanCount} closing{o.loanCount === 1 ? "" : "s"}
+        </span>
+        <div className="flex items-baseline gap-4 text-[11px]">
+          <span className="font-mono tabular-nums text-white/60">{usd(o.volume)}</span>
+          <span className="font-mono tabular-nums text-white/60">{bps(o.contribution, o.volume)} bps</span>
+          <span className={`font-mono tabular-nums text-xs font-bold ${
+            o.contribution > 0 ? "text-emerald-300" : o.contribution < 0 ? "text-red-300" : "text-white/70"
+          }`}>
+            {usd(o.contribution)}
+          </span>
+        </div>
+      </header>
+
+      <div className="px-1 py-1">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-[11px]">
+            <tbody>
+              <TablaCuentas lineas={agrupadas.filter((x) => x.in_branch)} sucursalPrestamo={null} />
+              <CierreEscalera commission={o.commission} contribution={o.contribution} />
+            </tbody>
+          </table>
+        </div>
+        <FueraDeLaCuenta lineas={agrupadas} sucursalPrestamo={null} />
+      </div>
+
+      {/* ── Lo que no cuelga de ningun prestamo ───────────────────────────── */}
+      <div className="border-t-2 border-slate-200 px-3 py-3">
+        <h4 className="pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          Payroll this period
+        </h4>
+        <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
+
+        {/*
+          * ⚠ LAS DOS CIFRAS, JUNTAS Y CON SU DIFERENCIA. Alguien las va a
+          * comparar de todas formas; ensenadas juntas con la explicacion al
+          * lado no invitan a restarlas, y ausentes si.
+          *
+          * Son dos calendarios: Compensafe agrupa por FECHA DE CIERRE y el P&L
+          * por FECHA DE PAGO, asi que no tienen por que cuadrar.
+          */}
+        <dl className="mt-2 space-y-1 rounded-lg border border-slate-200 bg-white p-3 text-[11px]">
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-slate-600">Commission on loans</dt>
+            <dd className="font-mono tabular-nums text-slate-700">{usdExacto(o.commission)}</dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-slate-600">Actually paid in payroll</dt>
+            <dd className="font-mono tabular-nums text-slate-700">
+              {localizada ? usdExacto(nominaPos) : (
+                <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
+                  not located
+                </span>
+              )}
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-4 border-t border-slate-200 pt-1">
+            <dt className="font-medium text-slate-600">Difference</dt>
+            <dd className="font-mono tabular-nums font-medium text-slate-700">
+              {localizada ? usdExacto(o.commission - nominaPos) : "—"}
+            </dd>
+          </div>
+        </dl>
+
+        {/*
+          * ⚠ EL NETO NO SALE DE LA CONTRIBUCION, y encadenarlos es el error que
+          * mas caro sale aqui porque el resultado parece razonable: la comision
+          * se PAGA POR LA NOMINA, asi que restarla en la escalera y ademas
+          * restar la nomina entera resta el mismo dinero dos veces --
+          * 1.163.656,81 dentro de una nomina de 5.362.891,98, el 21,7%.
+          */}
+        <dl className="mt-2 space-y-1 rounded-lg bg-[#001A40] p-3 text-[11px] text-white">
+          <p className="pb-1 text-[10px] uppercase tracking-wide text-white/40">
+            Does this person pay for themselves — a separate question
+          </p>
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-white/70">Produced</dt>
+            <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-4">
+            <dt className="text-white/70">&minus; Payroll not tied to loans</dt>
+            <dd className="font-mono tabular-nums">
+              {localizada ? usdExacto(nominaPos) : <span className="text-amber-300">not located</span>}
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-4 border-t border-white/25 pt-1.5">
+            <dt className="font-semibold uppercase tracking-wide">= Net</dt>
+            <dd className={`font-mono tabular-nums text-sm font-bold ${
+              o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
+            }`}>
+              {usdExacto(o.total)}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </article>
+  );
+}
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * EL DETALLE DE UNA PERSONA, EN TARJETAS APILADAS
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ UN SOLO SCROLL, EL DEL PANEL. Antes habia tres cajas de alto fijo peleandose
+ * por el hueco --lista de prestamos, nomina, resumen-- y cada una con su barra;
+ * arrastrar una movia lo que no se queria mover. Ahora las tarjetas se apilan y
+ * el panel crece: solo scrollea el, como una pagina.
+ *
+ * ⚠ EL HORIZONTAL SI SE ACEPTA, dentro de cada tabla de cuentas. Cinco columnas
+ * --gl, nombre, category_7, sucursal, importe-- no caben siempre, y la
+ * alternativa era recortar el nombre de la cuenta hasta hacerlo inutil.
+ *
+ * ⚠ z-[60]/z-[70] Y NO z-40/z-50 A PROPOSITO: esta vista vive TAMBIEN dentro
+ * del modal de P&L por sucursal, que ocupa esos dos niveles. Con los mismos, el
+ * panel se abriria DEBAJO del modal que lo contiene -- invisible, y sin que
+ * nada pareciera roto.
+ */
 function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) {
   const [ayuda, setAyuda] = useState(false);
+
+  /*
+   * ⚠ ABIERTAS POR DEFECTO, Y CON UN INTERRUPTOR PARA TODAS. Nathan Martinez
+   * cierra 65 prestamos con 840 filas de cuenta entre todos --13,9 de media y
+   * 28 en el peor--, o sea mas de mil filas apiladas.
+   *
+   * No se pliega por defecto porque eso seria decidir por el lector que el
+   * detalle no le interesa. Pero la cabecera de cada tarjeta lleva ya su
+   * importe, sus bps y su contribucion, asi que plegarlas NO esconde ninguna
+   * cifra -- solo el desglose-- y por eso el interruptor es barato.
+   */
+  const [plegadas, setPlegadas] = useState<Set<string>>(() => new Set());
+  const alternar = (ln: string) =>
+    setPlegadas((prev) => {
+      const n = new Set(prev);
+      if (n.has(ln)) n.delete(ln); else n.add(ln);
+      return n;
+    });
+  const todasPlegadas = o.loans.length > 0 && plegadas.size === o.loans.length;
 
   // Escape cierra. Un panel que solo se cierra con la X se queda abierto en
   // cuanto alguien lo intenta por el camino de siempre.
@@ -868,208 +851,78 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
     return () => window.removeEventListener("keydown", alPulsar);
   }, [onClose, ayuda]);
 
-  const nominaPos = -o.block2Total;
-  const localizada = o.payrollStatus !== "not_located";
-
   return (
     <>
       <div className="fixed inset-0 z-[60] bg-slate-900/25" onClick={onClose} />
       <aside
         role="dialog"
         aria-label={`Detail for ${o.name}`}
-        className="fixed right-0 top-[40px] z-[70] flex h-[calc(100vh-80px)] w-full max-w-3xl flex-col justify-between overflow-hidden rounded-l-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+        className="fixed inset-y-0 right-0 z-[70] w-full max-w-6xl overflow-y-auto border-l border-slate-200 bg-slate-50 shadow-2xl"
       >
-        {/* ── Cabecera ──────────────────────────────────────────────────── */}
-        <header className="flex shrink-0 items-start justify-between gap-3 pb-3">
+        {/*
+          * La cabecera se fija: con 65 tarjetas, bajar hasta la ultima dejaba
+          * sin referencia de quien se estaba mirando y sin manera de cerrar sin
+          * volver arriba.
+          */}
+        <header className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-5 py-3 shadow-sm">
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold text-[#001A40]">{o.name}</h3>
-            <p className="mt-0.5 truncate text-[11px] text-gray-500">
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">
               {o.position ?? "Role not in the HR roster"}
               {o.area ? ` · ${o.area}` : ""}
               {o.branch ? ` · branch ${o.branch}` : ""}
+              {o.loansPendingPl > 0 && (
+                <span className="ml-2 text-amber-700"
+                      title={`${usdExacto(Math.abs(o.pendingPlBooked))} of origination cost is already booked on them; the margin is not. Left out of the figures.`}>
+                  · {o.loansPendingPl} pending P&amp;L
+                </span>
+              )}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {o.loans.length > 1 && (
+              <button
+                onClick={() => setPlegadas(todasPlegadas ? new Set() : new Set(o.loans.map((l) => l.loan_number)))}
+                className="rounded-full border border-slate-200 px-2.5 py-1 text-[10px] text-slate-500 hover:bg-slate-50"
+              >
+                {todasPlegadas ? "Expand all" : "Collapse all"}
+              </button>
+            )}
             {/*
               * ⚠ UN SOLO BOTON PARA TODA LA PROSA. Los parrafos estaban
-              * repartidos entre las tarjetas y eran lo que impedia que el panel
-              * cupiera; aqui no se pierde ninguno y el panel se queda con
-              * numeros.
+              * repartidos entre las tarjetas y eran lo que impedia leer una
+              * columna de arriba abajo sin cruzar texto.
               */}
             <button
               onClick={() => setAyuda(true)}
-              className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-2.5 py-1 text-[10px] text-gray-500 hover:bg-gray-50"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-1 text-[10px] text-slate-500 hover:bg-slate-50"
             >
               <Info size={11} />
               How this P&amp;L is calculated
             </button>
-            <button onClick={onClose} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100" aria-label="Close">
+            <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100" aria-label="Close">
               <X size={16} />
             </button>
           </div>
         </header>
 
-        {/*
-          * ── Tarjeta 1 · Produccion ──────────────────────────────────────
-          *
-          * ⚠ flex-[3] CONTRA flex-[1] DE LA NOMINA, Y LAS DOS CEDEN. La lista
-          * era la unica flexible y la nomina iba fija, y con eso el peor caso
-          * se sale: Nathan Martinez tiene 65 cierres Y 11 cuentas de nomina
-          * --es el peor en los dos ejes a la vez-- y sus tres tarjetas fijas
-          * suman mas de 640px. En un portatil de 768 eso dejaba la lista de
-          * prestamos en una rendija de 26px.
-          *
-          * Repartiendo el hueco 3:1 las dos caben siempre y el resumen no se
-          * mueve del pie. La lista se lleva la parte grande porque es donde se
-          * mira; la nomina son once lineas que se leen de un vistazo.
-          */}
-        <div className="flex min-h-0 flex-[3] flex-col">
-          <div className="flex shrink-0 items-baseline justify-between pb-1">
-            <h4 className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-              Production · {o.loanCount} loan{o.loanCount !== 1 ? "s" : ""}
-            </h4>
-            {o.loansPendingPl > 0 && (
-              <span className="text-[10px] text-amber-700"
-                    title={`${usdExacto(Math.abs(o.pendingPlBooked))} of origination cost is already booked on them; the margin is not. Left out of the figures.`}>
-                {o.loansPendingPl} pending P&amp;L
-              </span>
-            )}
-          </div>
-          {/*
-            * min-h-0 es lo que hace que esto scrollee en vez de empujar: sin
-            * el, un hijo flex no baja de su alto de contenido y la tarjeta del
-            * resumen se sale por debajo de la ventana.
-            */}
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-gray-200">
-            <BloquePrestamos loans={o.loans} />
-          </div>
-        </div>
+        <div className="space-y-3 px-5 py-4">
+          {/* La que totaliza, primero: la respuesta antes que el detalle. */}
+          <TarjetaTotales o={o} />
 
-        {/* ── Tarjeta 2 · Nomina del periodo ─────────────────────────────── */}
-        <div className="flex min-h-0 flex-[1] flex-col pt-3">
-          <h4 className="shrink-0 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-            Payroll this period
-          </h4>
-          {/*
-            * max-h ademas del flex: en alguien con dos cuentas de nomina, un
-            * flex-1 a secas estiraria la tarjeta hasta un cuarto del panel
-            * para enseñar dos lineas, y ese hueco lo quiere la lista.
-            *
-            * El scroll va DENTRO de la tarjeta y solo sobre la lista de
-            * cuentas, no sobre la tarjeta entera: el total tiene que quedarse
-            * a la vista. Scrollando la tarjeta completa, la unica cifra que
-            * alguien viene a leer aqui se va por arriba.
-            */}
-          <div className="min-h-0 max-h-56 flex-1">
-            <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
-          </div>
-        </div>
-
-        {/* ── Tarjeta 3 · El resumen, al pie ─────────────────────────────── */}
-        <div className="mt-3 shrink-0 rounded-xl bg-[#001A40] p-3.5 text-xs text-white">
-          {/*
-            * ⚠ LOS COSTES DIRECTOS SUMAN Y LA ETIQUETA NO DICE "MENOS". Salen
-            * en positivo porque se le cobran al prestatario y vuelven a la
-            * sucursal; un "−" delante de un numero positivo diria lo contrario
-            * de lo que pasa.
-            */}
-          <dl className="space-y-1">
-            <div className="flex items-baseline justify-between gap-4">
-              <dt className="text-white/70">Branch gross revenue</dt>
-              <dd className="font-mono tabular-nums">{usdExacto(o.block1Revenue)}</dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-4">
-              <dt className="text-white/70">+ Direct production costs</dt>
-              <dd className="font-mono tabular-nums">{usdExacto(o.block1DirectCosts)}</dd>
-            </div>
-            {o.block1OtherBooked !== 0 && (
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-white/70">+ Other booked to their loans</dt>
-                <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBooked)}</dd>
-              </div>
-            )}
-            <div className="flex items-baseline justify-between gap-4">
-              <dt className="text-white/70">− LO commission</dt>
-              <dd className="font-mono tabular-nums">{usdExacto(-o.commission)}</dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-4 border-t border-white/25 pt-1.5">
-              <dt className="font-semibold uppercase tracking-wide">= Total loan contribution</dt>
-              <dd className={`font-mono tabular-nums text-sm font-bold ${
-                o.contribution > 0 ? "text-emerald-300" : o.contribution < 0 ? "text-red-300" : "text-white/70"
-              }`}>
-                {usdExacto(o.contribution)}
-              </dd>
-            </div>
-          </dl>
-
-          {/*
-            * ⚠ LO DE LA 700 VA DESPUES DEL TOTAL, NUNCA ANTES NI EN MEDIO. La
-            * sucursal cierra su cuenta en Total loan contribution; lo de
-            * corporativo es contexto y se enseña detras. Puesto antes o
-            * intercalado parece que participa en la resta, que es exactamente
-            * lo que no se entendia.
-            *
-            * Y la etiqueta lo dice UNA VEZ, en la cabecera de la seccion, no en
-            * cada fila.
-            */}
-          {o.block1Elsewhere !== 0 && (
-            <div className="mt-3 border-t-2 border-white/25 pt-2.5">
-              <p className="text-[10px] uppercase tracking-wide text-white/40">
-                Not part of this branch&rsquo;s contribution
-              </p>
-              <dl className="mt-1 space-y-0.5 text-[11px] text-white/50">
-                {o.block1KeptByDivision !== 0 && (
-                  <div className="flex items-baseline justify-between gap-4">
-                    <dt>Kept by the division (700)</dt>
-                    <dd className="font-mono tabular-nums">{usdExacto(o.block1KeptByDivision)}</dd>
-                  </div>
-                )}
-                {o.block1OtherBranch !== 0 && (
-                  <div className="flex items-baseline justify-between gap-4">
-                    <dt>Booked in another branch</dt>
-                    <dd className="font-mono tabular-nums">{usdExacto(o.block1OtherBranch)}</dd>
-                  </div>
-                )}
-              </dl>
-            </div>
-          )}
-
-          {/*
-            * ⚠ LA SEGUNDA CUENTA NO ES LA CONTINUACION DE LA PRIMERA, y
-            * encadenarlas es el error que mas caro sale aqui porque el
-            * resultado parece razonable: la comision se PAGA POR LA NOMINA, asi
-            * que restarla arriba y ademas restar la nomina entera resta el
-            * mismo dinero dos veces. El porque, con las cifras, en la ayuda.
-            */}
-          <div className="mt-3 border-t-2 border-white/25 pt-2.5">
-            <p className="text-[10px] uppercase tracking-wide text-white/40">
-              Does this person pay for themselves — a separate question
+          {o.loans.length > 0 && (
+            <p className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              One card per closing
             </p>
-            <dl className="mt-1 space-y-1">
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-white/70">Produced</dt>
-                <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-white/70">− Payroll not tied to loans</dt>
-                <dd className="font-mono tabular-nums">
-                  {localizada ? usdExacto(nominaPos) : (
-                    <span className="text-amber-300" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
-                      not located
-                    </span>
-                  )}
-                </dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-4 border-t border-white/25 pt-1.5">
-                <dt className="font-semibold uppercase tracking-wide">= Net</dt>
-                <dd className={`font-mono tabular-nums text-sm font-bold ${
-                  o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
-                }`}>
-                  {usdExacto(o.total)}
-                </dd>
-              </div>
-            </dl>
-          </div>
+          )}
+          {o.loans.map((l) => (
+            <TarjetaPrestamo
+              key={l.loan_number}
+              l={l}
+              abierta={!plegadas.has(l.loan_number)}
+              onToggle={() => alternar(l.loan_number)}
+            />
+          ))}
         </div>
       </aside>
 

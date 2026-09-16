@@ -274,7 +274,7 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
       <div
         role="dialog"
         aria-label="Loan detail"
-        className="fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-6xl flex-col border-l border-slate-200 bg-white shadow-2xl"
+        className="fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-7xl flex-col border-l border-slate-200 bg-white shadow-2xl"
       >
         <div className="border-b border-slate-200 px-5 py-4">
           <div className="flex items-start justify-between gap-3">

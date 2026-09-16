@@ -379,6 +379,8 @@ export interface LoanRow {
   year: number | null;
   branch: string | null;
   loan_amount: number | null;
+  /** Para poder nombrar el prestamo en su tarjeta: un numero no dice de quien es. */
+  borrower_name: string | null;
   /** Las cinco cuentas de margen. Misma definicion que Loan Validation. */
   margin: number;
   /** Todo lo demas del prestamo: Lender Credits, Cures, Processing Fees... */
@@ -973,6 +975,7 @@ export async function GET(req: NextRequest) {
   const officials = cerrados.map((l) => ({
     loan_number: l.loanNumber,
     loan_officer: l.loanOfficer,
+    borrower_name: l.borrowerName,
     branch: l.branch,
     loan_amount: l.loanAmount,
     month: cierreMes.get(l.loanNumber) ?? null,
@@ -1213,6 +1216,7 @@ export async function GET(req: NextRequest) {
         month: f.month as string | null,
         year: f.year as number | null,
         branch: f.branch as string | null,
+        borrower_name: f.borrower_name as string | null,
         loan_amount: f.loan_amount as number | null,
         margin,
         other,
