@@ -294,9 +294,29 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         * todo, en el separador del final.
         */}
       <div className="flex flex-col">
-        {/* ── La ficha del prestamo ─────────────────────────────────────── */}
+        {/*
+          * ── La ficha ─────────────────────────────────────────────────────
+          *
+          * ⚠ TODO LO DE AQUI TIENE DOS VERSIONES, CLARA Y OSCURA, y no es
+          * decoracion: al poner la ficha de la tarjeta de totales en negativo,
+          * cada estilo heredado que asumia fondo claro se rompio EN SILENCIO --
+          * no fallan, solo se ven mal, asi que ningun typecheck ni ningun build
+          * los ve. Encontrados cinco al revisarla entera:
+          *
+          *   chevron    slate-400 sobre navy, y un `hover:bg-white` que dejaba
+          *              una caja blanca alrededor del icono
+          *   tag        `bg-white` heredando `text-white` del contenedor:
+          *              blanco sobre blanco, o sea INVISIBLE -- el peor de los
+          *              cinco y el que no se reporto
+          *   subtitle   slate-600 sobre navy
+          *   meta       slate-500 sobre navy
+          *   importe    slate-500 sobre navy
+          *
+          * Los avisos (`signals`) los pinta quien usa la tarjeta, asi que su
+          * version oscura vive en TarjetaTotales.
+          */}
         <div className={`flex shrink-0 flex-col gap-1 border-b p-3.5 text-xs font-bold ${
-          p.esTotal ? "border-[#001A40]/20 bg-[#001A40] text-white" : "border-slate-200 bg-slate-100/90 text-[#001A40]"
+          p.esTotal ? "border-white/15 bg-[#001A40] text-white" : "border-slate-200 bg-slate-100/90 text-[#001A40]"
         }`}>
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1">
@@ -304,7 +324,11 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
                 <button
                   onClick={p.onCollapse}
                   title="Collapse this card"
-                  className="shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-slate-600"
+                  className={`shrink-0 rounded p-0.5 ${
+                    p.esTotal
+                      ? "text-white/60 hover:bg-white/15 hover:text-white"
+                      : "text-slate-400 hover:bg-white hover:text-slate-600"
+                  }`}
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
                     <path d="M6 9l6 6 6-6" />
@@ -314,21 +338,29 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
               <span className="truncate font-mono">{p.title}</span>
             </span>
             {p.tag && (
-              <span className="shrink-0 rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{p.tag}</span>
+              <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                p.esTotal ? "bg-white/15 text-white" : "bg-white text-[#001A40]"
+              }`}>
+                {p.tag}
+              </span>
             )}
           </div>
-          <span className="truncate font-semibold text-slate-600">{p.subtitle ?? "—"}</span>
+          <span className={`truncate font-semibold ${p.esTotal ? "text-white/90" : "text-slate-600"}`}>
+            {p.subtitle ?? "—"}
+          </span>
           {/* Identidad, no dato: contesta "de quien es esto y de que tipo" antes
               que ninguna cifra. */}
-          <span className="truncate text-[10px] font-normal text-slate-500">{p.meta ?? "—"}</span>
+          <span className={`truncate text-[10px] font-normal ${p.esTotal ? "text-white/55" : "text-slate-500"}`}>
+            {p.meta ?? "—"}
+          </span>
           <div className="flex items-center justify-between gap-2">
-            <span className="font-mono tabular-nums text-slate-500">
+            <span className={`font-mono tabular-nums ${p.esTotal ? "text-white/70" : "text-slate-500"}`}>
               {p.amount == null ? "—" : `$${p.amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
             </span>
             <span className="inline-flex items-center gap-0.5">
-              {p.b2b && <Etiqueta label="B2B" />}
-              {p.support_on_demand && <Etiqueta label="On Demand" />}
-              {p.processing && <Etiqueta label="Processing" />}
+              {p.b2b && <Etiqueta label="B2B" oscuro={p.esTotal} />}
+              {p.support_on_demand && <Etiqueta label="On Demand" oscuro={p.esTotal} />}
+              {p.processing && <Etiqueta label="Processing" oscuro={p.esTotal} />}
               {p.signals}
             </span>
           </div>
@@ -559,9 +591,12 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
   );
 }
 
-function Etiqueta({ label }: { label: string }) {
+/** Una etiqueta de la ficha. `oscuro` para cuando el fondo es el navy. */
+function Etiqueta({ label, oscuro }: { label: string; oscuro?: boolean }) {
   return (
-    <span className="rounded-full border border-slate-300 bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">
+    <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+      oscuro ? "border-white/25 bg-white/10 text-white/80" : "border-slate-300 bg-white text-slate-600"
+    }`}>
       {label}
     </span>
   );

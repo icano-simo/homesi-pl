@@ -903,14 +903,18 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
       signals={
         <>
           {o.loansPendingPl > 0 && (
-            <span title={`${usdExacto(Math.abs(o.pendingPlBooked))} of origination cost is already booked on them; the margin is not. Left out of the figures.`}
-                  className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+            /* ⚠ VERSION OSCURA: la ficha de ESTA tarjeta es navy, y un pill de
+               amber-50 sobre navy es una mancha clara que se come la mirada.
+               Los avisos los pinta quien usa la tarjeta, asi que su variante
+               vive aqui y no en el componente. */
+            <span title={`${usdEntero(Math.abs(o.pendingPlBooked))} of origination cost is already booked on them; the margin is not. Left out of the figures.`}
+                  className="rounded-full border border-amber-300/40 bg-amber-400/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
               {o.loansPendingPl} pending P&amp;L
             </span>
           )}
           {o.loansBranchNotInPl > 0 && (
             <span title="Their branch has no entries at all in the P&L, so these loans cannot show revenue of their own."
-                  className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+                  className="ml-1 rounded-full border border-amber-300/40 bg-amber-400/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
               {o.loansBranchNotInPl} branch not in P&amp;L
             </span>
           )}
