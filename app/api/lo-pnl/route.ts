@@ -494,15 +494,28 @@ export interface LoanRow {
   /**
    * Lo que no cae en ninguno de los dos grupos anteriores. Casi siempre cero.
    *
-   * ⚠ EXISTE PARA NO TIRAR NADA. Son SG&A y Personnel: 70100 Marketing con 270
-   * lineas en 100 prestamos y neto EXACTAMENTE 0,00, y 60125 Operations Payroll
-   * con 24 en 12, tambien 0,00 -- pares que se anulan dentro del prestamo. Un
-   * solo prestamo tiene neto distinto de cero aqui, el 700002013844 con
-   * -8.721,60 de Office Expense.
+   * ⚠ ESTA NOTA DECIA QUE CASI SIEMPRE VALE CERO, Y ERA FALSA DESDE QUE EL
+   * PELDAÑO SE RESTRINGE A LA SUCURSAL DEL PRESTAMO.
    *
-   * Un escalon de mas que casi siempre vale cero es barato; una linea que
-   * desaparece de la escalera sin que nadie lo note, no. Solo se enseña cuando
-   * no es cero.
+   * Lo medido entonces era el neto en TODAS las sucursales, y ahi 70100
+   * Marketing sale 0,00 en 270 lineas y 60125 Operations Payroll 0,00 en 24:
+   * son pares de traslado, +640 en una sucursal y -640 en otra. Restringido a
+   * la sucursal del prestamo solo queda UNA de las dos patas, asi que no se
+   * anula nada. Re-medido el 2026-09-16:
+   *
+   *                          todas las sucursales   solo la suya
+   *     70100 Marketing                     0,00     -63.737,50
+   *     60125 Operations Payroll            0,00      -1.800,00
+   *     61200 Office Expense           -8.721,60            —
+   *
+   * Asi que este escalon lleva dinero de verdad --11.305,73 en Gian Laino,
+   * 8.849,49 en Nathan Martinez-- y por eso `produced` no coincide con el
+   * primer peldaño. Es tambien lo que destapo que la seccion retirada de la
+   * tarjeta enseñaba la misma cifra dos veces con dos nombres.
+   *
+   * Un escalon que casi siempre vale cero seria barato; uno que lleva 63 mil y
+   * no se enseña seria el error que este modulo no puede cometer. Solo se
+   * oculta cuando es exactamente cero.
    */
   otherBooked: number;
   /**

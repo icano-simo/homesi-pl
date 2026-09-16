@@ -442,9 +442,9 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
          * "no payroll located", y eso seria FALSO -- y falso de la peor manera,
          * porque se leeria como un hallazgo.
          */
-        <p className="mt-2 text-[10px] leading-snug text-slate-500">
-          {fragiles.length} more row{fragiles.length !== 1 ? "s" : ""} worth {usdExacto(fragilTotal)}{" "}
-          matched with low confidence and are <span className="font-medium">not</span> in this total.
+        <p className="mt-1.5 text-[10px] text-slate-400"
+           title={`${fragiles.length} payroll row(s) worth ${usdExacto(fragilTotal)} were matched through description shapes too weak to include, so they are left out of this total.`}>
+          + {fragiles.length} not counted
         </p>
       )}
     </div>
@@ -896,43 +896,50 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
           {/*
             * ── La nomina del periodo, que no cuelga de ningun prestamo ──────
             *
-            * ⚠ SU CABECERA NO LLEVA EL TOTAL, y antes si. Con el total arriba y
-            * las tres cuentas sueltas debajo, no se leia que Loan Officer
-            * Payroll, Payroll Tax y Telephone FUERAN esos 12.712,85: parecian
-            * cuatro cifras independientes. El total va ahora al final de la
-            * lista, con una linea encima, para que se lea como la suma que es.
+            * ⚠ AQUI VIVIA "Does this person pay for themselves", con Produced −
+            * Payroll = Net, y SE RETIRA. No porque estuviera mal calculada sino
+            * porque enseñaba DOS VECES la misma cifra con dos nombres y dos
+            * granularidades: "Produced" era `block1Net` entero --revenue +
+            * costes directos + otros-- mientras la escalera de arriba lo tenia
+            * repartido en tres peldaños. Medido en el caso que lo destapo:
             *
-            * ⚠ Y LA CABECERA DICE QUE NO ENTRA EN EL TOTAL. Este bloque no es
-            * un peldaño mas: ni comparte su estilo ni su sitio --va detras del
-            * banner-- pero decirlo tambien con palabras es barato.
+            *     Produced (seccion)          15.135,35   los tres peldaños
+            *     Branch gross revenue        16.157,44   solo el primero
+            *     + Direct production costs   16.092,44
+            *     + Other cost (Marketing)    15.135,35   <- cuadra
+            *
+            * Puestas una encima de otra parecian dos cifras que no cuadraban.
+            * Con la seccion fuera, la unica lectura de lo producido es la
+            * escalera, que ademas lo enseña desglosado.
+            *
+            * ⚠ Y NO QUEDA UNA SEGUNDA DEFINICION EN NINGUN SITIO: `produced` es
+            * un alias de `block1Net`, y `contribution` y `total` salen los dos
+            * de el. Comprobado ejecutando la ruta sobre todos los periodos: en
+            * los 100 officers se cumplen las tres identidades --rev+dir+otros =
+            * produced, produced-commission = contribution, produced+block2Total
+            * = total-- sin una sola excepcion.
+            *
+            * El neto de la persona sigue estando, en su columna de la tabla,
+            * que es donde Contribution, Payroll paid y Net se ven separados.
             */}
           <p className="pb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
             Payroll this period
-            <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
-              their salary — not part of the total above
-            </span>
           </p>
           <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
 
           {/*
-            * ⚠ LAS DOS CIFRAS, JUNTAS Y CON SU DIFERENCIA. Alguien las va a
-            * comparar de todas formas; enseñadas juntas con la explicacion al
-            * lado no invitan a restarlas, y ausentes si. Son dos calendarios:
-            * Compensafe agrupa por FECHA DE CIERRE y el P&L por FECHA DE PAGO.
+            * Las dos cifras juntas, sin la explicacion al lado: alguien las va a
+            * comparar de todas formas y la diferencia tiene que estar. El por
+            * que --dos calendarios, y que la comision se paga POR la nomina--
+            * vive en el boton de ayuda, que para eso esta.
             */}
           <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
             <div className="flex items-baseline justify-between gap-2">
-              {/* La MISMA cifra que resta la escalera de arriba, con el mismo
-                  nombre. Antes salia aqui como "Commission on loans" y alli
-                  como "LO commission", y nadie podia decir si eran la misma. */}
-              <span className="text-slate-600">
-                Commission on loans
-                <span className="ml-1 text-[9px] text-slate-400">subtracted above</span>
-              </span>
+              <span className="text-slate-600">Commission on loans</span>
               <span className="font-mono tabular-nums text-slate-700">{usdExacto(o.commission)}</span>
             </div>
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-slate-600">Actually paid in payroll</span>
+              <span className="text-slate-600">Paid in payroll</span>
               <span className="font-mono tabular-nums text-slate-700">
                 {localizada ? usdExacto(nominaPos)
                   : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
@@ -944,46 +951,12 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
                 {localizada ? usdExacto(o.commission - nominaPos) : "—"}
               </span>
             </div>
-            <p className="mt-1 text-[10px] leading-snug text-slate-400">
-              Two calendars: commission by closing date, payroll by payment date. Not meant to match.
-            </p>
-          </div>
-
-          {/*
-            * ⚠ EL NETO NO SALE DE LA CONTRIBUCION. Encadenarlos resta la
-            * comision dos veces --se paga POR la nomina--: 1.163.656,81 dentro
-            * de una nomina de 5.362.891,98, el 21,7%. Por eso arranca otra vez
-            * de lo producido y va en su propio bloque.
-            */}
-          <div className="my-1.5 rounded-lg bg-[#001A40] px-3 py-2 text-[11px] text-white">
-            <p className="pb-1 text-[9px] uppercase tracking-wide text-white/40">
-              Does this person pay for themselves — a separate question
-            </p>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-white/70">Produced</span>
-              <span className="font-mono tabular-nums">{usdExacto(o.produced)}</span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-white/70">&minus; Payroll not tied to loans</span>
-              <span className="font-mono tabular-nums">
-                {localizada ? usdExacto(nominaPos) : <span className="text-amber-300">not located</span>}
-              </span>
-            </div>
-            <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-white/25 pt-1">
-              <span className="font-bold uppercase tracking-wide">= Net</span>
-              <span className={`font-mono tabular-nums text-sm font-bold ${
-                o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
-              }`}>
-                {usdExacto(o.total)}
-              </span>
-            </div>
           </div>
         </>
       }
     />
   );
 }
-
 /**
  * ─────────────────────────────────────────────────────────────────────────────
  * EL DETALLE DE UNA PERSONA, EN TARJETAS APILADAS
