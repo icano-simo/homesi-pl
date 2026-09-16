@@ -1200,21 +1200,43 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
   year?: number | null;
 }) {
   const def = useMemo(() => closePeriod(), []);
+
   /*
-   * ⚠ ARRANCA EN EL MES DEL MODAL, y esto REVIERTE lo que se decidio antes.
+   * ⚠ EL MES HEREDADO SALE DE LAS PROPS EN CADA RENDER, NO DE `useState`.
    *
-   * El modulo empezo en "todos los meses" porque la pregunta --"¿se paga sola
-   * esta persona?"-- solo tiene sentido a lo largo del tiempo. Pero la pantalla
-   * se abre desde la tarjeta de UN mes, y heredar la sucursal sin heredar el
-   * mes deja dos alcances distintos en la misma ventana.
-   *
-   * El selector sigue estando, y "All months" tambien: lo que cambia es donde
-   * arranca. Y lo que se perdia al pasar a mensual --el caso Vermejo-- se
-   * resuelve con `closingsOtherPeriods`, no dejandolo en todos los meses.
+   * Lo tuvo, y ahi estaba el bug: `useState` solo lee su valor inicial AL
+   * MONTAR. Abriendo el modal de julio, pulsando la pestaña de loan officers y
+   * volviendo a abrir el de abril, el componente seguia montado con julio
+   * dentro mientras la ventana decia "April 2026". Sin copia no hay nada que
+   * se quede viejo.
    */
-  const [all, setAll] = useState(false);
-  const [month, setMonth] = useState(mesInicial ?? def.month);
-  const [year, setYear] = useState(String(anioInicial ?? def.year));
+  const mesHeredado = mesInicial ?? def.month;
+  const anioHeredado = anioInicial ?? def.year;
+
+  /**
+   * Que periodo se esta mirando. El mes NO se guarda aqui: viene de arriba.
+   *
+   *   mes   el del modal, heredado. Por defecto.
+   *   ytd   de enero a ese mes, incluido
+   *   anio  un año entero de los que el P&L tiene cargados
+   */
+  const [periodo, setPeriodo] = useState<
+    { tipo: "mes" } | { tipo: "ytd" } | { tipo: "anio"; anio: number }
+  >({ tipo: "mes" });
+
+  /*
+   * ⚠ Y AL CAMBIAR EL MES DE ARRIBA SE VUELVE AL MES, no se conserva el YTD.
+   * Abrir otro mes es empezar otra pregunta; quedarse en "YTD de abril" tras
+   * abrir agosto seria el mismo desajuste que el bug, con otra cara.
+   */
+  useEffect(() => { setPeriodo({ tipo: "mes" }); }, [mesInicial, anioInicial]);
+
+  /** Como se nombra el periodo en los avisos. Una sola frase para las tres. */
+  const etiquetaPeriodo =
+    periodo.tipo === "anio" ? String(periodo.anio)
+    : periodo.tipo === "ytd" ? `January-${mesHeredado} ${anioHeredado}`
+    : `${mesHeredado} ${anioHeredado}`;
+
   const [data, setData] = useState<LoPnlResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1279,7 +1301,12 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const p = all ? "all=1" : `month=${encodeURIComponent(month)}&year=${year}`;
+      /* Un solo sitio construye el periodo, y cada opcion dice exactamente
+         que pide. Ver la nota de los parametros en la ruta. */
+      const p =
+        periodo.tipo === "anio" ? `year=${periodo.anio}`
+        : periodo.tipo === "ytd" ? `ytd=1&month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`
+        : `month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`;
       // La sucursal acota los CIERRES, no la nomina: ver la nota en la ruta.
       const q = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
       const res = await fetch(`/api/lo-pnl?${q}`);
@@ -1291,7 +1318,7 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
     } finally {
       setLoading(false);
     }
-  }, [all, month, year, branch]);
+  }, [periodo, mesHeredado, anioHeredado, branch]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -1370,32 +1397,67 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
           </button>
         </div>
 
-        {/* El periodo: por defecto el mes de cierre, el mismo que Where to start. */}
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-            <button onClick={() => setAll(false)}
-              className={`px-3 py-1 text-xs ${!all ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
-              One month
+        {/*
+          * ── El periodo: tres opciones, no un conmutador y dos desplegables ──
+          *
+          * ⚠ Y EL MES HEREDADO NO ES ESTADO, QUE ES LO QUE CAUSABA EL BUG. Era
+          * `useState(mesInicial ?? def.month)`, y `useState` solo lee su valor
+          * inicial AL MONTAR: abriendo el modal de julio, pulsando la pestaña y
+          * volviendo a abrir el de abril, el componente seguia montado con
+          * julio dentro mientras la ventana decia "April 2026". Ahora el mes
+          * sale de las props en cada render y no hay copia que se quede vieja.
+          *
+          * ⚠ FUERA "All months". Mezclaba 2025 con 2026 y con los meses
+          * POSTERIORES al que se estaba revisando, asi que no contestaba
+          * ninguna pregunta concreta. Lo sustituye YTD, que es la que se hace
+          * al cerrar un mes: "¿como va este loan officer en lo que va de año?".
+          */}
+        <div className="flex items-center gap-1">
+          <span className="inline-flex overflow-hidden rounded-lg border border-gray-200 text-xs">
+            <button
+              onClick={() => setPeriodo({ tipo: "mes" })}
+              className={`px-3 py-1 ${
+                periodo.tipo === "mes" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              {mesHeredado} {anioHeredado}
             </button>
-            <button onClick={() => setAll(true)}
-              className={`px-3 py-1 text-xs ${all ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
-              All months
+            <button
+              onClick={() => setPeriodo({ tipo: "ytd" })}
+              title={`Year to date: January through ${mesHeredado} ${anioHeredado}`}
+              className={`border-l border-gray-200 px-3 py-1 ${
+                periodo.tipo === "ytd" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              YTD
             </button>
-          </div>
-          {!all && (
-            <>
-              <select value={month} onChange={(e) => setMonth(e.target.value)}
-                className="h-7 rounded-lg border border-gray-200 bg-white px-2 text-xs">
-                {MONTH_NAMES_IN_ORDER.map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
-              <select value={year} onChange={(e) => setYear(e.target.value)}
-                className="h-7 rounded-lg border border-gray-200 bg-white px-2 text-xs">
-                {[def.year - 1, def.year, def.year + 1].map((y) => (
-                  <option key={y} value={String(y)}>{y}</option>
-                ))}
-              </select>
-            </>
-          )}
+            {/*
+              * ⚠ LOS AÑOS SALEN DEL DATO Y DICEN CUANTOS MESES TRAEN. Escritos
+              * a mano, el año que viene el boton seguiria diciendo "2025".
+              * Y ninguno esta completo: 2025 tiene cinco meses --el P&L empieza
+              * en agosto-- asi que un "2025" a secas promete doce y enseña
+              * cinco. El conteo va en el boton, no en un tooltip.
+              */}
+            {(data?.years ?? [])
+              .filter((y) => y.year !== anioHeredado)
+              .map((y) => (
+                <button
+                  key={y.year}
+                  onClick={() => setPeriodo({ tipo: "anio", anio: y.year })}
+                  title={`${y.year}: ${y.months.join(", ")}`}
+                  className={`border-l border-gray-200 px-3 py-1 ${
+                    periodo.tipo === "anio" && periodo.anio === y.year
+                      ? "bg-blue-600 text-white"
+                      : "bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  {y.year}
+                  <span className={periodo.tipo === "anio" && periodo.anio === y.year ? "ml-1 text-white/70" : "ml-1 text-gray-400"}>
+                    {y.months.length === 12 ? "" : `· ${y.months.length} mo`}
+                  </span>
+                </button>
+              ))}
+          </span>
         </div>
       </div>
 
@@ -1527,7 +1589,7 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
       {!loading && data && officers.length === 0 && (
         /* Correcto que no haya nada, y hay que decirlo: en blanco se lee como roto. */
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center text-xs text-gray-500">
-          No loan officers with closings or payroll in {all ? "any period" : `${month} ${year}`}.
+          No loan officers with closings or payroll in {etiquetaPeriodo}.
         </div>
       )}
 

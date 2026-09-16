@@ -356,6 +356,27 @@ function rangoDelMes(month: string | null, year: number | null) {
 }
 
 /**
+ * El rango de un AÑO, o de enero hasta un mes dado -- el acumulado del año.
+ *
+ * ⚠ MISMO CRITERIO MEDIO ABIERTO que `rangoDelMes`, y por la misma razon: un
+ * `lte` al ultimo dia se come o se deja fuera ese dia segun el mes.
+ *
+ * Sin `hastaMes` es el año entero. Con el, hasta el final de ESE mes incluido,
+ * que es lo que pregunta "¿como va este loan officer en lo que va de año?"
+ * cuando se esta cerrando abril.
+ */
+function rangoDelAnio(year: number | null, hastaMes: string | null) {
+  if (!year) return null;
+  const desde = `${year}-01-01`;
+  const finDeAnio = `${year + 1}-01-01`;
+  if (!hastaMes) return { desde, hasta: finDeAnio };
+  const i = MESES.findIndex((m) => m.toLowerCase() === hastaMes.trim().toLowerCase());
+  if (i < 0) return { desde, hasta: finDeAnio };
+  const dd = (n: number) => String(n).padStart(2, "0");
+  return { desde, hasta: i === 11 ? finDeAnio : `${year}-${dd(i + 2)}-01` };
+}
+
+/**
  * Los prestamos cerrados que cuentan para la division, con sus flags manuales.
  *
  * `month` y `year` son opcionales a proposito: el modulo de P&L por Loan
@@ -366,6 +387,13 @@ export async function getClosedLoans(opts: {
   month?: string | null;
   year?: number | null;
   branches?: string[] | null;
+  /**
+   * Acumulado del año: de enero de `year` hasta `month` incluido.
+   *
+   * Con `ytd`, `month` deja de ser un mes suelto y pasa a ser el TOPE. Sin
+   * `month`, el año entero.
+   */
+  ytd?: boolean;
 } = {}): Promise<ClosedLoan[]> {
   const ar = createServerClient("activity_report");
   const fd = createServerClient("finance_division");
@@ -391,7 +419,9 @@ export async function getClosedLoans(opts: {
      * unico sitio y no en cada ruta, que es medio motivo de que exista este
      * archivo.
      */
-    const rango = rangoDelMes(opts.month ?? null, opts.year ?? null);
+    const rango = opts.ytd
+      ? rangoDelAnio(opts.year ?? null, opts.month ?? null)
+      : rangoDelMes(opts.month ?? null, opts.year ?? null);
     if (rango) q = q.gte("closing_month", rango.desde).lt("closing_month", rango.hasta);
     const { data, error } = await q.order("loan_number", { ascending: true }).range(i, i + 999);
     if (error) throw new Error(error.message);

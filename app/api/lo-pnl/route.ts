@@ -902,6 +902,17 @@ export interface LoPnlResult {
   /** La misma persona enseñada como dos filas. Ver findSplitByShape. */
   splitByShape: SplitByShape[];
   period: { month: string | null; year: number | null; all: boolean };
+  /**
+   * Los años que el P&L tiene cargados, con los meses que cubre cada uno.
+   *
+   * ⚠ SE DERIVAN DEL DATO Y NO DE UNA LISTA ESCRITA A MANO. Con una lista, el
+   * año que viene el boton seguiria diciendo "2025" y faltaria 2026.
+   *
+   * ⚠ Y CADA UNO DICE CUANTOS MESES TRAE, porque ninguno esta completo: medido
+   * el 2026-09-16, 2025 tiene CINCO meses --el P&L empieza en agosto-- y 2026
+   * tiene ocho. Un boton que ponga "2025" a secas promete doce y enseña cinco.
+   */
+  years: { year: number; months: string[] }[];
   /** Sin el espejo de person_name_key la tasa baja de 34/46 a 31/46. */
   nameKeyAvailable: boolean;
   nameKeyNote: string | null;
@@ -959,10 +970,40 @@ export async function GET(req: NextRequest) {
    */
   const branches = searchParams.getAll("branch").filter(Boolean);
 
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * EL PERIODO: UN MES, EL ACUMULADO DEL AÑO, O UN AÑO ENTERO
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Sustituye al par "un mes / todos los meses". "Todos" mezclaba 2025 con 2026
+   * y con los meses POSTERIORES al que se estaba revisando, asi que no contesta
+   * ninguna pregunta concreta: al cerrar abril lo que se pregunta es "¿como va
+   * este loan officer en lo que va de año?", y eso es enero-abril.
+   *
+   *   sin nada     el mes que manda quien llama (el del modal)
+   *   ytd=1        de enero a ESE mes, incluido
+   *   year=2025    sin month: el año entero
+   *   all=1        se conserva por compatibilidad de la pantalla suelta
+   */
   const all = searchParams.get("all") === "1";
+  const ytd = searchParams.get("ytd") === "1";
   const def = closePeriod();
-  const month = all ? null : searchParams.get("month") ?? def.month;
-  const year = all ? null : Number(searchParams.get("year") ?? def.year);
+  const anioPedido = Number(searchParams.get("year") ?? def.year);
+  /** Sin mes y sin `all`, el periodo es un año entero. */
+  const anioEntero = !all && !searchParams.get("month") && searchParams.get("year") !== null && !ytd;
+
+  const month = all || anioEntero ? null : searchParams.get("month") ?? def.month;
+  const year = all ? null : anioPedido;
+
+  /**
+   * Los meses que abarca el periodo, para acotar la nomina. Null = uno solo o
+   * todos, que ya resuelven `month` y `all`.
+   */
+  const meses: string[] | null = anioEntero
+    ? MESES_NOMBRE
+    : ytd && month
+      ? MESES_NOMBRE.slice(0, MESES_NOMBRE.indexOf(month) + 1)
+      : null;
 
   /*
    * ── 1. Los prestamos del periodo, del espejo ──────────────────────────────
@@ -995,7 +1036,16 @@ export async function GET(req: NextRequest) {
      * sucursal de cada uno a la vista. Que un LO de la 710 tenga cierres en la
      * 716 es informacion, no un motivo para quitarselos de su ficha.
      */
-    getClosedLoans({ month, year }),
+    /*
+     * ⚠ `ytd || anioEntero`, NO SOLO `ytd`. Con el año entero `month` va null,
+     * y `rangoDelMes` necesita LOS DOS para acotar: devolvia null, la consulta
+     * salia SIN filtro de fecha, y "2025" y "2026" enseñaban los mismos 498
+     * cierres. `rangoDelAnio` con `hastaMes` null si da el año entero.
+     *
+     * Verificado tras el arreglo: 2025 -> 123 cierres, 2026 -> 375, y 123+375
+     * son los 498 de siempre.
+     */
+    getClosedLoans({ month, year, ytd: ytd || anioEntero }),
     getPlCoverage(),
     /*
      * El cargo de cada persona. Que falle NO puede tumbar la pantalla: sin
@@ -1107,7 +1157,15 @@ export async function GET(req: NextRequest) {
       .from("pl_transactions")
       .select("check_description,gl_code,gl_name,branch,movement,month,year,loan_number")
       .is("loan_number", null);
-    if (month) q = q.eq("month", month);
+    /*
+     * ⚠ LA NOMINA SE ACOTA CON LA MISMA REGLA QUE LOS CIERRES, y aqui es por
+     * lista de meses porque  los guarda por nombre. Si los dos
+     * lados no usaran el mismo periodo, la pantalla enfrentaria la produccion
+     * de cuatro meses contra el coste de uno.  los guarda por
+     * nombre, de ahi la lista.
+     */
+    if (meses) q = q.in("month", meses);
+    else if (month) q = q.eq("month", month);
     if (year) q = q.eq("year", year);
     return q;
   });
@@ -1743,6 +1801,34 @@ export async function GET(req: NextRequest) {
     .filter((o) => o.commissionOutsidePayroll)
     .reduce((s, o) => s + o.block1Commission, 0);
 
+  /*
+   * Los periodos cargados, para que la pantalla genere sus botones sola. Se
+   * lee de una pasada barata: solo month y year, sin importes.
+   */
+  const porAnio = new Map<number, Set<string>>();
+  try {
+    const filas = await paginar<Record<string, unknown>>(() =>
+      supabase.from("pl_transactions").select("month,year").not("year", "is", null),
+    );
+    for (const f of filas) {
+      const a = Number(f.year);
+      const m = (f.month as string) ?? null;
+      if (!a || !m) continue;
+      const set = porAnio.get(a) ?? new Set<string>();
+      set.add(m);
+      porAnio.set(a, set);
+    }
+  } catch (e) {
+    // Sin esto la pantalla se queda sin botones de año, no sin cifras.
+    console.error("[lo-pnl] no se pudieron leer los periodos cargados:", e);
+  }
+  const years = [...porAnio.entries()]
+    .map(([year, set]) => ({
+      year,
+      months: MESES_NOMBRE.filter((m) => set.has(m)),
+    }))
+    .sort((a, b) => b.year - a.year);
+
   const result: LoPnlResult = {
     officers,
     /*
@@ -1771,6 +1857,7 @@ export async function GET(req: NextRequest) {
     collapsedPairs,
     splitByShape,
     period: { month, year: year ?? null, all },
+    years,
     nameKeyAvailable: censo.hasNameKey,
     nameKeyNote: censo.nameKeyNote,
     commissionOutsidePayrollTotal,
