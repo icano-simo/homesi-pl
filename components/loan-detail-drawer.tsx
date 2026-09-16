@@ -14,6 +14,8 @@ interface LoanLine {
   gl_code: string;
   gl_name: string;
   category_7: string;
+  /** La sucursal del apunte. Null en el resumen, que suma varias. */
+  branch: string | null;
   amount: number;
 }
 
@@ -655,25 +657,34 @@ function Block({ title, total, amount, lines, loan }: {
       {lines.length === 0 && (
         <p className="px-3 pb-1 text-[10px] italic text-slate-400">None</p>
       )}
-      {lines.map(({ gl_code, gl_name, category_7, amount: v }) => {
-        const booked = loan?.concept_branches[category_7] ?? [];
-        // Where the amount is booked, shown only when it is not the loan's own
-        // branch — DM Margin lives in 700 for loans every branch originates, and
-        // the reader needs to know that without being told it on every line.
-        const elsewhere = loan ? booked.filter((b) => b !== loan.branch) : [];
+      {/*
+        * ⚠ LA KEY ES EL INDICE Y NO EL gl_code, y es la consecuencia visible de
+        * que las lineas vengan crudas: un prestamo puede traer TRES filas de
+        * 41205 --el cobro, su salida de una sucursal y su entrada en otra-- y
+        * con el gl_code por key React pintaria una sola.
+        */}
+      {lines.map(({ gl_code, gl_name, category_7, branch, amount: v }, i) => {
+        /*
+         * ⚠ LA SUCURSAL SALE DE LA LINEA, NO DE `concept_branches`. Ese mapa es
+         * por category_7, asi que decia "@700" en TODAS las filas de "Fee
+         * Income, Net" en cuanto una sola estuviera en la 700 -- y con las
+         * lineas crudas eso es justo lo que hay que distinguir: cual de las tres
+         * filas de 41205 es la de corporativo.
+         */
+        const elsewhere = loan && branch && branch !== loan.branch ? branch : null;
         const flagged = loan ? loan.unexpected_accounts.includes(category_7) : false;
         return (
-          <div key={gl_code} className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
+          <div key={`${gl_code}-${i}`} className="flex items-baseline justify-between gap-2 px-3 py-0.5 text-[11px]">
             <span className={`truncate ${flagged ? "text-amber-700" : "text-slate-600"}`}>
               {/* The GL code, so a line can be tied back to the ledger.
                   category_7 nets several accounts into one figure that
                   reconciles against nothing. */}
               <span className="mr-1.5 font-mono text-[9px] text-slate-400">{gl_code}</span>
               {gl_name}
-              {elsewhere.length > 0 && (
-                <span title={`Booked in branch ${elsewhere.join(", ")}`}
+              {elsewhere && (
+                <span title={`Booked in branch ${elsewhere}, while the loan is branch ${loan?.branch}. Common and not an error: part of the margin is booked in 700 by design.`}
                   className="ml-1 rounded bg-slate-200/70 px-1 py-0.5 font-mono text-[9px] text-slate-600">
-                  @{elsewhere.join(",")}
+                  @{elsewhere}
                 </span>
               )}
               {flagged && (

@@ -33,6 +33,14 @@ export interface LoanDetailLine {
   gl_code: string;
   gl_name: string;
   category_7: string;
+  /**
+   * La sucursal DEL APUNTE, que no siempre es la del prestamo.
+   *
+   * Sin ella, dos filas de la misma cuenta con signos opuestos se leen como un
+   * duplicado; con ella se ve que una sale de una sucursal y la otra entra en
+   * otra. Es la columna que convierte el ruido en informacion.
+   */
+  branch: string | null;
   amount: number;
 }
 
@@ -204,19 +212,65 @@ export async function GET(req: NextRequest) {
       txs.push(...rows);
     }
 
-    // ── Aggregate by loan and concept ───────────────────────────────────────
-    // By concept, never by row. There are genuine reversal pairs in the data —
-    // one loan carries Processing Income +1,736.17 and -1,736.17, another Fee
-    // Income +333 and -333 — which are reclassifications. Listed as rows they
-    // read as duplicates; summed by category_7 they cancel, which is what they
-    // mean.
+    /*
+     * ═══════════════════════════════════════════════════════════════════════
+     * LAS LINEAS VAN CRUDAS, UNA POR APUNTE, Y ANTES SE SUMABAN POR gl_code
+     * ═══════════════════════════════════════════════════════════════════════
+     *
+     * ⚠ AQUI DECIA "By concept, never by row", y la razon que daba era que los
+     * pares opuestos son RECLASIFICACIONES: listados como filas se leen como
+     * duplicados, sumados se anulan, que es lo que significan. Se revierte
+     * porque los dos ejemplos que citaba resultaron no ser reclasificaciones,
+     * medido el 2026-09-16 contra la base:
+     *
+     * ── 1. EL PAR DE 41205 EN 710002042266 ES UN TRASLADO A LA 700 ─────────
+     *
+     *     2026-05-08  710  +389,00  "710002042266|PEREZ | UBALDO"
+     *     2026-05-31  710  -333,00  "ADMIN FEE ON FILE 710002042266"
+     *     2026-05-31  700  +333,00  "ADMIN FEE ON FILE 710002042266"
+     *
+     *   No se anula: la 710 cede 333,00 y la 700 los recibe, el mismo dia y con
+     *   la misma descripcion. Sumado por cuenta queda "+56,00" y desaparece que
+     *   ese ingreso se lo llevo corporativo.
+     *
+     * ── 2. UN PRESTAMO ENTERO QUE CAMBIA DE SUCURSAL, 728002018954 ─────────
+     *
+     *     41306 BM Margin  733  +7.215,25   se apunta en la 733
+     *     41306 BM Margin  733  -7.215,25   se saca de la 733
+     *     41306 BM Margin  728  +7.215,25   se mete en la 728
+     *
+     *   Mismo patron en nueve cuentas, 18 filas. Las dos primeras PARECEN una
+     *   reclasificacion --misma cuenta, misma sucursal, mismo dia, misma
+     *   descripcion-- y son la pata de salida de un traslado. Agrupado, la 733
+     *   queda en cero y se pierde que el prestamo se movio de sucursal.
+     *
+     * ── 3. RECLASIFICACIONES DE VERDAD SI HAY, Y NO ENTRAN EN EL NETO ──────
+     *
+     *   Buscadas con el test estricto --mismo prestamo, misma cuenta, misma
+     *   sucursal, misma fecha, misma descripcion, signos opuestos-- salen 76
+     *   filas en 18 prestamos. Descontados los dos casos de arriba, las
+     *   genuinas son UNA SOLA CUENTA:
+     *
+     *     70100 Marketing Expense   48 filas   12 prestamos   18.751,42
+     *
+     *   El B2B success fee, apuntado y anulado entero en las dos sucursales
+     *   (+640/-640 en la 733 y +640/-640 en la 700). Y 70100 es SG&A, que esta
+     *   pantalla excluye por NET_GROUPS: o sea que las unicas reversiones
+     *   reales estan en la unica cuenta que este neto no cuenta.
+     *
+     * Por eso las filas crudas no le quitan nada a nadie: lo que se leia como
+     * duplicado resulto ser un traslado entre sucursales, y para verlo hace
+     * falta la columna `branch` que antes no viajaba por linea.
+     *
+     * ⚠ LA TARJETA RESUMEN SIGUE SUMANDO, y no es una incoherencia: ahi se
+     * juntan cientos de prestamos y una fila cruda suelta no significa nada. La
+     * fila cruda contesta "que le paso a ESTE prestamo"; la suma contesta
+     * "cuanto pesa esta cuenta". Son dos preguntas.
+     */
     type Agg = {
       concepts: Record<string, number>;
-      /** gl_code -> one displayable line. category_7 groups several GL
-       *  accounts into one figure that cannot be tied back to the ledger:
-       *  "Fee Income, Net" is Cures (41215) and Other HUD Fees (41205)
-       *  netted together, and only the GL split reconciles. */
-      lines: Record<string, { gl_code: string; gl_name: string; category_7: string; amount: number }>;
+      /** Un apunte por fila, en el orden en que llegan. Ver la nota de arriba. */
+      lines: LoanDetailLine[];
       groups: Record<string, number>;
       months: Set<string>;
       /** category_7 -> branches the amount is booked in. Not the loan's branch:
@@ -227,12 +281,16 @@ export async function GET(req: NextRequest) {
     for (const t of txs) {
       if (!t.category_7) continue;
       let a = agg.get(t.loan_number);
-      if (!a) { a = { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
+      if (!a) { a = { concepts: {}, lines: [], groups: {}, months: new Set<string>(), conceptBranches: {} }; agg.set(t.loan_number, a); }
       const v = money(t.movement);
       a.concepts[t.category_7] = (a.concepts[t.category_7] ?? 0) + v;
-      const gl = t.gl_code ?? "—";
-      const line = (a.lines[gl] ??= { gl_code: gl, gl_name: t.gl_name ?? t.category_7, category_7: t.category_7, amount: 0 });
-      line.amount += v;
+      a.lines.push({
+        gl_code: t.gl_code ?? "—",
+        gl_name: t.gl_name ?? t.category_7,
+        category_7: t.category_7,
+        branch: t.branch ?? null,
+        amount: v,
+      });
       if (t.branch) (a.conceptBranches[t.category_7] ??= new Set()).add(t.branch);
       const g = t.category_6 ?? "(none)";
       a.groups[g] = (a.groups[g] ?? 0) + v;
@@ -247,7 +305,7 @@ export async function GET(req: NextRequest) {
     }
 
     const rows: LoanDetailRow[] = loans.map((l) => {
-      const a = agg.get(l.loan_number) ?? { concepts: {}, lines: {}, groups: {}, months: new Set<string>(), conceptBranches: {} };
+      const a: Agg = agg.get(l.loan_number) ?? { concepts: {}, lines: [], groups: {}, months: new Set<string>(), conceptBranches: {} };
       const amount = money(l.loan_amount);
 
       /*
@@ -356,8 +414,18 @@ export async function GET(req: NextRequest) {
       for (const [c, v] of Object.entries(r.concepts)) {
         summaryConcepts[c] = (summaryConcepts[c] ?? 0) + v;
       }
+      /*
+       * ⚠ LA TARJETA RESUMEN SIGUE SUMANDO POR CUENTA, y ahora que las de cada
+       * prestamo van crudas conviene decir por que no es una incoherencia: aqui
+       * se juntan cientos de prestamos, y una fila cruda suelta entre miles no
+       * es informacion. La fila cruda contesta "¿que le paso a ESTE prestamo?";
+       * la suma contesta "¿cuanto pesa esta cuenta en el mes?".
+       *
+       * Por eso tambien se pierde la sucursal del apunte aqui --se queda la de
+       * la primera fila-- y por eso el resumen no la enseña.
+       */
       for (const ln of r.lines) {
-        const acc = (summaryLines[ln.gl_code] ??= { ...ln, amount: 0 });
+        const acc = (summaryLines[ln.gl_code] ??= { ...ln, branch: null, amount: 0 });
         acc.amount += ln.amount;
       }
     }
