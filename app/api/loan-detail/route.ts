@@ -34,6 +34,11 @@ export interface LoanDetailLine {
   gl_name: string;
   category_7: string;
   /**
+   * El grupo contable, que reparte la linea en su peldaño dentro de la tarjeta.
+   * Sin el, las dos pantallas pintarian la misma tarjeta con bloques distintos.
+   */
+  category_6: string | null;
+  /**
    * La sucursal DEL APUNTE, que no siempre es la del prestamo.
    *
    * Sin ella, dos filas de la misma cuenta con signos opuestos se leen como un
@@ -288,6 +293,7 @@ export async function GET(req: NextRequest) {
         gl_code: t.gl_code ?? "—",
         gl_name: t.gl_name ?? t.category_7,
         category_7: t.category_7,
+        category_6: t.category_6 ?? null,
         branch: t.branch ?? null,
         amount: v,
       });

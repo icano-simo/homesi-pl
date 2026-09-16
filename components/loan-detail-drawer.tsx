@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { X, ArrowUpDown, LayoutGrid, Rows3, UserCircle } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { LoPnlView } from "@/components/lo-pnl-view";
+import { LoanPnlCard } from "@/components/loan-pnl-card";
 import {
   ALL_MARGIN_ACCOUNTS,
   NET_GROUPS,
@@ -14,6 +15,8 @@ interface LoanLine {
   gl_code: string;
   gl_name: string;
   category_7: string;
+  /** El grupo contable: reparte la linea en su peldaño. */
+  category_6: string | null;
   /** La sucursal del apunte. Null en el resumen, que suma varias. */
   branch: string | null;
   amount: number;
@@ -597,41 +600,33 @@ function StraySection({ bucket, title, note }: { bucket: StrayBucket | null; tit
 
 // ─── Mini P&L card ────────────────────────────────────────────────────────────
 
+/**
+ * La tarjeta de un prestamo. La pinta `LoanPnlCard`, el MISMO componente que el
+ * modulo de P&L por Loan Officer, para que las dos pantallas no se separen.
+ *
+ * ⚠ AQUI NO SE PASA `commission`, y esa es la unica diferencia de fondo entre
+ * las dos: esta pantalla contesta "¿que dejo el prestamo?" y el modulo de LO
+ * contesta "¿que dejo DESPUES de pagar al loan officer?". Por eso el banner
+ * dice TOTAL REVENUE y no TOTAL CONTRIBUTION, y por eso el numero es otro.
+ * Unificarlo es una decision de negocio sobre el P&L de sucursal, no un detalle
+ * de presentacion.
+ */
 function MiniPL({ l }: { l: LoanRow }) {
-  // Everything between Revenue and Direct Production Costs, always. Nothing
-  // folded away, so the block totals are by construction the sum of what is on
-  // screen — the reader can add the column up and get the badge.
-
   return (
-    <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
-      <div>
-        <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-100/90 p-3.5 text-xs font-bold text-[#001A40]">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-mono">{l.loan_number}</span>
-            <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{l.branch}</span>
-          </div>
-          <span className="truncate font-semibold text-slate-600">{l.borrower_name ?? "—"}</span>
-          {/* Program and officer read as identity, not as data: they answer
-              "whose loan is this and of what kind" before any figure. */}
-          <span className="truncate text-[10px] font-normal text-slate-500">
-            {l.loan_program ?? "—"} · {l.loan_officer ?? "—"}
-          </span>
-          <div className="flex items-center justify-between">
-            <span className="font-mono tabular-nums text-slate-500">{money(l.loan_amount)}</span>
-            <Signals l={l} />
-          </div>
-        </div>
-
-        <div className="px-3 pt-2">
-          {/* El titulo nombra los DOS grupos porque el bloque lista los dos: desde
-              que los costes directos entran en el neto, "Total revenue" prometia
-              menos de lo que la columna de debajo enseña. */}
-          <Block title="Revenue and direct costs" total={l.revenue} amount={l.loan_amount} lines={l.lines} loan={l} />
-        </div>
-      </div>
-
-      <NetBanner net={l.net} netBps={l.net_bps} />
-    </div>
+    <LoanPnlCard
+      loan_number={l.loan_number}
+      branch={l.branch}
+      borrower_name={l.borrower_name}
+      loan_program={l.loan_program}
+      loan_officer={l.loan_officer}
+      loan_amount={l.loan_amount}
+      b2b={l.b2b}
+      processing={l.processing}
+      support_on_demand={l.support_on_demand}
+      signals={<Signals l={l} />}
+      lineas={l.lines}
+      total={{ label: "TOTAL REVENUE", value: l.net }}
+    />
   );
 }
 

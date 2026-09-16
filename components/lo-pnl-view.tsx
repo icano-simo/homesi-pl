@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
+import { LoanPnlCard } from "@/components/loan-pnl-card";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
@@ -605,65 +606,98 @@ function CierreEscalera({ commission, contribution }: {
 }
 
 /**
- * La tarjeta de UN prestamo: su identidad, sus cuentas por peldaño, y su total.
+ * La tarjeta de UN prestamo.
  *
- * ⚠ ABIERTA POR DEFECTO, y con `abrible` para poder plegarlas todas de golpe.
- * Nathan Martinez cierra 65 prestamos con 840 filas de cuenta entre todos --13,9
- * de media y 28 en el peor--, asi que abiertas son mas de mil filas en una sola
- * pantalla. La cabecera de cada tarjeta lleva ya su importe, sus bps y su
- * contribucion, de modo que plegarlas no esconde ninguna cifra: solo el detalle.
+ * ⚠ ES EL MISMO COMPONENTE QUE PINTA EL MINI P&L DEL MODAL DE SUCURSAL,
+ * `LoanPnlCard`, y no uno parecido. Dos tarjetas parecidas divergen: el neto de
+ * Table List y el de las Mini P&L Cards ya dieron cifras distintas con nombres
+ * parecidos, sin que nada fallara.
+ *
+ * Lo que esta pantalla le pasa de mas:
+ *   - `commission`, porque aqui la pregunta es que dejo el prestamo DESPUES de
+ *     pagar al loan officer. El mini P&L no la pasa, y por eso su banner dice
+ *     TOTAL REVENUE y este TOTAL CONTRIBUTION.
+ *   - `elsewhere`, la seccion de la 700, que solo existe aqui porque solo aqui
+ *     el revenue se restringe a la sucursal del prestamo.
+ *
+ * ⚠ PLEGABLE, y el envoltorio es de esta pantalla y no del componente: el mini
+ * P&L enseña un carrusel de tarjetas siempre abiertas, y aqui Nathan Martinez
+ * apila 65 con 840 filas de cuenta entre todas.
  */
 function TarjetaPrestamo({ l, abierta, onToggle }: {
   l: LoanRow; abierta: boolean; onToggle: () => void;
 }) {
-  return (
-    <article className="rounded-xl border border-slate-200 bg-white shadow-xs">
-      <header
+  const propias = l.lines.filter((x) => x.in_branch);
+  const fuera700 = l.lines.filter((x) => !x.in_branch && x.branch === "700");
+  const fueraOtra = l.lines.filter((x) => !x.in_branch && x.branch !== "700");
+
+  if (!abierta) {
+    /*
+     * Plegada enseña lo mismo que la cabecera de la tarjeta abierta: numero,
+     * prestatario, periodo, importe, bps y contribucion. Plegar NO esconde
+     * ninguna cifra -- solo el desglose por cuenta.
+     */
+    return (
+      <button
         onClick={onToggle}
-        className="flex cursor-pointer flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-slate-200 bg-slate-100/70 px-3 py-2 hover:bg-slate-100"
+        className="flex w-[340px] shrink-0 items-center justify-between gap-2 rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 text-left shadow-xs hover:border-[#A6DEFF]"
       >
-        <div className="flex min-w-0 items-baseline gap-2">
-          <ChevronRight size={12}
-            className={`shrink-0 transition-transform ${abierta ? "rotate-90 text-blue-600" : "text-slate-400"}`} />
-          <span className="font-mono text-xs font-semibold text-[#001A40]">{l.loan_number}</span>
-          <span className="truncate text-[11px] text-slate-500">{l.borrower_name ?? "—"}</span>
-          <span className="whitespace-nowrap text-[11px] text-slate-400">{l.month} {l.year}</span>
-          {l.branch && <span className="whitespace-nowrap font-mono text-[10px] text-slate-400">br {l.branch}</span>}
-          {l.plPending && (
-            <span className="whitespace-nowrap rounded border border-amber-200 bg-amber-50 px-1 text-[9px] font-medium text-amber-700"
-                  title="No P&L is loaded for this loan's closing month. Left out of the totals; its origination cost may already be booked.">
-              pending P&amp;L
-            </span>
-          )}
-        </div>
-        <div className="flex items-baseline gap-4 text-[11px]">
-          <span className="font-mono tabular-nums text-slate-500">{usd(l.loan_amount)}</span>
-          <span className="font-mono tabular-nums text-slate-500"
-                title="Contribution over this loan's own amount, in basis points.">
-            {bps(l.contribution, l.loan_amount)} bps
+        <span className="min-w-0">
+          <span className="block truncate font-mono text-xs font-bold text-[#001A40]">{l.loan_number}</span>
+          <span className="block truncate text-[10px] text-slate-500">
+            {l.borrower_name ?? "—"} · {l.month} {l.year} · {usd(l.loan_amount)}
           </span>
-          <span className={`font-mono tabular-nums text-xs font-bold ${colorNeto(l.contribution ?? 0)}`}>
+        </span>
+        <span className="shrink-0 text-right">
+          <span className={`block font-mono tabular-nums text-xs font-bold ${colorNeto(l.contribution ?? 0)}`}>
             {l.contribution == null ? "—" : usd(l.contribution)}
           </span>
-        </div>
-      </header>
+          <span className="block font-mono text-[10px] text-slate-400">{bps(l.contribution, l.loan_amount)} bps</span>
+        </span>
+      </button>
+    );
+  }
 
-      {abierta && (
-        <div className="px-1 py-1">
-          {/* Scroll HORIZONTAL si las cinco columnas no caben. Es el unico
-              aceptable: el vertical seria un panel dentro de otro. */}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[34rem] text-[11px]">
-              <tbody>
-                <TablaCuentas lineas={l.lines} sucursalPrestamo={l.branch} />
-                <CierreEscalera commission={l.commission} contribution={l.contribution} />
-              </tbody>
-            </table>
-          </div>
-          <FueraDeLaCuenta lineas={l.lines} sucursalPrestamo={l.branch} />
-        </div>
-      )}
-    </article>
+  return (
+    <div onClick={onToggle} className="cursor-pointer">
+      <LoanPnlCard
+        loan_number={l.loan_number}
+        branch={l.branch}
+        borrower_name={l.borrower_name}
+        loan_program={l.loan_program}
+        loan_officer={l.loan_officer}
+        loan_amount={l.loan_amount}
+        b2b={l.b2b}
+        processing={l.processing}
+        support_on_demand={l.support_on_demand}
+        signals={
+          <>
+            <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
+              {l.month} {l.year}
+            </span>
+            {l.plPending && (
+              <span title="No P&L is loaded for this loan's closing month. Left out of the totals; its origination cost may already be booked."
+                    className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+                pending P&amp;L
+              </span>
+            )}
+            {l.branchNotInPl && (
+              <span title={`Branch ${l.branch} carries no entries at all in the P&L, so none of this loan's revenue can be booked to it.`}
+                    className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+                branch not in P&amp;L
+              </span>
+            )}
+          </>
+        }
+        lineas={propias}
+        commission={l.commission}
+        total={{ label: "TOTAL CONTRIBUTION", value: l.contribution }}
+        elsewhere={[
+          { label: "Kept by the division (700)", lineas: fuera700 },
+          { label: "Booked in another branch", lineas: fueraOtra },
+        ]}
+      />
+    </div>
   );
 }
 

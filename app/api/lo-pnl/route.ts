@@ -381,6 +381,17 @@ export interface LoanRow {
   loan_amount: number | null;
   /** Para poder nombrar el prestamo en su tarjeta: un numero no dice de quien es. */
   borrower_name: string | null;
+  /*
+   * ⚠ LA FICHA ENTERA DEL PRESTAMO, para que la tarjeta de este modulo sea la
+   * MISMA que la del mini P&L del modal de sucursal y no uno parecida. Dos
+   * tarjetas parecidas divergen: ya paso con el neto de Table List y el de las
+   * Mini P&L Cards, que daban cifras distintas con nombres parecidos.
+   */
+  loan_program: string | null;
+  loan_officer: string | null;
+  b2b: boolean;
+  processing: boolean;
+  support_on_demand: boolean;
   /** Las cinco cuentas de margen. Misma definicion que Loan Validation. */
   margin: number;
   /** Todo lo demas del prestamo: Lender Credits, Cures, Processing Fees... */
@@ -976,6 +987,10 @@ export async function GET(req: NextRequest) {
     loan_number: l.loanNumber,
     loan_officer: l.loanOfficer,
     borrower_name: l.borrowerName,
+    loan_program: l.loanProgram,
+    b2b: l.b2bManual === true,
+    processing: l.processing === true,
+    support_on_demand: l.supportOnDemand === true,
     branch: l.branch,
     loan_amount: l.loanAmount,
     month: cierreMes.get(l.loanNumber) ?? null,
@@ -1217,6 +1232,11 @@ export async function GET(req: NextRequest) {
         year: f.year as number | null,
         branch: f.branch as string | null,
         borrower_name: f.borrower_name as string | null,
+        loan_program: f.loan_program as string | null,
+        loan_officer: nombreBonito(nombre),
+        b2b: f.b2b === true,
+        processing: f.processing === true,
+        support_on_demand: f.support_on_demand === true,
         loan_amount: f.loan_amount as number | null,
         margin,
         other,
