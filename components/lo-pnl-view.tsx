@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, AlertTriangle, Info } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, PayrollRow } from "@/app/api/lo-pnl/route";
 
@@ -137,6 +137,40 @@ function BloquePrestamos({ loans }: { loans: LoanRow[] }) {
             </tr>
           ))}
         </tbody>
+        {/*
+          * ⚠ LA FILA DE TOTALES ES LO QUE ATA ESTE BLOQUE A LA TABLA DE FUERA.
+          * Sin ella hay que sumar 24 prestamos a mano para comprobar de donde
+          * sale el "Produced" de la fila, y entonces el detalle no demuestra
+          * nada: solo acompaña.
+          *
+          * La comision se suma SOLO de los prestamos que cruzaron. Los que no
+          * cruzan valen null, no cero, y el aviso de cuantos son vive en la
+          * tarjeta de la cuenta.
+          */}
+        <tfoot className="sticky bottom-0 bg-gray-50">
+          <tr className="border-t-2 border-gray-300 font-semibold text-gray-700">
+            <td className="px-3 py-1.5" colSpan={2}>
+              {loans.length} loan{loans.length === 1 ? "" : "s"}
+            </td>
+            <td className="px-3 py-1.5 text-right">
+              {usd(loans.reduce((s, l) => s + (l.loan_amount ?? 0), 0))}
+            </td>
+            <td className="px-3 py-1.5 text-right">
+              {usd(loans.reduce((s, l) => s + l.margin, 0))}
+            </td>
+            <td className="px-3 py-1.5 text-right">
+              {usd(loans.reduce((s, l) => s + l.other, 0))}
+            </td>
+            <td className={`px-3 py-1.5 text-right font-mono tabular-nums ${
+              colorNeto(loans.reduce((s, l) => s + l.margin + l.other, 0))
+            }`}>
+              {usd(loans.reduce((s, l) => s + l.margin + l.other, 0))}
+            </td>
+            <td className="px-3 py-1.5 text-right text-gray-500">
+              {usd(loans.reduce((s, l) => s + (l.commission ?? 0), 0))}
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   );
@@ -226,26 +260,175 @@ const SECCIONES: { key: OfficerGroup; label: string; hint: string }[] = [
   },
 ];
 
-function Detalle({ o }: { o: OfficerBlock }) {
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * EL DETALLE DE UNA PERSONA, EN UN PANEL LATERAL
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ ANTES ERA UNA FILA QUE SE ABRIA DENTRO DE LA TABLA, y por eso se cambia:
+ * abrir a Gian Laino metia 24 prestamos y 30 lineas de nomina EN MEDIO de la
+ * lista, empujando a los demas media pantalla hacia abajo. Comparar dos
+ * personas exigia cerrar la primera, y la fila que se estaba mirando se movia
+ * bajo el cursor al hacerlo.
+ *
+ * El panel deja la tabla quieta: se abre al lado, se compara con lo que sigue
+ * viendose detras, y se cierra sin que nada salte.
+ *
+ * ⚠ z-[60]/z-[70] Y NO z-40/z-50 A PROPOSITO: esta vista vive TAMBIEN dentro
+ * del modal de P&L por sucursal, que ocupa esos dos niveles. Con los mismos, el
+ * panel se abriria DEBAJO del modal que lo contiene -- invisible, y sin que
+ * nada pareciera roto.
+ */
+function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) {
+  // Escape cierra. Un panel que solo se cierra con la X se queda abierto en
+  // cuanto alguien lo intenta por el camino de siempre.
+  useEffect(() => {
+    const alPulsar = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", alPulsar);
+    return () => window.removeEventListener("keydown", alPulsar);
+  }, [onClose]);
+
+  const nominaPos = -o.block2Total;
+  const localizada = o.payrollStatus !== "not_located";
+  // Comision menos nomina. Informativo: son dos calendarios y no tienen por
+  // que cuadrar. Ver la linea que lo dice dentro de la tarjeta.
+  const diferencia = o.commission - nominaPos;
+
   return (
-    <tr className="bg-gray-50/60">
-      <td colSpan={7} className="px-0 py-0 border-b border-gray-200">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 lg:divide-x divide-gray-200">
+    <>
+      <div className="fixed inset-0 z-[60] bg-slate-900/25" onClick={onClose} />
+      <aside
+        role="dialog"
+        aria-label={`Detail for ${o.name}`}
+        className="fixed inset-y-0 right-0 z-[70] flex h-full w-full max-w-3xl flex-col border-l border-slate-200 bg-white shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-gray-200 px-5 py-3">
           <div>
-            <div className="px-4 pt-3 pb-1 text-[11px] font-semibold text-gray-600">
+            <h3 className="text-sm font-semibold text-[#001A40]">{o.name}</h3>
+            <p className="mt-0.5 text-[11px] text-gray-500">
+              {o.position ?? "Role not in the HR roster"}
+              {o.area ? ` · ${o.area}` : ""}
+              {o.branch ? ` · branch ${o.branch}` : ""}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+          {/* ── A · Lo que produjo, prestamo a prestamo ───────────────────── */}
+          <section>
+            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
               What they produced · {o.loanCount} loan{o.loanCount !== 1 ? "s" : ""}
+            </h4>
+            {/*
+              * ⚠ EL CONTADOR DICE LAS DOS COSAS. Uno que solo pusiera "2
+              * pendientes" esconderia que ya hay coste apuntado, y el lector
+              * supondria que no hay nada hasta que cargue el mes.
+              */}
+            {o.loansPendingPl > 0 && (
+              <p className="mt-1 text-[11px] text-amber-700">
+                {o.loansPendingPl} closing{o.loansPendingPl === 1 ? "" : "s"} with no P&amp;L loaded
+                for their month — {usdExacto(Math.abs(o.pendingPlBooked))} of origination cost is
+                already booked, the margin is not. Left out of the figures below.
+              </p>
+            )}
+            <div className="mt-2 rounded-lg border border-gray-200 overflow-hidden">
+              <BloquePrestamos loans={o.loans} />
             </div>
-            <BloquePrestamos loans={o.loans} />
-          </div>
-          <div>
-            <div className="px-4 pt-3 pb-1 text-[11px] font-semibold text-gray-600">
-              What they cost · not tied to any loan
+          </section>
+
+          {/* ── B · Lo que costo, por cuenta ──────────────────────────────── */}
+          <section>
+            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+              What they cost · payroll by account
+            </h4>
+            <p className="mt-1 text-[11px] text-gray-500">
+              Not tied to any loan. This is the whole payroll the P&amp;L records for this person in
+              the selected period.
+            </p>
+            <div className="mt-2 rounded-lg border border-gray-200 overflow-hidden">
+              <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
             </div>
-            <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
-          </div>
+          </section>
+
+          {/* ── C · La cuenta, en tres lineas ─────────────────────────────── */}
+          <section>
+            <h4 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+              The account
+            </h4>
+            <div className="mt-2 rounded-xl bg-[#001A40] px-5 py-4 text-white">
+              <dl className="space-y-1.5 text-xs">
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-white/70">Produced</dt>
+                  <dd className="font-mono tabular-nums">{usdExacto(o.produced)}</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-white/70">− Payroll paid</dt>
+                  <dd className="font-mono tabular-nums">
+                    {localizada ? usdExacto(nominaPos) : (
+                      <span className="text-amber-300" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">
+                        not located
+                      </span>
+                    )}
+                  </dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-4 border-t border-white/20 pt-2">
+                  <dt className="font-semibold">= Net</dt>
+                  <dd className={`font-mono tabular-nums text-base font-semibold ${
+                    o.total > 0 ? "text-emerald-300" : o.total < 0 ? "text-red-300" : "text-white/70"
+                  }`}>
+                    {usdExacto(o.total)}
+                  </dd>
+                </div>
+              </dl>
+
+              {/*
+                * ⚠ LO INFORMATIVO, SEPARADO POR UNA LINEA Y DICHO. La comision
+                * esta AQUI PORQUE ES LA PREGUNTA DEL NEGOCIO --"¿cuanto gano
+                * este LO por sus cierres?"-- pero NO forma parte de la resta de
+                * arriba: ese dinero se paga a traves de la nomina, y restarlo
+                * ademas lo contaria dos veces.
+                *
+                * Y la diferencia se enseña porque alguien la va a calcular de
+                * todas formas al ver los dos numeros juntos. Enseñada con su
+                * explicacion al lado, no invita a restarla; ausente, invita.
+                */}
+              <div className="mt-3 space-y-1 border-t border-white/15 pt-3 text-[11px] text-white/60">
+                <div className="flex items-baseline justify-between gap-4">
+                  <span>Commission earned on these loans</span>
+                  <span className="font-mono tabular-nums">{usdExacto(o.commission)}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-4">
+                  <span>Difference vs payroll paid</span>
+                  <span className="font-mono tabular-nums">
+                    {localizada ? usdExacto(diferencia) : "—"}
+                  </span>
+                </div>
+                <p className="pt-1.5 leading-relaxed">
+                  Neither figure enters the Net above. They are two calendars: Compensafe groups
+                  commission by <span className="text-white/80">closing date</span> and the P&amp;L
+                  records payroll by <span className="text-white/80">payment date</span>, so a loan
+                  closed at the end of a month is paid in the next period. They are not meant to
+                  match.
+                </p>
+                {o.loansWithoutCommission > 0 && (
+                  <p className="leading-relaxed">
+                    {o.loansWithoutCommission} of these loans do not cross with Compensafe, so no
+                    commission is known for them. Not the same as a zero.
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
         </div>
-      </td>
-    </tr>
+      </aside>
+    </>
   );
 }
 
@@ -272,6 +455,40 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
   const [error, setError] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
   const [notaAbierta, setNotaAbierta] = useState(false);
+  const [avisosAbiertos, setAvisosAbiertos] = useState(false);
+
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * LA ALTURA DE LOS CONTROLES SE MIDE, NO SE ESCRIBE
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * La cabecera de la tabla se fija JUSTO DEBAJO de la barra de controles, y
+   * para eso necesita su altura. Escrita a mano seria un numero que se queda
+   * viejo al primer cambio de texto: la barra mide distinto dentro del modal
+   * de sucursal --lleva el nombre de la sucursal-- que en la pantalla suelta,
+   * y a ancho de movil los controles se van a una segunda linea.
+   *
+   * Un desfase de pocos pixeles no rompe nada visible: deja una rendija por la
+   * que asoman las filas al scrollear, o tapa el borde de la cabecera. Por eso
+   * se mide y se publica como variable CSS, y el `3.5rem` del `thead` es solo
+   * el valor con el que pinta el primer frame.
+   */
+  const barraRef = useRef<HTMLDivElement | null>(null);
+  const marcoRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const barra = barraRef.current;
+    const marco = marcoRef.current;
+    if (!barra || !marco) return;
+    const medir = () =>
+      marco.style.setProperty("--lo-pnl-controls-h", `${barra.offsetHeight}px`);
+    medir();
+    // El observador basta como unica dependencia real: la barra cambia de alto
+    // por texto o por ancho de ventana, y las dos cosas las ve el.
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(medir);
+    ro.observe(barra);
+    return () => ro.disconnect();
+  }, []);
   /*
    * ⚠ SOLO "producer" ABIERTO, Y LOS OTROS TRES PLEGADOS PERO PRESENTES.
    *
@@ -322,67 +539,62 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
     neto: officers.reduce((s, o) => s + o.total, 0),
   }), [officers]);
 
+  const personaAbierta = abierto
+    ? officers.find((o) => (o.personCode ?? o.name) === abierto) ?? null
+    : null;
+
   const sinNomina = officers.filter((o) => o.payrollStatus === "not_located" && o.loanCount > 0);
   const fueraDeNomina = officers.filter((o) => o.commissionOutsidePayroll);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-baseline justify-between flex-wrap gap-2">
-        <div>
+    <div ref={marcoRef} className="flex flex-col gap-4">
+      {/*
+        * ─────────────────────────────────────────────────────────────────────
+        * LOS CONTROLES NO SE VAN CON EL SCROLL
+        * ─────────────────────────────────────────────────────────────────────
+        *
+        * Con 38 productores abiertos la tabla pasa de dos pantallas, y el
+        * selector de periodo se quedaba arriba del todo. Quien bajaba a mirar
+        * una fila y queria cambiar de mes tenia que volver a subir, y --peor--
+        * dejaba de ver a que periodo pertenecian las cifras que estaba leyendo.
+        *
+        * Fondo SOLIDO, no translucido: debajo pasan filas con numeros, y un
+        * fondo con transparencia los deja asomar detras del texto de la barra.
+        */}
+      <div
+        ref={barraRef}
+        className="sticky top-0 z-30 -mt-1 flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-white px-0.5 py-2 shadow-[0_2px_4px_-2px_rgba(0,0,0,0.12)]"
+      >
+        <div className="flex items-center gap-2">
           {branch ? (
-            <>
-              <h2 className="text-sm font-semibold text-[#001A40]">
-                Loan officers of branch {branch}
-              </h2>
-              {/*
-                * ⚠ EL PERIODO NO SIGUE AL MODAL, Y HAY QUE DECIRLO.
-                *
-                * Dos alcances distintos en la misma ventana es de las cosas que
-                * mas confunden, asi que no puede quedar implicito. La razon es
-                * medida: Sergio Vermejo cerro UNA VEZ en noviembre de 2025 y
-                * siguio costando hasta mayo de 2026. Heredando el mes del modal
-                * desaparece de cualquier vista posterior, y con el el unico caso
-                * que enseña por que este modulo existe.
-                *
-                * La sucursal SI se hereda: esa pregunta es la misma en las dos.
-                */}
-              <p className="mt-0.5 text-[11px] text-amber-700">
-                Branch {branch} is inherited from this window. The period is not — it has its own
-                selector below, set to all months, because “does this person pay for themselves”
-                only makes sense over time.
-              </p>
-              {/*
-                * ⚠ EL COSTE NO SE PUEDE REPARTIR POR SUCURSAL, Y HAY QUE DECIRLO.
-                *
-                * La nomina sale de las cuentas de compensacion y no lleva
-                * sucursal de produccion. Asi que aqui cada persona trae su coste
-                * ENTERO contra lo que produjo SOLO en esta sucursal.
-                *
-                * Medido: de los 45 loan officers con cierres, 29 cierran en una
-                * sola sucursal --para ellos la cifra es exacta-- y 16 en varias.
-                * Gian Laino cierra en cinco: 17 en la 747, 3 en la 716, 2 en la
-                * 710, y una en la 760 y en Affinity. En la vista de la 747 carga
-                * su nomina completa contra 17 de sus 24 cierres.
-                *
-                * No se reparte porque no hay con que: inventar un prorrateo por
-                * numero de cierres o por volumen seria un dato que nadie ha
-                * decidido, presentado como si fuera contabilidad.
-                */}
-              <p className="mt-1 text-[11px] text-slate-500">
-                Each person’s cost is their <span className="font-medium">whole</span> payroll, not
-                a share of it — payroll has no branch. For the 29 officers who only close here that
-                is exact; for the 16 who close in several branches it overstates the cost in each
-                one.
-              </p>
-            </>
+            <h2 className="text-sm font-semibold text-[#001A40]">
+              Loan officers of branch {branch}
+            </h2>
           ) : (
-            <>
-              <h1 className="text-xl font-bold text-[#001A40]">P&amp;L by Loan Officer</h1>
-              <p className="mt-0.5 text-xs text-slate-500">
-                What each person produced, what they were paid for it, and what they cost.
-              </p>
-            </>
+            <h1 className="text-base font-bold text-[#001A40]">P&amp;L by Loan Officer</h1>
           )}
+          {/*
+            * ⚠ LAS SALVEDADES DE PANTALLA VIVEN EN UN BOTON, NO EN PARRAFOS.
+            *
+            * Eran tres parrafos encima de la tabla, y en el modal de sucursal
+            * ocupaban mas alto que las primeras filas. Plegadas siguen a un
+            * clic de distancia; abiertas en la pantalla empujan el dato que se
+            * viene a ver fuera de la vista.
+            *
+            * El boton CUENTA cuantas hay, para que plegarlas no las esconda.
+            */}
+          <button
+            onClick={() => setAvisosAbiertos((v) => !v)}
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${
+              avisosAbiertos
+                ? "border-amber-300 bg-amber-50 text-amber-800"
+                : "border-gray-200 bg-white text-gray-500 hover:bg-gray-50"
+            }`}
+            title="What these figures do and do not cover"
+          >
+            <HelpCircle size={11} />
+            {branch ? "3 things to know" : "2 things to know"}
+          </button>
         </div>
 
         {/* El periodo: por defecto el mes de cierre, el mismo que Where to start. */}
@@ -414,6 +626,70 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
         </div>
       </div>
 
+      {avisosAbiertos && (
+        <div className="-mt-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[11px] leading-relaxed text-gray-600 space-y-2">
+          <p>
+            <span className="font-semibold text-gray-700">Net is produced minus payroll.</span>{" "}
+            The commission column is shown because it is the business question — what this person
+            earned on their closings — but it is <span className="font-medium">not</span> subtracted:
+            that money is paid through payroll, and subtracting both would count it twice.
+          </p>
+          <p>
+            <span className="font-semibold text-gray-700">
+              Commission and payroll are two calendars.
+            </span>{" "}
+            Compensafe groups by closing date and the P&amp;L by payment date, so a loan closed at
+            the end of a month is paid in the next period. The two columns are not meant to match.
+          </p>
+          {branch && (
+            <>
+              {/*
+                * ⚠ EL PERIODO NO SIGUE AL MODAL, Y HAY QUE DECIRLO.
+                *
+                * Dos alcances distintos en la misma ventana es de las cosas que
+                * mas confunden, asi que no puede quedar implicito. La razon es
+                * medida: Sergio Vermejo cerro UNA VEZ en noviembre de 2025 y
+                * siguio costando hasta mayo de 2026. Heredando el mes del modal
+                * desaparece de cualquier vista posterior, y con el el unico caso
+                * que enseña por que este modulo existe.
+                *
+                * La sucursal SI se hereda: esa pregunta es la misma en las dos.
+                */}
+              <p className="text-amber-700">
+                <span className="font-semibold">The branch is inherited, the period is not.</span>{" "}
+                Branch {branch} comes from this window; the period has its own selector above,
+                because “does this person pay for themselves” only makes sense over time.
+              </p>
+              {/*
+                * ⚠ EL COSTE NO SE PUEDE REPARTIR POR SUCURSAL, Y HAY QUE DECIRLO.
+                *
+                * La nomina sale de las cuentas de compensacion y no lleva
+                * sucursal de produccion. Asi que aqui cada persona trae su coste
+                * ENTERO contra lo que produjo SOLO en esta sucursal.
+                *
+                * Medido: de los 45 loan officers con cierres, 29 cierran en una
+                * sola sucursal --para ellos la cifra es exacta-- y 16 en varias.
+                * Gian Laino cierra en cinco: 17 en la 747, 3 en la 716, 2 en la
+                * 710, y una en la 760 y en Affinity. En la vista de la 747 carga
+                * su nomina completa contra 17 de sus 24 cierres.
+                *
+                * No se reparte porque no hay con que: inventar un prorrateo por
+                * numero de cierres o por volumen seria un dato que nadie ha
+                * decidido, presentado como si fuera contabilidad.
+                */}
+              <p className="text-slate-500">
+                <span className="font-semibold text-gray-700">
+                  Cost is whole, production is only this branch.
+                </span>{" "}
+                Payroll has no branch, so each person carries their entire payroll against what they
+                produced here alone. For the 29 officers who only close here that is exact; for the
+                16 who close in several branches it overstates the cost in each one.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
       )}
@@ -429,34 +705,49 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
 
       {!loading && data && officers.length > 0 && (
         <>
-          <div className="rounded-xl border border-gray-200 overflow-hidden">
+          <div className="rounded-xl border border-gray-200">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50">
-                <tr className="text-left text-gray-500 border-b border-gray-200">
-                  <th className="px-3 py-2 font-medium">Loan Officer</th>
+              {/*
+                * ⚠ LAS CABECERAS SE FIJAN, LAS DE SECCION NO.
+                *
+                * Con 36 productores abiertos la tabla pasa de una pantalla y se
+                * perdia que columna era cual. Las de seccion --Producers,
+                * Support...-- scrollean con su contenido a proposito: son parte
+                * de la lista, no del marco.
+                */}
+              <thead className="sticky top-[var(--lo-pnl-controls-h,3.5rem)] z-20 bg-gray-100 shadow-[0_1px_0_rgba(0,0,0,0.08)]">
+                <tr className="text-left text-gray-600 border-b border-gray-300">
+                  <th className="px-3 py-2 font-medium">Producer</th>
                   <th className="px-3 py-2 font-medium text-right">Loans</th>
                   <th className="px-3 py-2 font-medium text-right">Volume</th>
                   {/*
-                    * ⚠ LAS CUATRO SE LEEN COMO UNA CUENTA, DE IZQUIERDA A
-                    * DERECHA, Y CADA UNA SE RECONSTRUYE DE LAS DE AL LADO.
+                    * ⚠ EL NETO SALE DE PAYROLL PAID, NO DE COMMISSION, Y ES LO
+                    * QUE MAS FACIL SERIA EQUIVOCAR.
                     *
-                    * Antes habia tres columnas de dinero y ninguna decia de
-                    * donde salia la siguiente: Gian Laino producia 22.469,
-                    * costaba 16.919, y el neto ponia 5.551 sin que se viera la
-                    * resta. Los signos van en la cabecera porque son parte de
-                    * la cuenta, no decoracion.
+                    * La comision se PAGA A TRAVES de la nomina: restarla ademas
+                    * de la nomina contaria el mismo dinero dos veces. Por eso
+                    * `Commission` se enseña --es la pregunta del negocio,
+                    * "cuanto gano este LO por sus cierres"-- pero NO entra en la
+                    * resta, y la cabecera del neto lo dice.
+                    *
+                    * ⚠ Y NO CUADRAN ENTRE SI, que es lo que hace tentador
+                    * restarlas. Son dos calendarios: Compensafe agrupa por FECHA
+                    * DE CIERRE y el P&L por FECHA DE PAGO, asi que un prestamo
+                    * de mayo se paga en la quincena siguiente. Medido en Luis
+                    * Silva: 21.690,19 de comision sobre los prestamos que el
+                    * modulo ve, contra 11.601,18 en la cuenta 60105.
                     */}
                   <th className="px-3 py-2 font-medium text-right" title="What their closed loans left: margin plus other loan income and costs.">
                     Produced
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="What they were paid for closing them, from Compensafe. This comes out of payroll, it is not on top of it.">
-                    − Commission
+                  <th className="px-3 py-2 font-medium text-right text-gray-500" title="What Compensafe paid them for those loans. Shown because it is the business question — NOT subtracted here, because this money is paid through payroll and subtracting both would count it twice.">
+                    Commission
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="The rest of their payroll: salary, bonus, taxes, insurance, equipment. Payroll minus the commission above.">
-                    − Other cost
+                  <th className="px-3 py-2 font-medium text-right" title="What the P&L records as paid to this person: salary, commission, bonus, taxes, insurance, equipment.">
+                    Payroll paid
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="Produced minus commission minus other cost.">
-                    = Net
+                  <th className="px-3 py-2 font-medium text-right" title="Produced minus payroll paid. Commission is not subtracted again — it is already inside payroll.">
+                    Net <span className="font-normal text-gray-400">= Produced − Payroll</span>
                   </th>
                 </tr>
               </thead>
@@ -492,12 +783,28 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                                 · {cierresSeccion} closing{cierresSeccion === 1 ? "" : "s"}
                               </span>
                             )}
+                            {/*
+                              * ⚠ LA EXPLICACION DEL GRUPO, EN UN ICONO Y NO EN
+                              * UN PARRAFO. Cuatro parrafos intercalados entre
+                              * las filas partian la tabla en cuatro tablas: la
+                              * vista se pierde al bajar, y el ojo deja de poder
+                              * comparar una columna de arriba abajo. El texto es
+                              * el mismo, colgado del titulo que describe.
+                              */}
+                            {/*
+                              * El `title` va en el <span>, no en el icono: en un
+                              * <svg> el atributo `title` no enseña tooltip --hace
+                              * falta un <title> hijo-- y el aviso se perderia sin
+                              * que nada pareciera roto.
+                              */}
+                            <span title={sec.hint} className="inline-flex cursor-help text-gray-300 hover:text-gray-500">
+                              <HelpCircle size={11} />
+                            </span>
                           </span>
-                          <p className="mt-0.5 pl-[19px] text-[11px] font-normal text-gray-500">{sec.hint}</p>
                         </td>
                         <td className="px-3 py-2 text-right" colSpan={3} />
                         <td className="px-3 py-2 text-right">
-                          <span className={`font-semibold ${netoSeccion < 0 ? "text-red-600" : "text-gray-800"}`}>
+                          <span className={`font-semibold font-mono tabular-nums ${netoSeccion < 0 ? "text-red-600" : "text-gray-800"}`}>
                             {usd(netoSeccion)}
                           </span>
                         </td>
@@ -513,11 +820,19 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                     <Fragment key={id}>
                       <tr
                         onClick={() => setAbierto(abre ? null : id)}
-                        className="border-b border-gray-100 hover:bg-blue-50/40 cursor-pointer">
+                        className={`cursor-pointer border-b border-gray-100 hover:bg-blue-50/60 ${
+                          abre ? "bg-blue-50" : ""
+                        }`}>
                         <td className="px-3 py-1.5">
                           <span className="inline-flex items-center">
-                            {abre ? <ChevronDown size={12} className="mr-1 text-gray-400" />
-                                  : <ChevronRight size={12} className="mr-1 text-gray-400" />}
+                            {/*
+                              * Siempre a la derecha: ya no despliega hacia abajo,
+                              * abre un panel al lado. Un chevron que apuntara
+                              * hacia abajo prometeria un sitio donde mirar que no
+                              * existe.
+                              */}
+                            <ChevronRight size={12}
+                              className={`mr-1 ${abre ? "text-blue-600" : "text-gray-400"}`} />
                             <span className="font-medium text-gray-800">{o.name}</span>
                           </span>
 
@@ -560,7 +875,7 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                         <td className="px-3 py-1.5 text-right text-gray-600">{o.loanCount || "—"}</td>
                         <td className="px-3 py-1.5 text-right text-gray-600">{o.volume ? usd(o.volume) : "—"}</td>
                         <td className="px-3 py-1.5 text-right">{o.loanCount ? usd(o.produced) : "—"}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-600">
+                        <td className="px-3 py-1.5 text-right text-gray-500">
                           {o.commission ? usd(o.commission) : "—"}
                         </td>
                         <td className="px-3 py-1.5 text-right">
@@ -568,27 +883,44 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                             <span className="text-amber-600" title="No payroll found for this person. Not the same as a zero.">—</span>
                           ) : o.commissionExceedsPayroll ? (
                             /*
-                              * ⚠ NEGATIVO SE MARCA, NO SE PINTA. Leido literal
-                              * diria que sus otros costes le devolvieron dinero.
-                              * Salta en cuatro personas y solo tres llevaban la
-                              * marca vieja: la cuarta es Haydee Tito-Pace, con
-                              * 1.292 de nomina contra 32.179 de comision.
+                              * ⚠ LA MARCA DICE LO QUE SE VE, NO DIAGNOSTICA.
+                              * La columna enseña la nomina localizada, que es un
+                              * hecho; que sea MENOR que la comision es el hallazgo,
+                              * y sus causas son varias --el P&L del periodo sin
+                              * cargar, la nomina sin atribuir, la comision mal
+                              * cruzada--. Haydee Tito-Pace fue la que lo enseño:
+                              * 1.292 de nomina contra 32.179 de comision, y la
+                              * causa resulto ser la sucursal 728 sin cargar.
                               */
                             <span
                               className="font-medium text-amber-700"
-                              title="The commission is larger than the payroll located for this person, so this figure goes negative. Causes vary — the period's P&L may not be loaded, payroll may not be attributed, or the commission may be crossed wrong."
+                              title="Less payroll is located for this person than the commission recorded for their loans, so the cost here is understated. Causes vary — the period's P&L may not be loaded, payroll may not be attributed, or the commission may be crossed wrong."
                             >
-                              {usd(o.otherCost)}
+                              {usd(-o.block2Total)}
                             </span>
                           ) : (
-                            usd(o.otherCost)
+                            usd(-o.block2Total)
                           )}
                         </td>
-                        <td className={`px-3 py-1.5 text-right font-semibold ${colorNeto(o.net)}`}>
-                          {usd(o.net)}
+                        {/*
+                          * ⚠ `total`, NO `net`. Las dos cifras son la misma
+                          * --produced menos la nomina-- pero `total` la calcula
+                          * de los dos numeros que la fila enseña al lado, y
+                          * `net` la rodea pasando por la comision. La columna
+                          * tiene que poderse reconstruir de lo que se ve.
+                          */}
+                        <td className={`px-3 py-1.5 text-right font-semibold font-mono tabular-nums ${colorNeto(o.total)}`}>
+                          {usd(o.total)}
                         </td>
                       </tr>
-                      {abre && <Detalle o={o} />}
+                      {/*
+                        * ⚠ EL PANEL NO SE PINTA AQUI. Un <aside> colgado del
+                        * <tbody> lo saca el navegador de la tabla al parsear
+                        * --el contenido de una tabla solo admite filas-- y se
+                        * pierde a mitad de camino. Vive al final del componente,
+                        * fuera de la <table>, y la fila solo guarda a quien
+                        * abrio.
+                        */}
                     </Fragment>
                   );
                       })}
@@ -602,9 +934,15 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
                   <td className="px-3 py-2 text-right">{totales.prestamos}</td>
                   <td className="px-3 py-2 text-right">{usd(totales.volumen)}</td>
                   <td className="px-3 py-2 text-right">{usd(totales.produccion)}</td>
-                  <td className="px-3 py-2 text-right text-gray-500">—</td>
-                  <td className="px-3 py-2 text-right">{usd(totales.coste)}</td>
-                  <td className={`px-3 py-2 text-right ${colorNeto(totales.neto)}`}>{usd(totales.neto)}</td>
+                  {/*
+                    * La comision NO se totaliza a proposito. Sumada aqui, al
+                    * lado de una resta de la que no forma parte, invitaria a
+                    * restarla; y ademas se mide en otro calendario que el resto
+                    * de la fila, asi que el total no seria comparable con nada.
+                    */}
+                  <td className="px-3 py-2 text-right text-gray-400 font-normal">—</td>
+                  <td className="px-3 py-2 text-right">{usd(-totales.coste)}</td>
+                  <td className={`px-3 py-2 text-right font-mono tabular-nums ${colorNeto(totales.neto)}`}>{usd(totales.neto)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -734,6 +1072,17 @@ export function LoPnlView({ branch = null }: { branch?: string | null }) {
             )}
           </div>
         </>
+      )}
+
+      {/*
+        * El panel, fuera de la tabla y con la persona buscada por su id. Se
+        * busca en vez de guardarse el objeto para que al recargar --otro mes,
+        * otra sucursal-- el panel enseñe las cifras NUEVAS de esa persona, o se
+        * cierre solo si ya no esta. Guardando el objeto se quedaria enseñando
+        * el periodo anterior con los controles diciendo otra cosa.
+        */}
+      {personaAbierta && (
+        <PanelDetalle o={personaAbierta} onClose={() => setAbierto(null)} />
       )}
     </div>
   );
