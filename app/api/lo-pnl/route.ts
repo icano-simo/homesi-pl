@@ -506,7 +506,14 @@ export interface LoanRow {
    *                          todas las sucursales   solo la suya
    *     70100 Marketing                     0,00     -63.737,50
    *     60125 Operations Payroll            0,00      -1.800,00
-   *     61200 Office Expense           -8.721,60            —
+   *     61200 Office Expense           -8.721,60            NULO
+   *
+   * ⚠ Y LA TERCERA VA AL REVES, que es lo que prueba que las dos columnas son
+   * de verdad distintas y no un error de signo: el Office Expense esta ENTERO
+   * en otra sucursal, asi que desaparece de este peldaño y aparece en
+   * "Distributed to division (700)". Comprobado ejecutando la ruta: su unica
+   * linea llega al payload del prestamo 700002013844 de Nathan Martinez con
+   * `in_branch = false` y `branch = "700"`, o sea que se ve, no se pierde.
    *
    * Asi que este escalon lleva dinero de verdad --11.305,73 en Gian Laino,
    * 8.849,49 en Nathan Martinez-- y por eso `produced` no coincide con el
@@ -516,6 +523,12 @@ export interface LoanRow {
    * Un escalon que casi siempre vale cero seria barato; uno que lleva 63 mil y
    * no se enseña seria el error que este modulo no puede cometer. Solo se
    * oculta cuando es exactamente cero.
+   *
+   * ⚠ Y EL PATRON, QUE ES LO QUE HAY QUE LLEVARSE: una nota cierta que dejo de
+   * serlo al cambiar el alcance DEBAJO de ella, sin que nada fallara. Ha pasado
+   * tres veces en este proyecto. La regla que sale de ahi --escribir las DOS
+   * columnas cuando el alcance es justo lo que puede cambiar-- vive en
+   * docs/notas-que-dependen-del-alcance.md.
    */
   otherBooked: number;
   /**
