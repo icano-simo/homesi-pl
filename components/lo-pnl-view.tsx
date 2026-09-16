@@ -796,8 +796,8 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
   const fragilTotal = fragiles.reduce((s, r) => s + r.amount, 0);
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <dl className="space-y-0.5 text-[11px]">
+    <div className="flex h-full max-h-full flex-col rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <dl className="min-h-0 flex-1 space-y-0.5 overflow-y-auto text-[11px]">
         {[...porCuenta.entries()].sort((a, b) => a[1].total - b[1].total).map(([gl, v]) => (
           <div key={gl} className="flex items-baseline gap-2">
             <dt className="shrink-0 text-gray-600">{v.nombre || gl}</dt>
@@ -810,7 +810,8 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
         ))}
       </dl>
 
-      <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-2">
+      {/* shrink-0: el total no entra en el scroll. Ver la nota del panel. */}
+      <div className="mt-2 flex shrink-0 items-baseline justify-between gap-2 border-t border-slate-200 pt-2">
         <span className="text-[11px] font-semibold text-gray-700">Total payroll cost</span>
         <span className="font-mono tabular-nums text-xs font-bold text-rose-600">{usdExacto(total)}</span>
       </div>
@@ -821,7 +822,7 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
          * "no payroll located", y eso seria FALSO -- y falso de la peor manera,
          * porque se leeria como un hallazgo.
          */
-        <p className="mt-2 text-[10px] leading-snug text-slate-500">
+        <p className="mt-2 shrink-0 text-[10px] leading-snug text-slate-500">
           {fragiles.length} more row{fragiles.length !== 1 ? "s" : ""} worth {usdExacto(fragilTotal)}{" "}
           matched with low confidence and are <span className="font-medium">not</span> in this total.
         </p>
@@ -908,8 +909,21 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
           </div>
         </header>
 
-        {/* ── Tarjeta 1 · Produccion. La unica que scrollea ──────────────── */}
-        <div className="flex min-h-0 flex-1 flex-col">
+        {/*
+          * ── Tarjeta 1 · Produccion ──────────────────────────────────────
+          *
+          * ⚠ flex-[3] CONTRA flex-[1] DE LA NOMINA, Y LAS DOS CEDEN. La lista
+          * era la unica flexible y la nomina iba fija, y con eso el peor caso
+          * se sale: Nathan Martinez tiene 65 cierres Y 11 cuentas de nomina
+          * --es el peor en los dos ejes a la vez-- y sus tres tarjetas fijas
+          * suman mas de 640px. En un portatil de 768 eso dejaba la lista de
+          * prestamos en una rendija de 26px.
+          *
+          * Repartiendo el hueco 3:1 las dos caben siempre y el resumen no se
+          * mueve del pie. La lista se lleva la parte grande porque es donde se
+          * mira; la nomina son once lineas que se leen de un vistazo.
+          */}
+        <div className="flex min-h-0 flex-[3] flex-col">
           <div className="flex shrink-0 items-baseline justify-between pb-1">
             <h4 className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
               Production · {o.loanCount} loan{o.loanCount !== 1 ? "s" : ""}
@@ -932,11 +946,23 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
         </div>
 
         {/* ── Tarjeta 2 · Nomina del periodo ─────────────────────────────── */}
-        <div className="shrink-0 pt-3">
-          <h4 className="pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+        <div className="flex min-h-0 flex-[1] flex-col pt-3">
+          <h4 className="shrink-0 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
             Payroll this period
           </h4>
-          <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
+          {/*
+            * max-h ademas del flex: en alguien con dos cuentas de nomina, un
+            * flex-1 a secas estiraria la tarjeta hasta un cuarto del panel
+            * para enseñar dos lineas, y ese hueco lo quiere la lista.
+            *
+            * El scroll va DENTRO de la tarjeta y solo sobre la lista de
+            * cuentas, no sobre la tarjeta entera: el total tiene que quedarse
+            * a la vista. Scrollando la tarjeta completa, la unica cifra que
+            * alguien viene a leer aqui se va por arriba.
+            */}
+          <div className="min-h-0 max-h-56 flex-1">
+            <BloqueNomina rows={o.payroll} fragiles={o.payrollFragile} />
+          </div>
         </div>
 
         {/* ── Tarjeta 3 · El resumen, al pie ─────────────────────────────── */}
