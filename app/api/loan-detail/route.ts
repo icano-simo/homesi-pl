@@ -4,6 +4,7 @@ import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
 import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   ALL_MARGIN_ACCOUNTS,
+  CONCEPT_ORDER,
   isBankedChannel,
   MARGIN_FOR_PERIOD,
   NET_GROUPS,
@@ -61,7 +62,15 @@ export interface LoanDetailLine {
  * Processing Fees (55275) — with the larger concepts first and, inside each,
  * the larger amounts first.
  */
-const LINE_ORDER: readonly string[] = ["Back-end Margin", "Discount Income", "Front-end Margin"];
+/*
+ * ⚠ ERA UNA LISTA DE TRES Y AHORA ES LA CANONICA, `CONCEPT_ORDER`. Tres
+ * anclas dejaban el resto ordenado por importe, asi que de la cuarta linea en
+ * adelante cada tarjeta sacaba las cuentas en un sitio distinto -- justo lo que
+ * el orden fijo viene a evitar. La lista vive en lib/loan-detail-accounts.ts,
+ * que es donde vive todo lo que se sabe de las cuentas, y la comparten esta
+ * ruta y el componente de tarjeta.
+ */
+const LINE_ORDER: readonly string[] = CONCEPT_ORDER;
 
 function orderLines(lines: LoanDetailLine[]): LoanDetailLine[] {
   const anchored: LoanDetailLine[] = [];

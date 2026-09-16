@@ -8,6 +8,7 @@ import { LoanPnlCard } from "@/components/loan-pnl-card";
 import {
   ALL_MARGIN_ACCOUNTS,
   NET_GROUPS,
+  conceptLabel,
   expectedMarginAccounts,
 } from "@/lib/loan-detail-accounts";
 
@@ -716,7 +717,10 @@ function Block({ title, total, amount, lines, loan }: {
                   category_7 nets several accounts into one figure that
                   reconciles against nothing. */}
               <span className="mr-1.5 font-mono text-[9px] text-slate-400">{gl_code}</span>
-              {gl_name}
+              {/* El mismo nombre que en la tarjeta, por el mismo helper:
+                  "Back-end Margin" antes que "BM Margin", pero "Lender Credits"
+                  antes que su category_7, que lo fundiria con otras dos. */}
+              {conceptLabel(gl_name, category_7)}
               {elsewhere && (
                 <span title={`Booked in branch ${elsewhere}, while the loan is branch ${loan?.branch}. Common and not an error: part of the margin is booked in 700 by design.`}
                   className="ml-1 rounded bg-slate-200/70 px-1 py-0.5 font-mono text-[9px] text-slate-600">

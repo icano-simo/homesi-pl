@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment } from "react";
+import { CONCEPT_ORDER, conceptLabel } from "@/lib/loan-detail-accounts";
 
 /**
  * ═════════════════════════════════════════════════════════════════════════════
@@ -106,6 +107,28 @@ function peldañoDe(c6: string | null | undefined) {
   return "other" as const;
 }
 
+/**
+ * ⚠ ORDEN FIJO POR CONCEPTO, NO POR IMPORTE, y es la unica razon por la que
+ * dos tarjetas se pueden comparar de un vistazo. Por importe, cada prestamo
+ * saca "Back-end Margin" en un renglon distinto y hay que buscarlo en cada
+ * tarjeta. Lo de fuera de la lista va detras, y entre si por importe.
+ *
+ * Dentro de un mismo concepto se conserva el orden de llegada: son filas crudas
+ * y su secuencia cuenta algo -- el cobro primero y su traslado despues.
+ */
+function ordenarPorConcepto(filas: TarjetaLinea[]): TarjetaLinea[] {
+  const rango = (x: TarjetaLinea) => {
+    const i = CONCEPT_ORDER.indexOf(conceptLabel(x.gl_name, x.category_7));
+    return i === -1 ? CONCEPT_ORDER.length : i;
+  };
+  return [...filas].sort((a, b) => {
+    const ra = rango(a), rb = rango(b);
+    if (ra !== rb) return ra - rb;
+    if (ra < CONCEPT_ORDER.length) return 0;       // dentro del concepto, sin tocar
+    return Math.abs(b.amount) - Math.abs(a.amount); // el resto, por importe
+  });
+}
+
 function Linea({ x, importeBase, sucursal }: {
   x: TarjetaLinea; importeBase: number | null; sucursal: string | null;
 }) {
@@ -121,9 +144,29 @@ function Linea({ x, importeBase, sucursal }: {
       <span className="truncate text-slate-600">
         {/* El gl_code, para poder cuadrar la linea contra la contabilidad:
             category_7 junta varias cuentas en una cifra que no reconcilia con
-            nada. */}
+            nada, asi que el nombre solo no basta. */}
         <span className="mr-1.5 font-mono text-[9px] text-slate-400">{x.gl_code ?? "—"}</span>
-        {x.gl_name ?? x.category_7 ?? "—"}
+        {/*
+          * ⚠ EL NOMBRE DEL NEGOCIO, QUE NO SIEMPRE ES category_7. La
+          * contabilidad llama "BM Margin" a lo que el negocio llama "Back-end
+          * Margin", y "LO Margin" a "Front-end Margin" -- ese ultimo
+          * especialmente enganoso, porque 41305 NO es compensacion del loan
+          * officer pese al nombre. Pero "Lender Credits" (41225) y "Other HUD
+          * Fees, Net" (41205) son al reves: su category_7 es "Fee Income, Net"
+          * para los dos, y usarlo los fundiria en una linea.
+          *
+          * `conceptLabel` resuelve las dos direcciones. Lo que quede detras --el
+          * otro nombre-- va en gris, para quien busque la cuenta por como la ve
+          * en el libro mayor.
+          */}
+        {conceptLabel(x.gl_name, x.category_7)}
+        {(() => {
+          const principal = conceptLabel(x.gl_name, x.category_7);
+          const otro = principal === x.gl_name ? x.category_7 : x.gl_name;
+          return otro && otro !== principal
+            ? <span className="ml-1 text-[9px] text-slate-400">{otro}</span>
+            : null;
+        })()}
         {fuera && (
           <span
             title={`Booked in branch ${x.branch}, while the loan is branch ${sucursal}. Common and not an error: part of the margin is booked in 700 by design.`}
@@ -154,12 +197,19 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
   }
 
   const perdida = (p.total.value ?? 0) < 0;
+  const hayFuera = !!p.elsewhere && p.elsewhere.some((s) => s.lineas.length > 0);
 
   return (
-    <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
-      <div>
+    /*
+     * ⚠ ALTO FIJO Y TODAS IGUALES. Con el alto del contenido, un prestamo de
+     * tres lineas y otro de veintiocho salen a alturas distintas y la fila deja
+     * de poder leerse en horizontal -- que es justo lo que el orden fijo de
+     * cuentas viene a permitir. El contenido que no cabe scrollea dentro.
+     */
+    <div className="flex h-[30rem] w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
+      <div className="flex min-h-0 flex-1 flex-col">
         {/* ── La ficha del prestamo ─────────────────────────────────────── */}
-        <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-100/90 p-3.5 text-xs font-bold text-[#001A40]">
+        <div className="flex shrink-0 flex-col gap-1 border-b border-slate-200 bg-slate-100/90 p-3.5 text-xs font-bold text-[#001A40]">
           <div className="flex items-center justify-between gap-2">
             <span className="font-mono">{p.loan_number}</span>
             <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px]">{p.branch ?? "—"}</span>
@@ -184,12 +234,14 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         </div>
 
         {/* ── Las cuentas, por peldaño ──────────────────────────────────── */}
-        <div className="px-3 pt-2">
+        {/* Lo unico que scrollea dentro de la tarjeta: con alto fijo, un
+            prestamo de 28 lineas tiene que caber sin estirar la fila. */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2">
           {p.lineas.length === 0 && (
             <p className="px-3 pb-1 text-[10px] italic text-slate-400">No entries on this loan</p>
           )}
           {PELDAÑOS.map((esc) => {
-            const filas = porPeldaño.get(esc.key) ?? [];
+            const filas = ordenarPorConcepto(porPeldaño.get(esc.key) ?? []);
             // El peldaño sin lineas no se enseña: un renglon permanente a cero
             // en 481 de 482 prestamos es ruido.
             if (filas.length === 0) return null;
@@ -237,41 +289,22 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
           )}
         </div>
 
-        {/*
-          * ⚠ LA SECCION DE LA 700 VA DESPUES DEL TOTAL EN LA LECTURA, pero antes
-          * en el marcado porque el banner esta pegado al fondo de la tarjeta.
-          * Va separada y en gris para que no parezca que participa en la resta,
-          * y la etiqueta dice UNA VEZ que no entra -- no en cada fila.
-          */}
-        {p.elsewhere && p.elsewhere.some((s) => s.lineas.length > 0) && (
-          <div className="mt-2 border-t-2 border-slate-200 px-3 pt-2">
-            <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
-              Not part of this branch&rsquo;s contribution
-            </p>
-            {p.elsewhere.map((s) => s.lineas.length === 0 ? null : (
-              <Fragment key={s.label}>
-                <div className="mt-1 flex items-center justify-between px-3 text-[10px] font-semibold text-slate-500">
-                  <span>{s.label}</span>
-                  <span className="font-mono tabular-nums">
-                    {usdExacto(s.lineas.reduce((a, x) => a + x.amount, 0))}
-                  </span>
-                </div>
-                <div className="opacity-60">
-                  {s.lineas.map((x, i) => (
-                    <Linea key={`${s.label}-${i}`} x={x} importeBase={p.loan_amount} sucursal={p.branch} />
-                  ))}
-                </div>
-              </Fragment>
-            ))}
-          </div>
-        )}
       </div>
 
-      {/* ── El banner del total, pegado al fondo ──────────────────────────── */}
+      {/*
+        * ── El banner del total ──────────────────────────────────────────────
+        *
+        * ⚠ LA CUENTA CIERRA AQUI, Y LO DE LA 700 VA DEBAJO. Estaba encima del
+        * banner porque el banner iba pegado al fondo de la tarjeta, y leido de
+        * arriba abajo eso ponia los 8.124,38 de corporativo ANTES del total --
+        * o sea, pareciendo que participaban en la resta. No participan:
+        * 29.509,80 - 123,93 - 15.370,22 = 14.015,65 y los 8.124,38 quedan
+        * fuera. Que se vea por la POSICION y no solo por la etiqueta.
+        */}
       <div
-        className={`mt-2 flex items-center justify-between rounded-b-2xl p-3 text-xs font-bold shadow-xs ${
-          perdida ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"
-        }`}
+        className={`flex shrink-0 items-center justify-between p-3 text-xs font-bold shadow-xs ${
+          hayFuera ? "" : "rounded-b-2xl"
+        } ${perdida ? "border-t border-rose-200 bg-rose-100 text-rose-900" : "bg-[#001A40] text-white"}`}
       >
         <span>{p.total.label}</span>
         <span>
@@ -283,6 +316,30 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
           </span>
         </span>
       </div>
+
+      {/* Fuera de la cuenta: debajo del total, en gris y sobre otro fondo. */}
+      {hayFuera && (
+        <div className="max-h-28 shrink-0 overflow-y-auto rounded-b-2xl border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
+          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">
+            Not part of this contribution
+          </p>
+          {p.elsewhere!.map((s) => s.lineas.length === 0 ? null : (
+            <Fragment key={s.label}>
+              <div className="mt-1 flex items-center justify-between text-[10px] font-semibold text-slate-600">
+                <span>{s.label}</span>
+                <span className="font-mono tabular-nums">
+                  {usdExacto(s.lineas.reduce((a, x) => a + x.amount, 0))}
+                </span>
+              </div>
+              <div className="-mx-3 opacity-70">
+                {s.lineas.map((x, i) => (
+                  <Linea key={`${s.label}-${i}`} x={x} importeBase={p.loan_amount} sucursal={p.branch} />
+                ))}
+              </div>
+            </Fragment>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

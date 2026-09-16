@@ -637,23 +637,26 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
      * prestatario, periodo, importe, bps y contribucion. Plegar NO esconde
      * ninguna cifra -- solo el desglose por cuenta.
      */
+    /*
+     * ⚠ MISMO ANCHO Y MISMO ALTO QUE LA ABIERTA. En una fila horizontal, una
+     * tarjeta plegada mas baja rompe la linea de base de toda la fila y el ojo
+     * deja de poder recorrerla. Se pliega el CONTENIDO, no el hueco.
+     */
     return (
       <button
         onClick={onToggle}
-        className="flex w-[340px] shrink-0 items-center justify-between gap-2 rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 text-left shadow-xs hover:border-[#A6DEFF]"
+        className="flex h-[30rem] w-[340px] shrink-0 flex-col items-stretch justify-center gap-1 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 text-left hover:border-[#A6DEFF] hover:bg-white"
       >
-        <span className="min-w-0">
-          <span className="block truncate font-mono text-xs font-bold text-[#001A40]">{l.loan_number}</span>
-          <span className="block truncate text-[10px] text-slate-500">
-            {l.borrower_name ?? "—"} · {l.month} {l.year} · {usd(l.loan_amount)}
-          </span>
+        <span className="truncate font-mono text-xs font-bold text-[#001A40]">{l.loan_number}</span>
+        <span className="truncate text-[11px] text-slate-500">{l.borrower_name ?? "—"}</span>
+        <span className="truncate text-[10px] text-slate-400">
+          {l.month} {l.year} · {usd(l.loan_amount)}
         </span>
-        <span className="shrink-0 text-right">
-          <span className={`block font-mono tabular-nums text-xs font-bold ${colorNeto(l.contribution ?? 0)}`}>
-            {l.contribution == null ? "—" : usd(l.contribution)}
-          </span>
-          <span className="block font-mono text-[10px] text-slate-400">{bps(l.contribution, l.loan_amount)} bps</span>
+        <span className={`mt-2 font-mono tabular-nums text-sm font-bold ${colorNeto(l.contribution ?? 0)}`}>
+          {l.contribution == null ? "—" : usd(l.contribution)}
         </span>
+        <span className="font-mono text-[10px] text-slate-400">{bps(l.contribution, l.loan_amount)} bps</span>
+        <span className="mt-3 text-[9px] uppercase tracking-wide text-slate-400">Click to open</span>
       </button>
     );
   }
@@ -982,23 +985,34 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
           </div>
         </header>
 
-        <div className="space-y-3 px-5 py-4">
-          {/* La que totaliza, primero: la respuesta antes que el detalle. */}
+        <div className="px-5 py-4">
+          {/* La que totaliza, primero y a lo ancho: la respuesta antes que el
+              detalle, y no compite por sitio con las de cada prestamo. */}
           <TarjetaTotales o={o} />
 
           {o.loans.length > 0 && (
-            <p className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-              One card per closing
+            <p className="px-1 pb-2 pt-4 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              One card per closing · {o.loans.length}
             </p>
           )}
-          {o.loans.map((l) => (
-            <TarjetaPrestamo
-              key={l.loan_number}
-              l={l}
-              abierta={!plegadas.has(l.loan_number)}
-              onToggle={() => alternar(l.loan_number)}
-            />
-          ))}
+          {/*
+            * ⚠ EN FILA HORIZONTAL CON SCROLL LATERAL, igual que las Mini P&L
+            * Cards del modal de prestamos. Apiladas en vertical, cada tarjeta
+            * tenia el alto de su contenido y comparar dos exigia recorrer la
+            * pagina; en fila y con el mismo alto, la misma cuenta cae en el
+            * mismo renglon de todas -- que es lo que el orden fijo de cuentas
+            * viene a permitir y apiladas no servia de nada.
+            */}
+          <div className="scrollbar-thin-slate -mx-1 flex max-w-full flex-row gap-4 overflow-x-auto px-1 pb-4">
+            {o.loans.map((l) => (
+              <TarjetaPrestamo
+                key={l.loan_number}
+                l={l}
+                abierta={!plegadas.has(l.loan_number)}
+                onToggle={() => alternar(l.loan_number)}
+              />
+            ))}
+          </div>
         </div>
       </aside>
 

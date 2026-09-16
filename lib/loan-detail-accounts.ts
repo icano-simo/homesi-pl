@@ -32,6 +32,75 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * EL ORDEN EN QUE SE LEEN LAS CUENTAS DE UN PRESTAMO, SIEMPRE EL MISMO
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ⚠ FIJO Y NO POR IMPORTE, y esa es toda la razon de que exista. Ordenadas por
+ * importe, cada prestamo saca las cuentas en un sitio distinto: dos tarjetas
+ * una al lado de otra no se pueden leer en horizontal, y comparar exige
+ * buscar la misma linea en dos alturas distintas. Con el orden fijo, "Back-end
+ * Margin" esta siempre en el mismo renglon de todas las tarjetas.
+ *
+ * ⚠ LA LISTA MEZCLA LOS DOS NIVELES DEL DATO A PROPOSITO, Y HAY QUE SABERLO
+ * ANTES DE TOCARLA. Cuatro de sus nombres son `category_7` y dos son `gl_name`:
+ *
+ *     Back-end Margin              category_7 de 41306, cuyo gl_name es
+ *                                  "BM Margin" -- el nombre contable, no el del
+ *                                  negocio
+ *     Front-end Margin             category_7 de 41305, gl_name "LO Margin",
+ *                                  que ademas es enganoso: 41305 NO es
+ *                                  compensacion del loan officer
+ *     Discount Income              coinciden los dos
+ *     Brokered Origination Income  coinciden los dos
+ *
+ *     Lender Credits               gl_name de 41225. Su category_7 es
+ *                                  "Fee Income, Net"
+ *     Other HUD Fees, Net          gl_name de 41205. Su category_7 TAMBIEN es
+ *                                  "Fee Income, Net"
+ *
+ * O sea que "usa category_7 y no gl_name" NO se puede aplicar a ciegas: las dos
+ * ultimas colapsarian en una sola linea llamada "Fee Income, Net" -- junto con
+ * Cures (41215), que es la tercera cuenta de ese mismo concepto-- y entonces el
+ * orden que se pide entre ellas no se podria ni expresar.
+ *
+ * Por eso `conceptLabel()` de abajo busca PRIMERO el gl_name y luego el
+ * category_7, y ordena por lo que encuentre. Asi los dos niveles conviven y
+ * cada cuenta sale con el nombre por el que se la conoce.
+ *
+ * Una cuenta que no aparece en la lista va detras, y entre ellas por importe.
+ * Una que no existe en el prestamo simplemente no sale: no se pinta el hueco.
+ */
+export const CONCEPT_ORDER: readonly string[] = [
+  "Back-end Margin",
+  "Front-end Margin",
+  "Discount Income",
+  "Lender Credits",
+  "Brokered Origination Income",
+  "Other HUD Fees, Net",
+  "DM Margin",
+  "RM Margin",
+  "Processing Income",
+];
+
+/**
+ * El nombre con el que se enseña y se ordena una linea.
+ *
+ * El gl_name manda cuando esta en la lista --"Lender Credits"-- y si no, el
+ * category_7 --"Back-end Margin" en vez de "BM Margin"--. Fuera de la lista
+ * gana el gl_name, que es el especifico: para 41215 eso es "Cures" y no
+ * "Fee Income, Net", que es el cajon de tres cuentas donde cae.
+ */
+export function conceptLabel(
+  glName: string | null | undefined,
+  category7: string | null | undefined,
+): string {
+  if (glName && CONCEPT_ORDER.includes(glName)) return glName;
+  if (category7 && CONCEPT_ORDER.includes(category7)) return category7;
+  return glName ?? category7 ?? "—";
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * TRES DEFINICIONES DE "MARGEN", LAS TRES CORRECTAS
  * ═══════════════════════════════════════════════════════════════════════════
  *
