@@ -403,8 +403,19 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
   const fragilTotal = fragiles.reduce((s, r) => s + r.amount, 0);
 
   return (
-    <div className="flex h-full max-h-full flex-col rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <dl className="min-h-0 flex-1 space-y-0.5 overflow-y-auto text-[11px]">
+    /*
+     * ⚠ NI h-full NI flex-1 NI overflow AQUI, y es la SEGUNDA vez que el hueco
+     * blanco se mueve en vez de desaparecer. Estos eran restos de cuando la
+     * nomina vivia en una caja de alto fijo con su propio scroll: al quitarle
+     * la caja, el  estiraba el bloque al alto que la fila le daba a la
+     * tarjeta, y el  de la lista se comia el sobrante -- medio panel en
+     * blanco entre las tres cuentas y su total.
+     *
+     * NINGUN hijo de la tarjeta se estira. El unico que puede es el separador
+     * del final, que existe justo para que el sobrante caiga ahi.
+     */
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <dl className="space-y-0.5 text-[11px]">
         {[...porCuenta.entries()].sort((a, b) => a[1].total - b[1].total).map(([gl, v]) => (
           <div key={gl} className="flex items-baseline gap-2">
             {/* Sangrados: se leen como los sumandos del total de abajo. */}
@@ -418,8 +429,9 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
         ))}
       </dl>
 
-      {/* shrink-0: el total no entra en el scroll. Ver la nota del panel. */}
-      <div className="mt-2 flex shrink-0 items-baseline justify-between gap-2 border-t border-slate-200 pt-2">
+      {/* El total, al final y con linea encima: se lee como la suma de las de
+          arriba y no como una cuarta cifra suelta. */}
+      <div className="mt-2 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-2">
         <span className="text-[11px] font-semibold text-gray-700">Total payroll cost</span>
         <span className="font-mono tabular-nums text-xs font-bold text-rose-600">{usdExacto(total)}</span>
       </div>
@@ -430,7 +442,7 @@ function BloqueNomina({ rows, fragiles }: { rows: PayrollRow[]; fragiles: Payrol
          * "no payroll located", y eso seria FALSO -- y falso de la peor manera,
          * porque se leeria como un hallazgo.
          */
-        <p className="mt-2 shrink-0 text-[10px] leading-snug text-slate-500">
+        <p className="mt-2 text-[10px] leading-snug text-slate-500">
           {fragiles.length} more row{fragiles.length !== 1 ? "s" : ""} worth {usdExacto(fragilTotal)}{" "}
           matched with low confidence and are <span className="font-medium">not</span> in this total.
         </p>
@@ -837,6 +849,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
 
   return (
     <LoanPnlCard
+      esTotal
       title={`ALL ${o.loanCount} CLOSING${o.loanCount === 1 ? "" : "S"}`}
       tag={o.branch}
       subtitle={o.name}

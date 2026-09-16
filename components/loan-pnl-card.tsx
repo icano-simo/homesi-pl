@@ -113,6 +113,15 @@ export interface TarjetaPrestamoProps {
    * poder señalar cifras, eso es lo contrario de lo que se espera.
    */
   onCollapse?: () => void;
+  /**
+   * La tarjeta que SUMA, no una de la fila.
+   *
+   * ⚠ SE DISTINGUE A LA VISTA, no solo por el titulo. Es la primera de una fila
+   * de sesenta y cinco iguales, y leida al vuelo parecia una mas: un borde y
+   * una sombra distintos evitan tener que leer la cabecera para saber cual
+   * responde por el conjunto.
+   */
+  esTotal?: boolean;
 }
 
 const usdExacto = (n: number) =>
@@ -253,7 +262,11 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
      * El ancho SI es fijo: es una fila de tarjetas y el scroll horizontal es su
      * forma.
      */
-    <div className="flex w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs transition-all hover:border-[#A6DEFF]">
+    <div className={`flex w-[340px] shrink-0 flex-col overflow-hidden rounded-2xl transition-all ${
+      p.esTotal
+        ? "border-2 border-[#001A40] bg-white shadow-lg ring-4 ring-[#001A40]/10"
+        : "border border-slate-200/90 bg-white shadow-xs hover:border-[#A6DEFF]"
+    }`}>
       {/*
         * ⚠ SIN flex-1 AQUI. Lo tenia, y como la fila estira todas las tarjetas
         * al alto de la mas alta, ese flex-1 se comia el sobrante y CLAVABA el
@@ -265,7 +278,9 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         */}
       <div className="flex flex-col">
         {/* ── La ficha del prestamo ─────────────────────────────────────── */}
-        <div className="flex shrink-0 flex-col gap-1 border-b border-slate-200 bg-slate-100/90 p-3.5 text-xs font-bold text-[#001A40]">
+        <div className={`flex shrink-0 flex-col gap-1 border-b p-3.5 text-xs font-bold ${
+          p.esTotal ? "border-[#001A40]/20 bg-[#001A40] text-white" : "border-slate-200 bg-slate-100/90 text-[#001A40]"
+        }`}>
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1">
               {p.onCollapse && (
@@ -411,10 +426,37 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
         </span>
       </div>
 
-      {/* Fuera de la cuenta: debajo del total, en gris y sobre otro fondo. */}
-      {hayFuera && (
-        <div className="shrink-0 border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
+      {/*
+        * ── El orden de lo que va detras del total ───────────────────────────
+        *
+        * ⚠ NO ES EL MISMO EN LAS DOS TARJETAS, y se deriva de `extra` en vez de
+        * pedirlo por prop: quien tiene nomina es la tarjeta que totaliza, y es
+        * la unica donde el orden cambia.
+        *
+        *   tarjeta de PRESTAMO   total -> 700            (no hay nomina)
+        *   tarjeta de TOTALES    total -> nomina -> 700
+        *
+        * La 700 va al FINAL en la de totales porque es lo unico que no es del
+        * loan officer: metida entre el total y su nomina quedaba en medio de lo
+        * suyo. En las de prestamo no hay nada detras que separarla, asi que se
+        * queda pegada al total.
+        */}
+      {p.extra && (
+        /*
+         * ⚠ LO QUE NO ENTRA EN EL TOTAL. Estuvo ANTES del banner y con el mismo
+         * estilo de bloque que los peldaños, y asi la tarjeta se leia como si
+         * el total fuera revenue menos costes menos comision MENOS NOMINA. No
+         * lo es: la nomina es el sueldo de la persona, no cuelga de ningun
+         * prestamo, y la comision se paga A TRAVES de ella -- restar las dos
+         * contaria dos veces el mismo dinero.
+         */
+        <div className="border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
+          {p.extra}
+        </div>
+      )}
 
+      {hayFuera && (
+        <div className="border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
           {p.elsewhere!.map((s) => s.lineas.length === 0 ? null : (
             <Fragment key={s.label}>
               <div className="mt-1 flex items-center justify-between text-[10px] font-semibold text-slate-600">
@@ -434,27 +476,11 @@ export function LoanPnlCard(p: TarjetaPrestamoProps) {
       )}
 
       {/*
-        * ── Lo que NO entra en el total, detras del banner ──────────────────
-        *
-        * ⚠ ESTABA ANTES DEL BANNER Y CON EL MISMO ESTILO DE BLOQUE QUE LOS
-        * PELDAÑOS, y asi la tarjeta se leia como si el total fuera revenue
-        * menos costes menos comision MENOS NOMINA. No lo es: la nomina es el
-        * sueldo de la persona, no cuelga de ningun prestamo, y ademas la
-        * comision se paga A TRAVES de ella -- restar las dos contaria el mismo
-        * dinero dos veces.
-        *
-        * Va donde la seccion de la 700, detras del total y sobre otro fondo,
-        * porque es lo mismo: contexto que no participa en la resta.
-        */}
-      {p.extra && (
-        <div className="shrink-0 border-t-2 border-slate-300 bg-slate-100 px-3 py-2">
-          {p.extra}
-        </div>
-      )}
-
-      {/*
-        * El sobrante de estirar la tarjeta al alto de la fila cae AQUI, debajo
-        * de todo. Antes lo absorbia el cuerpo y empujaba el banner al fondo.
+        * ⚠ EL UNICO QUE PUEDE ESTIRARSE DE TODA LA TARJETA. El sobrante de
+        * igualar el alto de la fila cae aqui, debajo de todo. Cualquier flex-1,
+        * h-full o justify-between en un hijo de arriba se lo queda antes y el
+        * hueco reaparece en medio -- ha pasado dos veces: primero empujando el
+        * banner al fondo, luego dentro del bloque de nomina.
         */}
       <div className="flex-1 rounded-b-2xl bg-slate-100" />
     </div>
