@@ -733,20 +733,61 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
    *
    * Sumando los 64 prestamos de Nathan Martinez serian 840 filas, y ninguna
    * diria nada. Lo que se pregunta en esta tarjeta es otra cosa --cuanto pesa
-   * cada cuenta en el total-- y para eso la suma es la respuesta. Agrupadas son
-   * 21 lineas en el peor caso, que es lo que hace que quepa sin scroll.
+   * cada cuenta en el total-- y para eso la suma es la respuesta.
+   *
+   * ─────────────────────────────────────────────────────────────────────────
+   * ⚠ Y EL CUERPO AGRUPA SOLO POR CUENTA, SIN LA SUCURSAL. El de fuera SI la
+   *   conserva. No es un descuido: son dos preguntas distintas otra vez.
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Dentro de UN prestamo la sucursal de la linea dice algo --distingue el
+   * traslado a la 700--. Sumando trece prestamos de siete sucursales no dice
+   * nada: "41205 @733" y "41205 @747" son la misma cuenta contada dos veces,
+   * porque cada prestamo aporta la suya.
+   *
+   * Y no era un detalle estetico. Medido:
+   *
+   *     officer             con sucursal   solo cuenta
+   *     Mason Fowler                  81            17
+   *     Brian Heibel                  75            17
+   *     Nathan Martinez               46            17
+   *     Stephanie Garcia              44            17
+   *
+   * Mason Fowler cierra solo 13 prestamos, pero en SIETE sucursales, y su
+   * tarjeta pasaba de 2.000px. Con `items-stretch` ese habria sido el alto de
+   * las trece tarjetas de su fila. Ningun loan officer pasa de 17 cuentas
+   * distintas, asi que todas las de totales quedan parecidas.
+   *
+   * ⚠ LO QUE SE LLEVO CORPORATIVO NO SE PIERDE: la seccion de la 700 sigue
+   * agrupando CON sucursal, que es justo donde esa informacion vive.
    */
-  const agrupadas = useMemo(() => {
-    const m = new Map<string, LoanLine>();
+  const { cuerpo, fuera700, fueraOtra } = useMemo(() => {
+    const dentro = new Map<string, LoanLine>();
+    const fuera = new Map<string, LoanLine>();
     for (const l of o.loans) {
       for (const x of l.lines) {
-        const k = `${x.gl_code}|${x.branch}|${x.category_6}|${x.in_branch}`;
-        const e = m.get(k);
-        if (e) e.amount += x.amount;
-        else m.set(k, { ...x, check_description: null });
+        if (x.in_branch) {
+          // Sin sucursal en la clave, y sin sucursal en la fila: enseñarla
+          // seria enseñar la del ultimo prestamo que sumo, que no significa
+          // nada.
+          const k = `${x.gl_code}|${x.category_6}`;
+          const e = dentro.get(k);
+          if (e) e.amount += x.amount;
+          else dentro.set(k, { ...x, branch: null, check_description: null });
+        } else {
+          const k = `${x.gl_code}|${x.branch}|${x.category_6}`;
+          const e = fuera.get(k);
+          if (e) e.amount += x.amount;
+          else fuera.set(k, { ...x, check_description: null });
+        }
       }
     }
-    return [...m.values()];
+    const f = [...fuera.values()];
+    return {
+      cuerpo: [...dentro.values()],
+      fuera700: f.filter((x) => x.branch === "700"),
+      fueraOtra: f.filter((x) => x.branch !== "700"),
+    };
   }, [o.loans]);
 
   const nominaPos = -o.block2Total;
@@ -775,12 +816,12 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
           )}
         </>
       }
-      lineas={agrupadas.filter((x) => x.in_branch)}
+      lineas={cuerpo}
       commission={o.commission}
       total={{ label: "TOTAL CONTRIBUTION", value: o.contribution }}
       elsewhere={[
-        { label: "Kept by the division (700)", lineas: agrupadas.filter((x) => !x.in_branch && x.branch === "700") },
-        { label: "Booked in another branch", lineas: agrupadas.filter((x) => !x.in_branch && x.branch !== "700") },
+        { label: "Kept by the division (700)", lineas: fuera700 },
+        { label: "Booked in another branch", lineas: fueraOtra },
       ]}
       extra={
         <>
