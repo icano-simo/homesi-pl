@@ -250,8 +250,76 @@ export default function PLPage() {
     let out = rawTxs;
     if (months.length  > 0) out = out.filter(t => t.month   && months.includes(t.month));
     if (glCodes.length > 0) out = out.filter(t => t.gl_code && glCodes.includes(t.gl_code));
+
+    /*
+     * ═════════════════════════════════════════════════════════════════════
+     * LA COMISION DEL LO, COMO UNA FILA MAS DE LA TABLA
+     * ═════════════════════════════════════════════════════════════════════
+     *
+     * Estuvo en un cuadro aparte bajo la rejilla y estaba mal: dejaba DOS
+     * totales en la misma pantalla --el del libro y el de la linea de
+     * negocio-- y quien mirara el de arriba leia una cifra a la que le
+     * faltaba el coste del loan officer. Ahora entra en la tabla, suma en el
+     * total como las demas, y hay un solo total.
+     *
+     * ⚠ SOLO EN LA LENTE DE AFFINITY, Y NO ES UNA PREFERENCIA: EN LAS OTRAS
+     * DOS CONTARIA EL MISMO DINERO DOS VECES. Medido ejecutando las rutas:
+     *
+     *     lente       60105 en la rejilla   de eso, comision   ¿duplica?
+     *     Affinity          0 filas                 --          NO
+     *     716 puro       -291.803,96         -269.790,66        SI
+     *     ambas          -291.803,96         -269.790,66        SI
+     *
+     * La nomina del loan officer ES la cuenta 60105, y en "716 puro" y en
+     * "ambas" ya esta en la tabla con su comision dentro. Solo la lente de
+     * Affinity se queda sin ella --sus filas de nomina no existen, porque la
+     * nomina se queda entera en la 716-- y ahi la comision es la UNICA forma
+     * de ver lo que costo el loan officer de esos prestamos.
+     *
+     * ⚠ Y NO SE PUEDE RESTAR DE LA 716 PARA COMPENSAR. Restarla exigiria
+     * partir las 130 filas de 60105 por prestamo, y NINGUNA tiene
+     * loan_number: la misma limitacion del dato que documenta
+     * lib/payroll-breakdown.ts.
+     *
+     * ⚠ ESTO CAMBIA EL TOTAL DE LA PANTALLA con esa lente, a proposito: de
+     * 117.879,28 a 97.015,49. El total pasa a incluir una cifra que NO esta
+     * en la contabilidad, y por eso la fila lleva su origen en la
+     * descripcion: quien intente cuadrar la pantalla contra el libro tiene
+     * que poder ver cual es.
+     */
+    const c = loanMetrics.data?.commission;
+    if (lente === "affinity" && c && c.total !== 0) {
+      const base = rawTxs[0];
+      const sintetica = Object.entries(c.by_month ?? {})
+        .filter(([, v]) => v !== 0)
+        .map(([mes, v], i) => ({
+          ...base,
+          id: `compensafe-commission-${mes}-${i}`,
+          month: mes,
+          branch: AFFINITY_HOST_BRANCH,
+          // Sin gl_code: no es una cuenta del libro, y el hueco es la señal.
+          gl_code: null,
+          gl_name: "LO commission · Compensafe",
+          // En el grupo de 60105, que es donde alguien la busca.
+          category_2: "Operating Income (Loss) Before BM Payroll",
+          category_6: "Production Compensation",
+          category_7: "Loan Officer Payroll",
+          check_description:
+            "Loan officer commission on Affinity loans — from Compensafe, not from the general ledger",
+          vendor: null,
+          ref_numb: null,
+          loan_number: null,
+          debit: 0,
+          credit: 0,
+          movement: -v,
+          cost_center_id: null,
+          cost_center_status: null,
+        })) as unknown as PLReportTx[];
+      if (base) out = [...out, ...sintetica];
+    }
+
     return out;
-  }, [rawTxs, months, glCodes]);
+  }, [rawTxs, months, glCodes, lente, loanMetrics.data]);
 
   const splitsMap = useMemo(() => buildSplitsMap(allSplits), [allSplits]);
 
@@ -715,74 +783,6 @@ export default function PLPage() {
         />
       )}
 
-      {/*
-        * ═══════════════════════════════════════════════════════════════════
-        * EL CIERRE DE LA LENTE: DEBAJO DE LA REJILLA Y FUERA DE ELLA
-        * ═══════════════════════════════════════════════════════════════════
-        *
-        * ⚠ AQUI, Y NO ARRIBA CON LOS CHIPS DEL FILTRO. Estuvo arriba y el
-        * usuario no lo encontro: buscaba el cierre de la linea de negocio
-        * DEBAJO de las cuentas, que es donde se lee un total. Un dato correcto
-        * en el sitio equivocado es un dato que no existe.
-        *
-        * ⚠ Y FUERA DE LA TABLA, NO COMO UNA FILA MAS. La comision no tiene
-        * gl_code y no cuadra contra el libro mayor: metida entre las cuentas,
-        * la rejilla dejaria de ser el libro y quien la cuadrase contra
-        * contabilidad encontraria una fila que alli no existe. Separada por una
-        * linea y con su origen dicho -- el mismo patron que
-        * "Distributed to division (700)" en las tarjetas del modulo por LO.
-        *
-        * ⚠ SALE EN LAS TRES LENTES, incluida "ambas", donde es la suma de las
-        * dos: 20.863,79 + 220.461,55 = 241.325,34 en 95 prestamos. Se decidio
-        * asi en vez de ocultarla porque un bloque que aparece y desaparece
-        * segun la lente es exactamente lo que hizo que no se encontrara.
-        */}
-      {loaded && hayLente && loanMetrics.data?.commission && (
-        <div className="mt-3 flex justify-end">
-          <div className="w-full max-w-md rounded-lg border border-[#A6DEFF] bg-white px-4 py-3 text-sm">
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="text-slate-500">Total (general ledger)</span>
-              <span className="font-mono tabular-nums text-[#001A40]">
-                {txs.reduce((s, t) => s + Number(t.movement ?? 0), 0)
-                  .toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-
-            <div className="mt-1.5 flex items-baseline justify-between gap-3 border-t border-dashed border-slate-300 pt-1.5">
-              <span className="text-slate-500">
-                LO commission
-                <span className="ml-1 text-xs text-slate-400" title="From Compensafe — not a P&L account, so it is not in the grid above.">
-                  (Compensafe)
-                </span>
-                {loanMetrics.data.commission.sin_comision > 0 && (
-                  <span
-                    className="ml-1 text-xs text-[#FF4040]"
-                    title={`${loanMetrics.data.commission.sin_comision} of these loans have no commission row in Compensafe. Unknown, not zero — so this figure is short by an unknown amount.`}
-                  >
-                    · {loanMetrics.data.commission.sin_comision} unknown
-                  </span>
-                )}
-              </span>
-              <span className="font-mono tabular-nums text-[#001A40]">
-                {(-loanMetrics.data.commission.total)
-                  .toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-
-            <div className="mt-1.5 flex items-baseline justify-between gap-3 border-t border-[#001A40] pt-1.5">
-              <span className="font-semibold text-[#001A40]">
-                {lente === "affinity" ? "Affinity business line"
-                  : lente === "716" ? "716 without Affinity"
-                  : "716 + Affinity"}
-              </span>
-              <span className="font-mono tabular-nums font-bold text-[#001A40]">
-                {(txs.reduce((s, t) => s + Number(t.movement ?? 0), 0) - loanMetrics.data.commission.total)
-                  .toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
 
         <CellDetailModal
           cell={panel?.kind === "cell" ? panel.ref : null}

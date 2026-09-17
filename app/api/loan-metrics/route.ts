@@ -201,7 +201,8 @@ async function fetchOfficials(
  * proposito, y el bloque lo dice.
  */
 async function comisionDe(loanNumbers: string[]) {
-  if (loanNumbers.length === 0) return { total: 0, loans: 0, sin_comision: 0 };
+  if (loanNumbers.length === 0)
+    return { total: 0, loans: 0, sin_comision: 0, porPrestamo: new Map<string, number>() };
   const comp = createServerClient("comp");
   const encontradas = new Map<string, number>();
   for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
@@ -212,7 +213,7 @@ async function comisionDe(loanNumbers: string[]) {
       .in("loan_number", trozo);
     // Que Compensafe falle no puede tumbar el panel: sin ella la comision es
     // desconocida para TODOS, que es lo que la pantalla ya sabe decir.
-    if (error) return { total: 0, loans: 0, sin_comision: loanNumbers.length };
+    if (error) return { total: 0, loans: 0, sin_comision: loanNumbers.length, porPrestamo: new Map<string, number>() };
     for (const r of data ?? []) {
       if (r.lo_pay != null) encontradas.set(String(r.loan_number), Number(r.lo_pay));
     }
@@ -223,6 +224,7 @@ async function comisionDe(loanNumbers: string[]) {
     total,
     loans: encontradas.size,
     sin_comision: loanNumbers.length - encontradas.size,
+    porPrestamo: encontradas,
   };
 }
 
@@ -438,9 +440,29 @@ export async function GET(req: NextRequest) {
          * mismo que dice la nota de arriba: tres filtros escritos aparte son
          * tres sitios donde pueden dejar de coincidir.
          */
-        commission: await comisionDe(
-          rows.filter((o) => inScope(o.branch!)).map((o) => o.loan_number),
-        ),
+        commission: await (async () => {
+          const enAlcance = rows.filter((o) => inScope(o.branch!));
+          const c = await comisionDe(enAlcance.map((o) => o.loan_number));
+          /*
+           * ⚠ POR MES DE CIERRE DEL PRESTAMO, no de pago. Compensafe agrupa por
+           * fecha de cierre --esta medido en PRODUCTION_PAY_GL_CODES-- y la
+           * rejilla enseña meses: poner la comision en el mes de pago la
+           * separaria del revenue del mismo prestamo, que es lo unico contra lo
+           * que tiene sentido leerla.
+           */
+          const by_month: Record<string, number> = {};
+          for (const o of enAlcance) {
+            const v = c.porPrestamo.get(o.loan_number);
+            if (v == null || !o.month) continue;
+            by_month[o.month] = (by_month[o.month] ?? 0) + v;
+          }
+          return {
+            total: c.total,
+            loans: c.loans,
+            sin_comision: c.sin_comision,
+            by_month,
+          };
+        })(),
         /*
          * El desglose de 60105, solo donde reconcilia. La lista de sucursales y
          * el porque --y sobre todo el porque NO en las otras once-- viven en

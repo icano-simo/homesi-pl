@@ -39,7 +39,7 @@ export interface LoanMetricsData {
    * prestamos sin comision. Quien enseñe `total` sin ese contador esta
    * afirmando que esos costaron cero.
    */
-  commission?: { total: number; loans: number; sin_comision: number };
+  commission?: { total: number; loans: number; sin_comision: number; by_month?: Record<string, number> };
   /**
    * El desglose de 60105 segun Compensafe, o null donde no reconcilia.
    *
