@@ -15,6 +15,7 @@ import { buildSplitsMap } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
 import { hierarchyLabel, hierarchyLevels, SHAPE_LABELS, type HierarchyShape } from "@/lib/pl-hierarchies";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
+import { AFFINITY_HOST_BRANCH, type AffinityLens } from "@/lib/loan-branch";
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
 import { defaultScopeLabel, isPivotScope, reportBaseScope, scopeContains } from "@/lib/note-scope";
@@ -130,8 +131,35 @@ export default function PLPage() {
   const [loadedBranches, setLoadedBranches] = useState<string[]>([]);
   const [loadedSources,  setLoadedSources]  = useState<string[]>([]);
 
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * LA LENTE DE AFFINITY: SE ELIGE UNA VEZ Y VALE PARA TODA LA PANTALLA
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * ⚠ VIVE AQUI Y NO DENTRO DE CADA MODULO, y ese es todo el diseño. Un primer
+   * intento la puso dentro del P&L por Loan Officer, y entonces la rejilla, el
+   * loan count y las tarjetas seguian enseñando la 716 entera mientras el
+   * modulo enseñaba una mitad: dos respuestas distintas en la misma pantalla,
+   * sin nada que dijera cual era cual.
+   *
+   * ⚠ Y SU ESTADO TIENE QUE ENTRAR EN LAS CUATRO PETICIONES. Es la trampa que
+   * ya se pago una vez: en aquel intento el selector se pintaba, se marcaba, y
+   * no hacia NADA, porque `lente` no estaba en las dependencias del fetch. Las
+   * cuatro llamadas la llevan, y las cuatro se comprobaron cambiando de lente:
+   *
+   *     /api/pl-all        `lens` en la URL, y `lente` en el efecto de recarga
+   *     /api/loan-metrics  `lens` en la URL, y `lente` en la CLAVE del hook
+   *     /api/loan-detail   `lens` en la URL, y `lente` en la clave del drawer
+   *     /api/lo-pnl        `lens` en la URL, y `lente` en el useCallback
+   *
+   * ⚠ SOLO SE OFRECE CON LA 716 SOLA. Con varias sucursales, dos de las tres
+   * lentes darian lo mismo que la tercera en todo menos en una, y un control
+   * que casi nunca cambia nada invita a pulsarlo y a desconfiar de el.
+   */
+  const [lente, setLente] = useState<AffinityLens>("ambas");
+
   // Same panel as P&L All, same hook, same filters the table is showing.
-  const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources);
+  const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources, undefined, lente);
 
   const [panel, setPanel] = useState<Panel>(null);
 
@@ -156,6 +184,7 @@ export default function PLPage() {
       yrs.forEach(y => p.append("year", y));
       effectiveBranches.forEach(b => p.append("branch", b));
       srcs.forEach(s => p.append("source", s));
+      if (lente !== "ambas") p.append("lens", lente);
       const res = await fetch(`/api/pl-all?${p}`);
       if (!res.ok) { const j = await res.json(); setError(j.error ?? "Error"); return; }
       setRawTxs(await res.json());
@@ -275,6 +304,32 @@ export default function PLPage() {
     () => (loadedBranches.length === 1 ? loadedBranches[0] : null),
     [loadedBranches],
   );
+
+  /** La lente solo significa algo en la sucursal que se parte en dos. */
+  const hayLente = scopeBranch === AFFINITY_HOST_BRANCH;
+
+  /*
+   * ⚠ AL SALIR DE LA 716 SE VUELVE A "ambas". Quedarse en la lente de Affinity
+   * al cargar otra sucursal enseñaria sus cifras enteras bajo un rotulo que ya
+   * no sale en pantalla, porque el selector desaparece con ella.
+   */
+  useEffect(() => {
+    if (!hayLente && lente !== "ambas") setLente("ambas");
+  }, [hayLente, lente]);
+
+  /*
+   * La rejilla se recarga al cambiar de lente. `fetchData` ya lleva `lens` en
+   * la URL; esto es lo que hace que se vuelva a llamar -- sin ello el selector
+   * cambiaria el loan count y las tarjetas, y dejaria la rejilla como estaba.
+   */
+  const lenteCargada = useRef<AffinityLens>("ambas");
+  useEffect(() => {
+    if (!loaded) { lenteCargada.current = lente; return; }
+    if (lenteCargada.current === lente) return;
+    lenteCargada.current = lente;
+    void fetchData(loadedYears, loadedBranches, loadedSources);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lente, loaded]);
 
   /**
    * The one cost centre the report is scoped to, or null.
@@ -426,6 +481,65 @@ export default function PLPage() {
             {loadedChips.map((chip) => (
               <FilterChip key={chip.label} label={chip.label} value={chip.value} />
             ))}
+
+            {/*
+              * ⚠ EL SELECTOR VA JUNTO A LOS CHIPS DEL FILTRO, no junto a la
+              * rejilla: acota TODA la pantalla igual que ellos, y ponerlo sobre
+              * una de las cuatro cosas que cambia haria pensar que solo cambia
+              * esa.
+              */}
+            {hayLente && (
+              <span className="ml-2 inline-flex overflow-hidden rounded-full border border-violet-300 text-xs">
+                {([
+                  { v: "ambas", t: "716 + Affinity" },
+                  { v: "716", t: "716 only" },
+                  { v: "affinity", t: "Affinity" },
+                ] as const).map((b, i) => (
+                  <button
+                    key={b.v}
+                    onClick={() => setLente(b.v)}
+                    className={`${i > 0 ? "border-l border-violet-200 " : ""}px-3 py-1 font-medium ${
+                      lente === b.v ? "bg-violet-600 text-white" : "bg-white text-violet-900 hover:bg-violet-50"
+                    }`}
+                  >
+                    {b.t}
+                  </button>
+                ))}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/*
+          * ⚠ EL ROTULO NO DICE "P&L de Affinity", Y ESO ES LO QUE EVITA LA
+          * LECTURA FALSA. Affinity es una LINEA DE NEGOCIO, no una sucursal con
+          * estructura: lleva el revenue de sus prestamos, sus costes directos y
+          * la nomina de sus account executives, y NADA MAS. El alquiler, el
+          * marketing y el resto de la nomina se quedan enteros en la 716 --no se
+          * prorratea nada-- asi que su resultado no es "lo que gana Affinity":
+          * es lo que deja antes de lo que cuesta sostenerla.
+          *
+          * Escrito en el bloque y no en un tooltip, porque quien lea la cifra
+          * sin esto va a leer una rentabilidad que no existe.
+          */}
+        {loaded && hayLente && lente !== "ambas" && (
+          <div className="mt-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-[11px] leading-relaxed text-violet-900">
+            {lente === "affinity" ? (
+              <>
+                <span className="font-semibold">Affinity — business line, not a branch.</span>{" "}
+                Revenue and direct costs of its loans, plus the payroll of its account executives.
+                <span className="font-medium"> Nothing is prorated:</span> rent, marketing and the
+                rest of 716&rsquo;s payroll stay whole on 716, so this is what the line leaves
+                <span className="italic"> before</span> what it costs to sustain it.
+              </>
+            ) : (
+              <>
+                <span className="font-semibold">716 without Affinity.</span>{" "}
+                Its own loans, and <span className="font-medium">the general costs in full</span> —
+                rent, marketing and all payroll except the account executives. Nothing was moved out
+                except what Affinity could be identified by.
+              </>
+            )}
           </div>
         )}
       </div>
@@ -630,6 +744,7 @@ export default function PLPage() {
           year={loadedYears.length === 1 ? Number(loadedYears[0]) : null}
           branches={loadedBranches}
           sources={loadedSources}
+          lente={lente}
           onClose={() => setPanel(null)}
         />
     </div>

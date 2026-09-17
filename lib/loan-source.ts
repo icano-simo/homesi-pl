@@ -485,3 +485,46 @@ export async function getClosedLoans(opts: {
     };
   });
 }
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * QUE PRESTAMOS SON DE AFFINITY — el conjunto, para clasificar filas del P&L
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * ⚠ SIN FILTRAR POR `is_closed`, Y ESO ES EL PUNTO. `getClosedLoans` solo trae
+ * cierres, y clasificar filas del P&L con esa lista dejaria en 716 puro los
+ * CUATRO prestamos Affinity abiertos que ya tienen coste contabilizado
+ * --910,00 · 200,00 · 155,88 · 77,94, en negativo, -1.343,82 en total-- y los
+ * movería a Affinity el dia que cerraran, sin que nada avisara.
+ *
+ * La bandera dice de quien es el prestamo. El estado de cierre dice si cuenta
+ * como cierre. Son dos preguntas y esta funcion contesta la primera.
+ *
+ * ⚠ Y NO SE FILTRA POR SUCURSAL A PROPOSITO. Quien clasifica una fila ya sabe
+ * en que sucursal esta --`filaEsDeAffinity` exige la 716-- y pedir aqui
+ * `branch = '716'` ademas dejaria fuera un prestamo Affinity cuya ficha
+ * dijera otra sucursal, que es exactamente el caso que la bandera existe para
+ * resolver.
+ *
+ * Devuelve un Set porque se consulta una vez por fila: sobre las 2.207 de la
+ * 716 eso son 2.207 busquedas, y una lista seria cuadratica sin que se notara
+ * hasta que alguien abriera un año entero.
+ */
+export async function getAffinityLoanNumbers(): Promise<Set<string>> {
+  const ar = createServerClient("activity_report");
+  const out = new Set<string>();
+  for (let i = 0; ; i += 1000) {
+    const { data, error } = await ar
+      .from("loan_records_v2")
+      .select("loan_number")
+      .eq("is_affinity", true)
+      .range(i, i + 999);
+    if (error) throw new Error(error.message);
+    for (const r of data ?? []) {
+      const ln = (r.loan_number as string | null)?.trim();
+      if (ln) out.add(ln);
+    }
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}

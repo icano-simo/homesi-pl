@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { X, ArrowUpDown, LayoutGrid, Rows3, UserCircle } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { LoPnlView } from "@/components/lo-pnl-view";
+import type { AffinityLens } from "@/lib/loan-branch";
 import { LoanPnlCard } from "@/components/loan-pnl-card";
 import {
   ALL_MARGIN_ACCOUNTS,
@@ -92,6 +93,8 @@ interface Props {
   /** Null when the report spans several years — see the notice in the body. */
   year: number | null;
   branches: string[];
+  /** La lente de Affinity, elegida en la pantalla del P&L. */
+  lente?: AffinityLens;
   sources: string[];
   onClose: () => void;
 }
@@ -153,7 +156,7 @@ function signHint(v: number): string {
   return v > 0 ? "Adds to the net" : "Takes from the net";
 }
 
-export function LoanDetailDrawer({ open, month, year, branches, sources, onClose }: Props) {
+export function LoanDetailDrawer({ open, month, year, branches, sources, lente = "ambas", onClose }: Props) {
   const [data, setData]       = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
@@ -176,13 +179,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const key = `${month}|${year}|${branches.join(",")}|${sources.join(",")}`;
+  /* ⚠ LA LENTE VA EN LA CLAVE. Es la cuarta vez en esta pantalla que el mismo
+     olvido tiene el mismo sintoma: el control se marca y los datos no cambian. */
+  const key = `${month}|${year}|${branches.join(",")}|${sources.join(",")}|${lente}`;
 
   useEffect(() => {
     if (!open || !month || !year) return;
     const p = new URLSearchParams({ month, year: String(year) });
     branches.forEach((b) => p.append("branch", b));
     sources.forEach((s) => p.append("source", s));
+    if (lente !== "ambas") p.append("lens", lente);
 
     let cancelled = false;
     setLoading(true); setError("");

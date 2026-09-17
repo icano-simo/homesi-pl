@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { BpsBase, LoanMetricsData } from "@/components/loan-metrics-by-month";
+import type { AffinityLens } from "@/lib/loan-branch";
 import { BPS_BASE_LABELS } from "@/components/loan-metrics-by-month";
 
 /**
@@ -19,6 +20,8 @@ export function useLoanMetrics(
   branches: string[],
   sources: string[],
   costCenterIds?: string[],
+  /** La lente de Affinity. "ambas" es el comportamiento de siempre. */
+  lente: AffinityLens = "ambas",
 ) {
   const [data, setData]       = useState<LoanMetricsData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,12 +32,20 @@ export function useLoanMetrics(
   // Banked by default: it is the volume the division is actually paid on.
   const [bpsBase, setBpsBase] = useState<BpsBase>("banked");
 
-  const key = [years, branches, sources, costCenterIds ?? []].map((a) => a.join(",")).join("|");
+  /*
+   * ⚠ LA LENTE ENTRA EN LA CLAVE, Y ESTO YA FALLO UNA VEZ. En el primer intento
+   * de esta funcionalidad el selector de lente se pintaba y no hacia nada,
+   * porque su estado no estaba en las dependencias de la peticion: los botones
+   * se marcaban y los datos no se volvian a pedir. Aqui la clave ES la
+   * dependencia, asi que olvidarla tiene exactamente el mismo sintoma.
+   */
+  const key = [years, branches, sources, costCenterIds ?? [], [lente]].map((a) => a.join(",")).join("|");
 
   useEffect(() => {
     if (years.length === 0) { setData(null); return; }
 
     const p = new URLSearchParams({ group_by: "month" });
+    if (lente !== "ambas") p.append("lens", lente);
     years.forEach((y) => p.append("year", y));
     branches.forEach((b) => p.append("branch", b));
     sources.forEach((s) => p.append("source", s));

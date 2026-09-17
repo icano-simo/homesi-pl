@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "l
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
 import { LoanPnlCard, usdEntero } from "@/components/loan-pnl-card";
 import { PRODUCTION_PAY_GL_CODES, PRODUCTION_PAY_ACCOUNT_NAMES } from "@/lib/loan-detail-accounts";
+import type { AffinityLens } from "@/lib/loan-branch";
 import {
   EN_LA_COMPARACION,
   FUERA_DE_LA_COMPARACION,
@@ -1414,8 +1415,17 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
  *
  * @param branch  La sucursal del modal. Null en la pantalla propia.
  */
-export function LoPnlView({ branch = null, month: mesInicial = null, year: anioInicial = null }: {
+export function LoPnlView({ branch = null, month: mesInicial = null, year: anioInicial = null, lente = "ambas" }: {
   branch?: string | null;
+  /**
+   * La lente de Affinity, elegida en la pantalla del P&L y NO aqui.
+   *
+   * ⚠ ESTE COMPONENTE NO TIENE SELECTOR PROPIO, Y ES DELIBERADO. Lo tuvo, y el
+   * resultado fue que la rejilla y el loan count enseñaban la 716 entera
+   * mientras este modulo enseñaba una mitad: dos respuestas en la misma
+   * pantalla sin nada que dijera cual era cual. Se elige una vez, arriba.
+   */
+  lente?: AffinityLens;
   /** El mes desde el que se abrio el modal. Null en la pantalla suelta. */
   month?: string | null;
   year?: number | null;
@@ -1529,7 +1539,9 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
         : periodo.tipo === "ytd" ? `ytd=1&month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`
         : `month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`;
       // La sucursal acota los CIERRES, no la nomina: ver la nota en la ruta.
-      const q = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
+      const conSucursal = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
+      /* Sin el parametro la ruta se comporta como siempre. */
+      const q = lente === "ambas" ? conSucursal : `${conSucursal}&lens=${lente}`;
       const res = await fetch(`/api/lo-pnl?${q}`);
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
@@ -1539,7 +1551,10 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
     } finally {
       setLoading(false);
     }
-  }, [periodo, mesHeredado, anioHeredado, branch]);
+  /* ⚠ `lente` EN LAS DEPENDENCIAS. Sin ella el control de arriba se marca y
+     este modulo se queda con los datos de la lente anterior -- que es
+     exactamente el fallo que tuvo la primera version. */
+  }, [periodo, mesHeredado, anioHeredado, branch, lente]);
 
   useEffect(() => { cargar(); }, [cargar]);
 

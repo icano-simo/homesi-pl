@@ -206,6 +206,9 @@ const BRANCH_ALIASES: Record<string, string> = {
  * que el P&L por Loan Officer puede MIRAR las dos mitades por separado.
  */
 
+/** La sucursal que se parte en dos. Solo esta. */
+export const AFFINITY_HOST_BRANCH = "716";
+
 /** Las tres lentes del selector cuando la sucursal es la 716. */
 export type AffinityLens = "716" | "affinity" | "ambas";
 
@@ -246,8 +249,47 @@ export function esDeAffinity(isAffinity: boolean | null | undefined): boolean {
  * estaban, y la pantalla LO DICE en vez de dejarlos pasar como propios.
  */
 
-/** Si un cierre entra en la lente elegida. */
-export function entraEnLente(
+/**
+ * Si un PRESTAMO entra en la lente elegida.
+ *
+ * ⚠ LA GUARDA DE SUCURSAL NO ES OPCIONAL, y sin ella la funcion es un cepo.
+ * Un prestamo de la 747 no es de Affinity ni de "716 puro": no es de esta
+ * particion en absoluto. Sin la guarda, elegir "Affinity" lo dejaria fuera --y
+ * con el, a toda la division-- porque su bandera es false y false != affinity.
+ *
+ * La lente parte UNA sucursal en dos. Todo lo demas pasa en las tres.
+ */
+export function prestamoEntraEnLente(
+  branch: string | null | undefined,
+  isAffinity: boolean | null | undefined,
+  lente: AffinityLens,
+): boolean {
+  if (lente === "ambas") return true;
+  if (resolveLoanBranchAlias(branch) !== AFFINITY_HOST_BRANCH) return true;
+  return esDeAffinity(isAffinity) === (lente === "affinity");
+}
+
+/**
+ * Lo mismo, pero SIN la guarda de sucursal — para conjuntos que ya estan
+ * acotados a una PERSONA y no a una sucursal.
+ *
+ * ⚠ LAS DOS SON NECESARIAS Y ELEGIR LA OTRA PRODUCE UN DOBLE CONTEO SILENCIOSO.
+ * Se comprobo ejecutando, y por eso existe esta:
+ *
+ *   EN LA REJILLA, el conjunto son las filas de la 716. Una fila de la 747 no
+ *   es de Affinity ni de "716 puro": no es de esta particion, asi que pasa en
+ *   las tres lentes. Ahi va `prestamoEntraEnLente`.
+ *
+ *   EN EL P&L POR LOAN OFFICER, el conjunto son los cierres de UNA PERSONA, y
+ *   esa persona cierra donde cierra: el modulo enseña sus prestamos "cierren
+ *   donde cierren", a proposito. Con la guarda, sus cierres de la 741 pasaban
+ *   en las DOS lentes y las dos mitades dejaban de sumar: 65 + 55 = 120 sobre
+ *   un total de 103. Sin ella, 65 + 38 = 103.
+ *
+ * La diferencia no es de criterio sino de QUE es cada fila del conjunto. Una
+ * particion solo suma si cada elemento cae en exactamente un lado.
+ */
+export function cierreEntraEnLente(
   isAffinity: boolean | null | undefined,
   lente: AffinityLens,
 ): boolean {
@@ -299,6 +341,61 @@ export function esCosteAE(
   descripcion: string | null | undefined,
 ): boolean {
   return glCode === AE_GL_CODE && /^AE\s/i.test((descripcion ?? "").trim());
+}
+
+/** Lo minimo de una fila del P&L para saber de que lado cae. */
+export interface FilaClasificable {
+  branch: string | null;
+  loan_number: string | null;
+  gl_code: string | null;
+  check_description: string | null;
+}
+
+/**
+ * De que lado de la particion cae una fila del P&L.
+ *
+ * ⚠ SON DOS POBLACIONES CON DOS REGLAS, Y CONFUNDIRLAS ES EL ERROR FACIL:
+ *
+ *   POR PRESTAMO   la fila cuelga de un loan_number que lleva la bandera. Aqui
+ *                  entra el revenue y los costes directos de esos prestamos.
+ *   POR PATRON     la fila NO cuelga de ningun prestamo, pero se identifica por
+ *                  su descripcion: la nomina de los account executives.
+ *
+ * Todo lo demas se queda en la 716, ENTERO. Nada se prorratea: Affinity es una
+ * LINEA DE NEGOCIO, no una sucursal con estructura propia, asi que el alquiler,
+ * el marketing y la nomina que no sea AE no se reparten -- se quedan donde
+ * estan. Quien lea el resultado como "la rentabilidad de Affinity" tiene que
+ * saber que no incluye lo que cuesta sostenerla, y por eso el rotulo lo dice.
+ *
+ * ⚠ FUERA DE LA 716 NO HAY PARTICION. Una fila de otra sucursal nunca es de
+ * Affinity, aunque su prestamo lleve la bandera: la lente parte UNA sucursal en
+ * dos, no reclasifica la division entera.
+ */
+export function filaEsDeAffinity(
+  fila: FilaClasificable,
+  esPrestamoAffinity: (loanNumber: string) => boolean,
+): boolean {
+  if (fila.branch !== AFFINITY_HOST_BRANCH) return false;
+  if (esCosteAE(fila.gl_code, fila.check_description)) return true;
+  const ln = fila.loan_number?.trim();
+  return ln ? esPrestamoAffinity(ln) : false;
+}
+
+/**
+ * Si una fila del P&L entra en la lente elegida.
+ *
+ * ⚠ LAS FILAS DE OTRAS SUCURSALES ENTRAN SIEMPRE, en las tres lentes. La lente
+ * dice como partir la 716, no que esconder del resto: con un filtro de varias
+ * sucursales, elegir "Affinity" no puede vaciar la 747.
+ */
+export function filaEntraEnLente(
+  fila: FilaClasificable,
+  lente: AffinityLens,
+  esPrestamoAffinity: (loanNumber: string) => boolean,
+): boolean {
+  if (lente === "ambas") return true;
+  if (fila.branch !== AFFINITY_HOST_BRANCH) return true;
+  return filaEsDeAffinity(fila, esPrestamoAffinity) === (lente === "affinity");
 }
 
 /** The corporate branch: centralized costs, division-wide loan volume. */

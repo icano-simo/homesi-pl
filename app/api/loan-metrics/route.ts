@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import {
   normalizeLoanBranch,
+  prestamoEntraEnLente,
+  type AffinityLens,
   resolveBaseBranches,
   baseIsDivisionWide,
 } from "@/lib/loan-branch";
@@ -128,6 +130,16 @@ function accumulate(m: MonthMetrics, o: OfficialRow) {
 async function fetchOfficials(
   years: number[],
   loanNumbers: string[] | null,
+  /*
+   * ⚠ LA LENTE SE APLICA AQUI, SOBRE LOS CIERRES, y no sobre el resultado ya
+   * agregado: el loan count, el volumen y los bps salen todos de esta lista, y
+   * filtrar despues obligaria a filtrar tres veces y a acertar las tres.
+   *
+   * `prestamoEntraEnLente` lleva dentro la guarda de sucursal: un cierre de la
+   * 747 pasa en las tres lentes, porque la lente parte la 716 en dos y no
+   * reclasifica la division entera.
+   */
+  lente: AffinityLens = "ambas",
 ): Promise<OfficialRow[]> {
   if (loanNumbers !== null && loanNumbers.length === 0) return [];
 
@@ -139,6 +151,7 @@ async function fetchOfficials(
 
   return todos
     .filter((l) => (pedidos ? pedidos.has(l.loanNumber) : true))
+    .filter((l) => prestamoEntraEnLente(l.branch, l.isAffinity, lente))
     .map((l) => {
       // `closing_month` es un date; abajo se agrupa por nombre de mes y año.
       const [y, m] = (l.closingMonth ?? "").split("-");
@@ -195,6 +208,9 @@ async function fetchLoanNumbers(
 export async function GET(req: NextRequest) {
   const supabase = createServerClient();
   const sp = new URL(req.url).searchParams;
+  const lenteParam = sp.get("lens");
+  const lente: AffinityLens =
+    lenteParam === "affinity" || lenteParam === "716" ? lenteParam : "ambas";
 
   const years    = sp.getAll("year").map(Number).filter(Boolean);
   const branches = sp.getAll("branch");
@@ -214,7 +230,7 @@ export async function GET(req: NextRequest) {
         ? await fetchLoanNumbers(supabase, years, branches, sources, ccIds)
         : null;
 
-      const raw = await fetchOfficials(years, loanNumbers);
+      const raw = await fetchOfficials(years, loanNumbers, lente);
 
       // ONE row set. Everything below is an aggregate of `rows` — the count and
       // the amount for a month are accumulated from the same record in the same
@@ -288,7 +304,7 @@ export async function GET(req: NextRequest) {
     const loanNumbers = await fetchLoanNumbers(supabase, years, branches, sources, ccIds);
     if (loanNumbers.length === 0) return NextResponse.json(emptyMetrics());
 
-    const raw = await fetchOfficials([], loanNumbers);
+    const raw = await fetchOfficials([], loanNumbers, lente);
     const totals = emptyMetrics();
     for (const o of raw) {
       if (normalizeLoanBranch(o.branch) === null) continue;

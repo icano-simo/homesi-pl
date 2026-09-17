@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import type { PLReportTx } from "@/types";
+import { filaEntraEnLente, type AffinityLens } from "@/lib/loan-branch";
+import { getAffinityLoanNumbers } from "@/lib/loan-source";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +17,27 @@ export async function GET(req: NextRequest) {
   const years    = searchParams.getAll("year");
   const branches = searchParams.getAll("branch");
   const sources  = searchParams.getAll("source");
+
+  /*
+   * La lente de Affinity. Sin el parametro, "ambas": una peticion que no la
+   * menciona se comporta como siempre, asi que ninguna otra pantalla cambia.
+   *
+   * ⚠ LA PARTICION SE HACE AQUI Y NO EN EL CLIENTE. La rejilla se arma en la
+   * pagina a partir de estas filas, y clasificarlas alli obligaria a llevar al
+   * navegador el conjunto de prestamos de Affinity y a repetir la regla -- una
+   * segunda definicion de "que es de Affinity" separandose de esta sin que nada
+   * falle. La regla vive en lib/loan-branch.ts y solo se aplica aqui.
+   */
+  const lenteParam = searchParams.get("lens");
+  const lente: AffinityLens =
+    lenteParam === "affinity" || lenteParam === "716" ? lenteParam : "ambas";
+
+  /*
+   * Solo se paga la lectura cuando hace falta. Con la lente en "ambas" --el
+   * caso de siempre y el de todas las demas pantallas-- no se consulta nada.
+   */
+  const prestamosAffinity =
+    lente === "ambas" ? new Set<string>() : await getAffinityLoanNumbers();
 
   const supabase = createServerClient();
   const all: PLReportTx[] = [];
@@ -33,7 +56,28 @@ export async function GET(req: NextRequest) {
     const { data, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;
-    all.push(...(data as PLReportTx[]));
+    /*
+     * Se filtra por pagina y no al final: con un año entero de la division son
+     * decenas de miles de filas, y quedarse con las que no se van a enseñar
+     * solo para descartarlas despues es memoria que no hace falta.
+     */
+    const pagina = data as PLReportTx[];
+    all.push(
+      ...(lente === "ambas"
+        ? pagina
+        : pagina.filter((t) =>
+            filaEntraEnLente(
+              {
+                branch: t.branch ?? null,
+                loan_number: t.loan_number ?? null,
+                gl_code: t.gl_code ?? null,
+                check_description: t.check_description ?? null,
+              },
+              lente,
+              (ln) => prestamosAffinity.has(ln),
+            ),
+          )),
+    );
     if (data.length < 1000) break;
     offset += 1000;
   }
