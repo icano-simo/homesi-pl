@@ -163,27 +163,41 @@ export default function PLPage() {
    * ═══════════════════════════════════════════════════════════════════════
    *
    *     Affinity            97.015,49
-   *     716 puro          -168.176,90
-   *     suma               -71.161,41
+   *     716 puro          -147.813,11
+   *     suma               -50.797,62
    *     ambas              -50.297,62      <- el libro entero de la 716
-   *     diferencia         -20.863,79      <- la comision de Affinity
+   *     diferencia            -500,00      <- Gian Laino, sucursal 747
    *
-   * EL PORQUE, EN UNA LINEA: esos 20.863,79 se ven en las dos --como fila
-   * propia en Affinity y dentro de la cuenta 60105 en la 716-- porque el libro
-   * los contabiliza en la 716 y no se pueden separar de esa cuenta.
+   * EL PORQUE, EN UNA LINEA: lo que queda son los 500 de Gian Laino, que
+   * Affinity cuenta como coste de sus prestamos y la 716 nunca tuvo -- su
+   * comision esta en el 60105 de la SUCURSAL 747, porque el libro contabiliza
+   * donde esta la persona.
    *
-   * La nota va AQUI, donde se elige la lente, y no solo junto a la fila que lo
-   * provoca: quien cambia entre ellas es justo quien va a intentar sumarlas.
+   * La nota va AQUI, donde se elige la lente, y no solo junto a las filas que
+   * lo provocan: quien cambia entre ellas es justo quien va a intentar
+   * sumarlas.
    *
    * ⚠ Y "ambas" DA EL LIBRO ENTERO DE LA 716, -50.297,62, que es lo correcto:
-   * esa lente no añade la fila de comision porque la cuenta 60105 ya la lleva
+   * esa lente no añade ni quita nada, porque la cuenta 60105 ya lo lleva todo
    * dentro.
    *
-   * ⚠ ESTA PROPIEDAD CAMBIO, y por eso esta escrita en vez de supuesta. Antes
-   * de la fila de comision las tres SI sumaban --1.828 + 379 = 2.207 filas, e
-   * importes al centimo-- y eso se verifico y se anuncio. Dejo de valer al
-   * añadirla. Una propiedad verificada que nadie revisa cuando cambia el codigo
-   * se convierte en una nota falsa, que es peor que no haberla escrito.
+   * ⚠ ESTA PROPIEDAD HA CAMBIADO DOS VECES, y por eso se escribe con su
+   * historia en vez de como un hecho:
+   *
+   *   1. Al principio las tres SUMABAN al centimo --1.828 + 379 = 2.207 filas.
+   *   2. Al añadir la fila de comision en Affinity dejaron de sumar, por
+   *      20.863,79.
+   *   3. Al poder sacar de la 716 la comision de Affinity que su cuenta lleva
+   *      dentro --20.363,79, via comp.payroll_transaction-- el hueco bajo a
+   *      500,00.
+   *
+   * Los 500 que quedan no son un defecto ni se pueden cerrar desde aqui: son
+   * dinero contabilizado en una TERCERA sucursal. Cerrarlos exigiria que la
+   * lente de Affinity dejara fuera la comision de gente de otras sucursales, y
+   * eso cambiaria lo que la lente significa.
+   *
+   * Una propiedad verificada que nadie revisa cuando cambia el codigo se
+   * convierte en una nota falsa, que es peor que no haberla escrito.
    */
   const [lente, setLente] = useState<AffinityLens>("ambas");
 
@@ -372,6 +386,57 @@ export default function PLPage() {
           cost_center_status: null,
         })) as unknown as PLReportTx[];
       if (base) out = [...out, ...sintetica];
+    }
+
+    /*
+     * ═════════════════════════════════════════════════════════════════════
+     * Y EN "716 PURO", LA COMISION DE AFFINITY SALE DE LA CUENTA
+     * ═════════════════════════════════════════════════════════════════════
+     *
+     * Esto se dijo imposible y no lo era. Las 130 filas de 60105 del P&L no
+     * tienen `loan_number` --cierto, verificado-- asi que DESDE EL LIBRO no hay
+     * forma de saber cuales son de Affinity. Pero `comp.payroll_transaction` SI
+     * lo trae en sus lineas de comision, y esa es la tabla de la que ya sale el
+     * desglose de la cuenta: el reparto no se inventa, se lee de la fuente que
+     * la explica.
+     *
+     * ⚠ VA COMO FILA APARTE Y NO CAMBIANDO EL IMPORTE DE 60105. La cuenta sigue
+     * enseñando lo que dice el libro --291.803,96-- y el ajuste se ve como lo
+     * que es. Cambiar la cifra de la cuenta habria dejado la rejilla diciendo
+     * de 60105 algo que contabilidad no dice, que es lo que llevamos toda la
+     * pantalla evitando. El total del grupo sale igual: -271.440,17.
+     *
+     * ⚠ SON 20.363,79, NO 20.863,79, y la diferencia son 500 de Gian Laino:
+     * sucursal 747, un prestamo de Affinity, comision contabilizada en el 60105
+     * de la 747 y no en el de la 716. Se resta lo que la cuenta LLEVA DENTRO,
+     * no lo que la linea de negocio costo.
+     */
+    const enCuenta = loanMetrics.data?.affinity_in_account;
+    if (lente === "716" && enCuenta && enCuenta.total !== 0) {
+      const base = rawTxs[0];
+      if (base) {
+        out = [...out, {
+          ...base,
+          id: "compensafe-affinity-out-of-60105",
+          month: rawTxs[0]?.month ?? null,
+          branch: AFFINITY_HOST_BRANCH,
+          gl_code: null,
+          gl_name: "less: commission on Affinity loans · Compensafe",
+          category_2: "Operating Income (Loss) Before BM Payroll",
+          category_6: "Production Compensation",
+          category_7: "Loan Officer Payroll",
+          check_description:
+            `Commission on Affinity loans that account 60105 carries — ${enCuenta.lines} lines. Taken out here so this lens shows 716 without Affinity. Identified through comp.payroll_transaction, which carries the loan number that the ledger rows do not.`,
+          vendor: null,
+          ref_numb: null,
+          loan_number: null,
+          debit: 0,
+          credit: 0,
+          movement: enCuenta.total,
+          cost_center_id: null,
+          cost_center_status: null,
+        } as unknown as PLReportTx];
+      }
     }
 
     return out;
@@ -617,7 +682,7 @@ export default function PLPage() {
             {hayLente && (
               <span
                 className="ml-2 inline-flex overflow-hidden rounded-full border border-[#A6DEFF] text-xs"
-                title="Three views, not three slices of a pie — they do not add up. Affinity's LO commission shows as its own row here and inside account 60105 under 716, because the ledger books it on 716 and it cannot be separated from that account."
+                title="Three views, not three slices of a pie — they do not quite add up. The 500 gap is Gian Laino: his commission on an Affinity loan sits in branch 747's account, so Affinity counts it and 716 never had it."
               >
                 {([
                   { v: "ambas", t: "716 + Affinity" },

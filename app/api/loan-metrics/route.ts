@@ -229,6 +229,73 @@ async function comisionDe(loanNumbers: string[]) {
 }
 
 /**
+ * Cuanto de la cuenta 60105 DE ESTA SUCURSAL es comision de prestamos Affinity.
+ *
+ * ⚠ ES LA VIA QUE HACE POSIBLE RESTARLA, y no la que parecia. Las 130 filas de
+ * 60105 en el P&L no tienen `loan_number` --verificado, ninguna-- asi que desde
+ * el libro no hay forma de saber cuales son de Affinity. Pero
+ * `comp.payroll_transaction` SI lo trae en sus lineas de comision, y esa tabla
+ * es de donde sale el desglose de la cuenta. O sea que el reparto no se
+ * inventa: se lee de la fuente que ya explica esa cuenta.
+ *
+ * ⚠ SE FILTRA POR `branch_code`, Y ESO NO ES UN DETALLE -- son 500 euros de
+ * diferencia y solo una de las dos cifras es la correcta:
+ *
+ *     payroll_transaction · branch_code = 716   20.363,79   35 lineas
+ *     payroll_transaction · cualquier branch    20.863,79   36
+ *     comp.loan_commission · los 39 cierres     20.863,79   39
+ *
+ * La linea que sobra es de GIAN LAINO, sucursal 747, 500,00 en un prestamo de
+ * Affinity. Su comision NO esta en el 60105 de la 716 -- esta en el de la 747,
+ * porque el libro contabiliza donde esta la persona. Restar 20.863,79 quitaria
+ * de la 716 quinientos euros que nunca estuvieron ahi.
+ *
+ * Lo que se resta es lo que la cuenta LLEVA DENTRO, no lo que la linea de
+ * negocio COSTO. Son dos preguntas, y esta funcion contesta la primera.
+ */
+async function comisionAffinityEnLaCuenta(branch: string): Promise<{ total: number; lines: number }> {
+  const comp = createServerClient("comp");
+  const ar = createServerClient("activity_report");
+
+  const afectados = new Set<string>();
+  for (let i = 0; ; i += PAGE) {
+    const { data, error } = await ar
+      .from("loan_records_v2")
+      .select("loan_number")
+      .eq("is_affinity", true)
+      .range(i, i + PAGE - 1);
+    if (error) return { total: 0, lines: 0 };
+    for (const r of data ?? []) {
+      const ln = (r.loan_number as string | null)?.trim();
+      if (ln) afectados.add(ln);
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  if (afectados.size === 0) return { total: 0, lines: 0 };
+
+  let total = 0;
+  let lines = 0;
+  for (let i = 0; ; i += PAGE) {
+    const { data, error } = await comp
+      .from("payroll_transaction")
+      .select("loan_number,amount")
+      .eq("branch_code", branch)
+      .eq("pay_type", "Commission")
+      .range(i, i + PAGE - 1);
+    if (error) return { total: 0, lines: 0 };
+    for (const r of data ?? []) {
+      const ln = (r.loan_number as string | null)?.trim();
+      if (ln && afectados.has(ln)) {
+        total += Number(r.amount ?? 0);
+        lines++;
+      }
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return { total, lines };
+}
+
+/**
  * Lo que el LIBRO dice de la cuenta, para poder enfrentarlo a Compensafe.
  *
  * ⚠ `loan_number is null`, igual que el resto de la nomina del modulo: las
@@ -479,6 +546,18 @@ export async function GET(req: NextRequest) {
         payroll_breakdown:
           tieneDesgloseDeNomina(branches) && lente !== "affinity"
             ? await desgloseDeNomina(branches[0], await cuenta60105De(supabase, branches[0], years))
+            : null,
+        /*
+         * Cuanto de la cuenta 60105 es comision de prestamos Affinity, para
+         * poder sacarlo de la lente de "716 puro".
+         *
+         * ⚠ SOLO EN ESA LENTE. En "ambas" la cuenta tiene que quedarse entera
+         * --es el libro de la 716 completo-- y en "Affinity" no hay cuenta de
+         * la que sacar nada.
+         */
+        affinity_in_account:
+          tieneDesgloseDeNomina(branches) && lente === "716"
+            ? await comisionAffinityEnLaCuenta(branches[0])
             : null,
       });
     }

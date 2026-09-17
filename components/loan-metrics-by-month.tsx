@@ -54,6 +54,14 @@ export interface LoanMetricsData {
     recapture: number;
     unexplained: number;
   } | null;
+  /**
+   * Cuanto de la cuenta 60105 es comision de prestamos Affinity.
+   *
+   * ⚠ ES LO QUE LA CUENTA LLEVA DENTRO, no lo que la linea de negocio costo:
+   * 20.363,79 y no 20.863,79, porque los 500 de Gian Laino estan en el 60105
+   * de la 747 y no en el de la 716. Ver la nota de la ruta.
+   */
+  affinity_in_account?: { total: number; lines: number } | null;
 }
 
 interface Props {
