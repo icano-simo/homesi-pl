@@ -411,14 +411,29 @@ export default function PLPage() {
      * de la 747 y no en el de la 716. Se resta lo que la cuenta LLEVA DENTRO,
      * no lo que la linea de negocio costo.
      */
+    /*
+     * ⚠ UNA FILA POR MES, Y ESO FUE UN BUG. La primera version ponia
+     * `month: rawTxs[0]?.month` -- el ajuste ENTERO en el mes de la primera
+     * transaccion del payload, uno cualquiera. En julio salia 0,00 y en el mes
+     * que tocara salian los 20.363,79 de golpe. El total anual cuadraba, que es
+     * justo lo que hizo que pasara desapercibido.
+     *
+     * ⚠ Y POR MES DE PAGO, no de cierre, al reves que la fila de Affinity. No
+     * es una incoherencia: esta saca de la cuenta 60105 lo que la cuenta lleva
+     * dentro, y el libro la contabiliza por fecha de PAGO. Verificado sobre
+     * julio de 2026: la cuenta trae 28.896,38 y la comision de Affinity pagada
+     * en julio son 1.000,00 -- neto 27.896,38. Por mes de cierre habrian sido
+     * 500,00, que es otra cosa. El porque completo, en la ruta.
+     */
     const enCuenta = loanMetrics.data?.affinity_in_account;
     if (lente === "716" && enCuenta && enCuenta.total !== 0) {
       const base = rawTxs[0];
+      const porMes = Object.entries(enCuenta.by_month ?? {}).filter(([, v]) => v !== 0);
       if (base) {
-        out = [...out, {
+        out = [...out, ...porMes.map(([mes, v], i) => ({
           ...base,
-          id: "compensafe-affinity-out-of-60105",
-          month: rawTxs[0]?.month ?? null,
+          id: `compensafe-affinity-out-of-60105-${mes}-${i}`,
+          month: mes,
           branch: AFFINITY_HOST_BRANCH,
           gl_code: null,
           gl_name: "less: commission on Affinity loans · Compensafe",
@@ -426,16 +441,16 @@ export default function PLPage() {
           category_6: "Production Compensation",
           category_7: "Loan Officer Payroll",
           check_description:
-            `Commission on Affinity loans that account 60105 carries — ${enCuenta.lines} lines. Taken out here so this lens shows 716 without Affinity. Identified through comp.payroll_transaction, which carries the loan number that the ledger rows do not.`,
+            `Commission on Affinity loans that account 60105 carries, by payment month — ${enCuenta.lines} lines in total. Taken out here so this lens shows 716 without Affinity. Identified through comp.payroll_transaction, which carries the loan number that the ledger rows do not.`,
           vendor: null,
           ref_numb: null,
           loan_number: null,
           debit: 0,
           credit: 0,
-          movement: enCuenta.total,
+          movement: v,
           cost_center_id: null,
           cost_center_status: null,
-        } as unknown as PLReportTx];
+        })) as unknown as PLReportTx[]];
       }
     }
 

@@ -253,7 +253,30 @@ async function comisionDe(loanNumbers: string[]) {
  * Lo que se resta es lo que la cuenta LLEVA DENTRO, no lo que la linea de
  * negocio COSTO. Son dos preguntas, y esta funcion contesta la primera.
  */
-async function comisionAffinityEnLaCuenta(branch: string): Promise<{ total: number; lines: number }> {
+/*
+ * ⚠ SE REPARTE POR `pay_date`, Y NO POR EL MES DE CIERRE COMO LA OTRA FILA.
+ * Parece una incoherencia y no lo es: las dos filas ajustan cosas distintas.
+ *
+ *   LA FILA DE AFFINITY enseña lo que COSTARON esos prestamos, y va por mes de
+ *   CIERRE para quedar al lado del revenue de los mismos prestamos. No es una
+ *   cuenta del libro, asi que no tiene que respetar el calendario del libro.
+ *
+ *   ESTA saca de la cuenta 60105 lo que la cuenta LLEVA DENTRO, y 60105 la
+ *   contabiliza el libro POR FECHA DE PAGO. Restarla por mes de cierre quitaria
+ *   de julio dinero que en el 60105 de julio no estaba.
+ *
+ * Verificado sobre julio de 2026: la cuenta trae 28.896,38 y la comision de
+ * Affinity PAGADA en julio son 1.000,00 -- neto 27.896,38. Por mes de cierre
+ * habrian sido 500,00, que es otra cosa.
+ *
+ * ⚠ LA CONSECUENCIA, Y HAY QUE SABERLA: las dos filas NO se compensan mes a
+ * mes, solo sobre un periodo entero. Es el mismo desfase de los dos calendarios
+ * que este modulo documenta en PRODUCTION_PAY_GL_CODES -- Compensafe agrupa por
+ * cierre y el P&L por pago -- con otra cara.
+ */
+async function comisionAffinityEnLaCuenta(
+  branch: string,
+): Promise<{ total: number; lines: number; by_month: Record<string, number> }> {
   const comp = createServerClient("comp");
   const ar = createServerClient("activity_report");
 
@@ -264,35 +287,44 @@ async function comisionAffinityEnLaCuenta(branch: string): Promise<{ total: numb
       .select("loan_number")
       .eq("is_affinity", true)
       .range(i, i + PAGE - 1);
-    if (error) return { total: 0, lines: 0 };
+    if (error) return { total: 0, lines: 0, by_month: {} };
     for (const r of data ?? []) {
       const ln = (r.loan_number as string | null)?.trim();
       if (ln) afectados.add(ln);
     }
     if (!data || data.length < PAGE) break;
   }
-  if (afectados.size === 0) return { total: 0, lines: 0 };
+  if (afectados.size === 0) return { total: 0, lines: 0, by_month: {} };
 
   let total = 0;
   let lines = 0;
+  const by_month: Record<string, number> = {};
   for (let i = 0; ; i += PAGE) {
     const { data, error } = await comp
       .from("payroll_transaction")
-      .select("loan_number,amount")
+      .select("loan_number,amount,pay_date")
       .eq("branch_code", branch)
       .eq("pay_type", "Commission")
       .range(i, i + PAGE - 1);
-    if (error) return { total: 0, lines: 0 };
+    if (error) return { total: 0, lines: 0, by_month: {} };
     for (const r of data ?? []) {
       const ln = (r.loan_number as string | null)?.trim();
-      if (ln && afectados.has(ln)) {
-        total += Number(r.amount ?? 0);
-        lines++;
-      }
+      if (!ln || !afectados.has(ln)) continue;
+      const v = Number(r.amount ?? 0);
+      total += v;
+      lines++;
+      /*
+       * `pay_date` es un date "YYYY-MM-DD". Se parte por texto y no con Date:
+       * `new Date("2026-07-31")` es UTC y en un huso al oeste se va al 30 de
+       * junio, que movería el ajuste de mes en la frontera -- y las fechas de
+       * pago caen justo ahi, a fin de quincena.
+       */
+      const mes = MONTH_NAMES[Number(String(r.pay_date ?? "").slice(5, 7)) - 1];
+      if (mes) by_month[mes] = (by_month[mes] ?? 0) + v;
     }
     if (!data || data.length < PAGE) break;
   }
-  return { total, lines };
+  return { total, lines, by_month };
 }
 
 /**

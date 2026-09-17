@@ -61,7 +61,7 @@ export interface LoanMetricsData {
    * 20.363,79 y no 20.863,79, porque los 500 de Gian Laino estan en el 60105
    * de la 747 y no en el de la 716. Ver la nota de la ruta.
    */
-  affinity_in_account?: { total: number; lines: number } | null;
+  affinity_in_account?: { total: number; lines: number; by_month?: Record<string, number> } | null;
 }
 
 interface Props {
