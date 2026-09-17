@@ -142,15 +142,17 @@ export default function PLPage() {
    * modulo enseñaba una mitad: dos respuestas distintas en la misma pantalla,
    * sin nada que dijera cual era cual.
    *
-   * ⚠ Y SU ESTADO TIENE QUE ENTRAR EN LAS CUATRO PETICIONES. Es la trampa que
-   * ya se pago una vez: en aquel intento el selector se pintaba, se marcaba, y
-   * no hacia NADA, porque `lente` no estaba en las dependencias del fetch. Las
-   * cuatro llamadas la llevan, y las cuatro se comprobaron cambiando de lente:
+   * ⚠ Y SU ESTADO TIENE QUE ENTRAR EN LAS CUATRO PETICIONES:
    *
    *     /api/pl-all        `lens` en la URL, y `lente` en el efecto de recarga
    *     /api/loan-metrics  `lens` en la URL, y `lente` en la CLAVE del hook
    *     /api/loan-detail   `lens` en la URL, y `lente` en la clave del drawer
    *     /api/lo-pnl        `lens` en la URL, y `lente` en el useCallback
+   *
+   * Por que eso es una trampa y no una lista --el mismo olvido con cuatro
+   * formas distintas, y el sintoma de que la interfaz responde y los datos
+   * no-- esta junto al tipo `AffinityLens`, en lib/loan-branch.ts, que es lo
+   * que va a leer quien añada el quinto consumidor.
    *
    * ⚠ SOLO SE OFRECE CON LA 716 SOLA. Con varias sucursales, dos de las tres
    * lentes darian lo mismo que la tercera en todo menos en una, y un control

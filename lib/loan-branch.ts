@@ -209,7 +209,47 @@ const BRANCH_ALIASES: Record<string, string> = {
 /** La sucursal que se parte en dos. Solo esta. */
 export const AFFINITY_HOST_BRANCH = "716";
 
-/** Las tres lentes del selector cuando la sucursal es la 716. */
+/**
+ * Las tres lentes del selector cuando la sucursal es la 716.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ⚠ SI AÑADES UN CONSUMIDOR: LA LENTE TIENE QUE ENTRAR EN SU CLAVE O EN SU
+ *   DEPENDENCIA, O EL SELECTOR SE MARCARA Y NO PASARA NADA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * No es una recomendacion. Es el fallo que ya se pago una vez entero: en el
+ * primer intento de esta funcionalidad los tres botones se pintaban, se
+ * marcaban al pulsarlos y los datos NO CAMBIABAN, porque `lente` no estaba en
+ * las dependencias del fetch. El sintoma es especialmente malo porque la
+ * interfaz responde: parece que funciona y enseña las cifras de la lente
+ * anterior.
+ *
+ * Y NO HAY UNA SOLA FORMA DE MANDARLA. Al aplicarla a toda la pantalla, el
+ * mismo olvido aparecio CUATRO VECES con CUATRO FORMAS DISTINTAS. Se
+ * comprobaron una a una cambiando de lente y viendo que las cuatro peticiones
+ * se rehacen:
+ *
+ *   1. DEPENDENCIA DE UN useCallback
+ *      components/lo-pnl-view.tsx -> `}, [periodo, mes, anio, branch, lente])`
+ *
+ *   2. CLAVE DE UN HOOK, que es lo que dispara su useEffect
+ *      lib/use-loan-metrics.ts -> `const key = [..., [lente]].map(...)`
+ *
+ *   3. CLAVE DE UN COMPONENTE, la misma idea con otra forma
+ *      components/loan-detail-drawer.tsx -> `const key = \`...|${lente}\``
+ *
+ *   4. EFECTO DE RECARGA EXPLICITO, cuando la peticion no cuelga de un hook
+ *      app/pl/page.tsx -> el useEffect que llama a `fetchData` al cambiar
+ *
+ * La regla, para no tener que reconocer cual de las cuatro es la tuya: SI EL
+ * DATO SE PIDE FUERA DEL RENDER, la lente va donde esta lo que decide cuando
+ * se vuelve a pedir. Y se comprueba cambiando de lente, no leyendo el codigo
+ * -- las cuatro veces el codigo parecia correcto.
+ *
+ * ⚠ Y MANDA `lens` SOLO CUANDO NO ES "ambas". Sin el parametro las rutas se
+ * comportan como siempre, asi que una pantalla que no conozca la lente no
+ * cambia de comportamiento por existir esta.
+ */
 export type AffinityLens = "716" | "affinity" | "ambas";
 
 /**
