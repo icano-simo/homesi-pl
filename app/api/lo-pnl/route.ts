@@ -2018,6 +2018,40 @@ export async function GET(req: NextRequest) {
     for (const o of fuera) officers.splice(officers.indexOf(o), 1);
   }
 
+  /*
+   * ═══════════════════════════════════════════════════════════════════════════
+   * EN LA LENTE DE AFFINITY, SOLO QUIEN CERRO AHI
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * ⚠ ESTO REVIERTE UNA DECISION ANTERIOR, Y LAS DOS RAZONES SIGUEN SIENDO
+   * CIERTAS. Antes salian los 15 del roster de la 716 con las cifras vacias,
+   * porque "que alguien NO participe es informacion". Lo es. Pero el usuario
+   * quiere la lista de quien produce en Affinity, y catorce tarjetas a cero
+   * para encontrar una no es una lista: es un formulario.
+   *
+   * ⚠ MEDIDO, Y POR ESO IMPORTA: de las 15 personas del roster de la 716, SOLO
+   * NATHAN MARTINEZ cerro en Affinity, con 38 cierres. Las otras catorce estan
+   * a cero. O sea que hoy esta lente enseña UNA tarjeta, y eso no es un fallo
+   * de la pantalla: es cuanta gente produce en esa linea de negocio.
+   *
+   * ⚠ Y NO HACE FALTA NINGUNA REGLA PARA LOS ACCOUNT EXECUTIVES. Shirley
+   * Camargo y David Alvarez son ACCOUNT EXECUTIVE TPO y su coste SI es de
+   * Affinity --son la nomina de "AE Services"-- pero no cierran prestamos, asi
+   * que esta misma condicion los deja fuera sola. Su coste se ve donde
+   * corresponde: como la linea de AE Services en la rejilla del P&L, no como
+   * dos tarjetas de loan officer con cero produccion, que los leeria como
+   * gente que no rinde.
+   *
+   * ⚠ SOLO EN ESTA LENTE. En "716 puro" y en "ambas" la lista no cambia: ahi
+   * siguen saliendo quienes cierran Y quienes solo tienen nomina, porque la
+   * pregunta es el coste de la sucursal entera y quien cuesta sin producir es
+   * justo lo que hay que ver.
+   */
+  if (lente === "affinity") {
+    const sinCierres = officers.filter((o) => o.loanCount === 0);
+    for (const o of sinCierres) officers.splice(officers.indexOf(o), 1);
+  }
+
   officers.sort((a, b) => a.total - b.total);
 
   /*
