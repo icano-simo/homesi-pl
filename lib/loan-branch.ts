@@ -246,6 +246,28 @@ export const AFFINITY_HOST_BRANCH = "716";
  * se vuelve a pedir. Y se comprueba cambiando de lente, no leyendo el codigo
  * -- las cuatro veces el codigo parecia correcto.
  *
+ * ⚠ Y HAY UNA QUINTA FORMA, LA UNICA QUE EL TIPO NO PROTEGE: OLVIDARSE DE
+ * PASAR EL PROP.
+ *
+ *   5. UN PROP QUE NO SE PASA, en una cadena de componentes
+ *      app/pl/page.tsx -> LoanDetailDrawer -> LoPnlView -> /api/lo-pnl
+ *
+ * Paso: el drawer recibia `lente` y no se la pasaba a `LoPnlView`, asi que la
+ * pestaña de P&L by Loan Officer enseñaba los 15 officers de la 716 con la
+ * lente de Affinity puesta, mientras la ruta devolvia 1.
+ *
+ * ⚠ EL COMPILADOR NO LO CAZA, Y ES POR UNA DECISION DELIBERADA: el prop es
+ * OPCIONAL con defecto "ambas", para que las pantallas que no conocen la lente
+ * no cambien de comportamiento por existir esta. Ese mismo defecto convierte
+ * olvidarlo en algo que compila, que se lee razonable, y que enseña datos de
+ * otra lente sin una sola señal.
+ *
+ * O sea que la seguridad que hace opcional el parametro es la que impide que
+ * el tipo avise. No se cambia --hacerlo obligatorio obligaria a tocar cada
+ * consumidor presente y futuro-- pero por eso la comprobacion tiene que ser
+ * SIEMPRE la misma: cambiar de lente y mirar que la zona cambia. En una cadena
+ * de props, mirarlo en la zona MAS PROFUNDA, que es la que se queda atras.
+ *
  * ⚠ Y MANDA `lens` SOLO CUANDO NO ES "ambas". Sin el parametro las rutas se
  * comportan como siempre, asi que una pantalla que no conozca la lente no
  * cambia de comportamiento por existir esta.
