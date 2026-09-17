@@ -543,40 +543,9 @@ export default function PLPage() {
               {lente === "affinity" ? "Affinity · business line" : "716 · without Affinity"}
             </span>
 
-            {/*
-              * ⚠ LA COMISION NO ES UNA CUENTA DEL P&L, ASI QUE NO VA EN LA
-              * REJILLA. Viene de Compensafe, no tiene gl_code y no cuadra contra
-              * el libro mayor: meterla entre las cuentas convertiria la rejilla
-              * en algo que ya no es el libro. Va aqui, dicha.
-              *
-              * ⚠ Y POR ESO ESTE TOTAL NO ES EL DE LA REJILLA, a proposito. La
-              * rejilla suma cuentas; esto suma la linea de negocio, que incluye
-              * una cifra que el libro no tiene. Dos numeros distintos porque son
-              * dos preguntas distintas -- y ninguno se resta del otro, que es lo
-              * que haria que el mismo dinero saliera dos veces.
-              */}
-            {loanMetrics.data?.commission && (
-              <span className="ml-2 text-slate-600">
-                · LO commission{" "}
-                <span className="font-mono tabular-nums">
-                  {loanMetrics.data.commission.total.toLocaleString("en-US", { maximumFractionDigits: 0 })}
-                </span>
-                <span
-                  className="ml-1 text-slate-400"
-                  title="From Compensafe — not a P&L account, so it is not in the grid below and this figure is not the grid's total."
-                >
-                  (Compensafe)
-                </span>
-                {loanMetrics.data.commission.sin_comision > 0 && (
-                  <span
-                    className="ml-1 text-[#FF4040]"
-                    title={`${loanMetrics.data.commission.sin_comision} of these loans have no commission row in Compensafe. Their commission is unknown, not zero, so the figure above is incomplete by an unknown amount.`}
-                  >
-                    · {loanMetrics.data.commission.sin_comision} unknown
-                  </span>
-                )}
-              </span>
-            )}
+            {/* La comision NO se repite aqui: su sitio es el cierre de debajo
+                de la rejilla, que es donde se lee un total. Dos veces en la
+                misma pantalla invita a sumarlas. */}
           </div>
         )}
       </div>
@@ -744,6 +713,76 @@ export default function PLPage() {
           emptyMessage="No transactions found for the selected filters."
         />
       )}
+
+      {/*
+        * ═══════════════════════════════════════════════════════════════════
+        * EL CIERRE DE LA LENTE: DEBAJO DE LA REJILLA Y FUERA DE ELLA
+        * ═══════════════════════════════════════════════════════════════════
+        *
+        * ⚠ AQUI, Y NO ARRIBA CON LOS CHIPS DEL FILTRO. Estuvo arriba y el
+        * usuario no lo encontro: buscaba el cierre de la linea de negocio
+        * DEBAJO de las cuentas, que es donde se lee un total. Un dato correcto
+        * en el sitio equivocado es un dato que no existe.
+        *
+        * ⚠ Y FUERA DE LA TABLA, NO COMO UNA FILA MAS. La comision no tiene
+        * gl_code y no cuadra contra el libro mayor: metida entre las cuentas,
+        * la rejilla dejaria de ser el libro y quien la cuadrase contra
+        * contabilidad encontraria una fila que alli no existe. Separada por una
+        * linea y con su origen dicho -- el mismo patron que
+        * "Distributed to division (700)" en las tarjetas del modulo por LO.
+        *
+        * ⚠ SALE EN LAS TRES LENTES, incluida "ambas", donde es la suma de las
+        * dos: 20.863,79 + 220.461,55 = 241.325,34 en 95 prestamos. Se decidio
+        * asi en vez de ocultarla porque un bloque que aparece y desaparece
+        * segun la lente es exactamente lo que hizo que no se encontrara.
+        */}
+      {loaded && hayLente && loanMetrics.data?.commission && (
+        <div className="mt-3 flex justify-end">
+          <div className="w-full max-w-md rounded-lg border border-[#A6DEFF] bg-white px-4 py-3 text-sm">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-slate-500">Total (general ledger)</span>
+              <span className="font-mono tabular-nums text-[#001A40]">
+                {txs.reduce((s, t) => s + Number(t.movement ?? 0), 0)
+                  .toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+
+            <div className="mt-1.5 flex items-baseline justify-between gap-3 border-t border-dashed border-slate-300 pt-1.5">
+              <span className="text-slate-500">
+                LO commission
+                <span className="ml-1 text-xs text-slate-400" title="From Compensafe — not a P&L account, so it is not in the grid above.">
+                  (Compensafe)
+                </span>
+                {loanMetrics.data.commission.sin_comision > 0 && (
+                  <span
+                    className="ml-1 text-xs text-[#FF4040]"
+                    title={`${loanMetrics.data.commission.sin_comision} of these loans have no commission row in Compensafe. Unknown, not zero — so this figure is short by an unknown amount.`}
+                  >
+                    · {loanMetrics.data.commission.sin_comision} unknown
+                  </span>
+                )}
+              </span>
+              <span className="font-mono tabular-nums text-[#001A40]">
+                {(-loanMetrics.data.commission.total)
+                  .toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+
+            <div className="mt-1.5 flex items-baseline justify-between gap-3 border-t border-[#001A40] pt-1.5">
+              <span className="font-semibold text-[#001A40]">
+                {lente === "affinity" ? "Affinity business line"
+                  : lente === "716" ? "716 without Affinity"
+                  : "716 + Affinity"}
+              </span>
+              <span className="font-mono tabular-nums font-bold text-[#001A40]">
+                {(txs.reduce((s, t) => s + Number(t.movement ?? 0), 0) - loanMetrics.data.commission.total)
+                  .toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
         <CellDetailModal
           cell={panel?.kind === "cell" ? panel.ref : null}
           notes={placedNotes}
