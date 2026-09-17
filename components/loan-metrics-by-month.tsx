@@ -32,6 +32,14 @@ export interface LoanMetricsData {
   unmatched_branches: string[];
   excluded_loans: number;
   bucket_drift_months: string[];
+  /**
+   * Lo pagado al loan officer por estos prestamos, de Compensafe.
+   *
+   * ⚠ `sin_comision` no es ruido: son prestamos cuya comision se DESCONOCE, no
+   * prestamos sin comision. Quien enseñe `total` sin ese contador esta
+   * afirmando que esos costaron cero.
+   */
+  commission?: { total: number; loans: number; sin_comision: number };
 }
 
 interface Props {

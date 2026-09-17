@@ -491,7 +491,7 @@ export default function PLPage() {
               * esa.
               */}
             {hayLente && (
-              <span className="ml-2 inline-flex overflow-hidden rounded-full border border-violet-300 text-xs">
+              <span className="ml-2 inline-flex overflow-hidden rounded-full border border-[#A6DEFF] text-xs">
                 {([
                   { v: "ambas", t: "716 + Affinity" },
                   { v: "716", t: "716 only" },
@@ -500,8 +500,10 @@ export default function PLPage() {
                   <button
                     key={b.v}
                     onClick={() => setLente(b.v)}
-                    className={`${i > 0 ? "border-l border-violet-200 " : ""}px-3 py-1 font-medium ${
-                      lente === b.v ? "bg-violet-600 text-white" : "bg-white text-violet-900 hover:bg-violet-50"
+                    className={`${i > 0 ? "border-l border-[#A6DEFF] " : ""}px-3 py-1 font-medium ${
+                      lente === b.v
+                        ? "bg-[#A6DEFF]/20 text-[#001A40]"
+                        : "bg-white text-slate-500 hover:bg-slate-50"
                     }`}
                   >
                     {b.t}
@@ -525,22 +527,55 @@ export default function PLPage() {
           * sin esto va a leer una rentabilidad que no existe.
           */}
         {loaded && hayLente && lente !== "ambas" && (
-          <div className="mt-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-[11px] leading-relaxed text-violet-900">
-            {lente === "affinity" ? (
-              <>
-                <span className="font-semibold">Affinity — business line, not a branch.</span>{" "}
-                Revenue and direct costs of its loans, plus the payroll of its account executives.
-                <span className="font-medium"> Nothing is prorated:</span> rent, marketing and the
-                rest of 716&rsquo;s payroll stay whole on 716, so this is what the line leaves
-                <span className="italic"> before</span> what it costs to sustain it.
-              </>
-            ) : (
-              <>
-                <span className="font-semibold">716 without Affinity.</span>{" "}
-                Its own loans, and <span className="font-medium">the general costs in full</span> —
-                rent, marketing and all payroll except the account executives. Nothing was moved out
-                except what Affinity could be identified by.
-              </>
+          <div className="mt-2 rounded-lg border border-[#A6DEFF] bg-[#A6DEFF]/10 px-3 py-2 text-[11px] text-[#001A40]">
+            {/* ⚠ UNA LINEA, y el resto en el title. El criterio: si hay que leer
+                dos lineas para entender una cifra, el texto esta en el sitio
+                equivocado -- la cifra se explica por su etiqueta y su posicion.
+                Lo largo vivia aqui y se fue al tooltip. */}
+            <span
+              className="font-semibold"
+              title={
+                lente === "affinity"
+                  ? "Revenue and direct costs of its loans, the LO commission on them, and the payroll of its account executives. Nothing is prorated: rent, marketing and the rest of 716's payroll stay whole on 716, so this is what the line leaves before what it costs to sustain it."
+                  : "716's own loans and the general costs in full — rent, marketing and all payroll except the account executives. Nothing was moved out except what Affinity could be identified by."
+              }
+            >
+              {lente === "affinity" ? "Affinity · business line" : "716 · without Affinity"}
+            </span>
+
+            {/*
+              * ⚠ LA COMISION NO ES UNA CUENTA DEL P&L, ASI QUE NO VA EN LA
+              * REJILLA. Viene de Compensafe, no tiene gl_code y no cuadra contra
+              * el libro mayor: meterla entre las cuentas convertiria la rejilla
+              * en algo que ya no es el libro. Va aqui, dicha.
+              *
+              * ⚠ Y POR ESO ESTE TOTAL NO ES EL DE LA REJILLA, a proposito. La
+              * rejilla suma cuentas; esto suma la linea de negocio, que incluye
+              * una cifra que el libro no tiene. Dos numeros distintos porque son
+              * dos preguntas distintas -- y ninguno se resta del otro, que es lo
+              * que haria que el mismo dinero saliera dos veces.
+              */}
+            {loanMetrics.data?.commission && (
+              <span className="ml-2 text-slate-600">
+                · LO commission{" "}
+                <span className="font-mono tabular-nums">
+                  {loanMetrics.data.commission.total.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </span>
+                <span
+                  className="ml-1 text-slate-400"
+                  title="From Compensafe — not a P&L account, so it is not in the grid below and this figure is not the grid's total."
+                >
+                  (Compensafe)
+                </span>
+                {loanMetrics.data.commission.sin_comision > 0 && (
+                  <span
+                    className="ml-1 text-[#FF4040]"
+                    title={`${loanMetrics.data.commission.sin_comision} of these loans have no commission row in Compensafe. Their commission is unknown, not zero, so the figure above is incomplete by an unknown amount.`}
+                  >
+                    · {loanMetrics.data.commission.sin_comision} unknown
+                  </span>
+                )}
+              </span>
             )}
           </div>
         )}

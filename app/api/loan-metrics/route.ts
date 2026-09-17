@@ -177,6 +177,53 @@ async function fetchOfficials(
     .filter((o) => (years.length ? o.year !== null && years.includes(o.year) : true));
 }
 
+/**
+ * Lo que se le pago al loan officer por estos prestamos, de comp.loan_commission.
+ *
+ * ⚠ NO ES UNA CUENTA DEL P&L, Y ESO GOBIERNA COMO SE ENSEÑA. Viene de
+ * Compensafe, no tiene gl_code y no cuadra contra el libro mayor: en la rejilla
+ * de cuentas no puede salir como una fila mas, porque la rejilla ES el libro.
+ * Va como linea aparte, diciendo de donde sale -- igual que en las tarjetas del
+ * modulo por Loan Officer.
+ *
+ * ⚠ Y `sin_comision` NO ES UN DETALLE. De los 62 cierres de "716 puro", SEIS no
+ * tienen fila en Compensafe: su comision no es cero, es desconocida. Enseñar
+ * -220.461,55 a secas afirmaria que esos seis no costaron nada. El contador
+ * viaja para que la pantalla pueda decirlo.
+ *
+ * ⚠ QUE ESTO NO SE CUENTA DOS VECES CON EL MODULO POR LOAN OFFICER: las dos
+ * cifras existen, pero contestan a poblaciones distintas --una linea de negocio
+ * contra una persona-- y NINGUNA suma en la otra. Ademas la rejilla del P&L no
+ * la contiene en absoluto: la comision no esta en `pl_transactions`, asi que el
+ * total de la rejilla y el de la linea de negocio son dos numeros distintos a
+ * proposito, y el bloque lo dice.
+ */
+async function comisionDe(loanNumbers: string[]) {
+  if (loanNumbers.length === 0) return { total: 0, loans: 0, sin_comision: 0 };
+  const comp = createServerClient("comp");
+  const encontradas = new Map<string, number>();
+  for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
+    const trozo = loanNumbers.slice(i, i + IN_CHUNK);
+    const { data, error } = await comp
+      .from("loan_commission")
+      .select("loan_number,lo_pay")
+      .in("loan_number", trozo);
+    // Que Compensafe falle no puede tumbar el panel: sin ella la comision es
+    // desconocida para TODOS, que es lo que la pantalla ya sabe decir.
+    if (error) return { total: 0, loans: 0, sin_comision: loanNumbers.length };
+    for (const r of data ?? []) {
+      if (r.lo_pay != null) encontradas.set(String(r.loan_number), Number(r.lo_pay));
+    }
+  }
+  let total = 0;
+  for (const v of encontradas.values()) total += v;
+  return {
+    total,
+    loans: encontradas.size,
+    sin_comision: loanNumbers.length - encontradas.size,
+  };
+}
+
 /** Paged read of the loan numbers a P&L filter selects. */
 async function fetchLoanNumbers(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -297,6 +344,20 @@ export async function GET(req: NextRequest) {
         unmatched_branches,
         excluded_loans: excluded,
         bucket_drift_months: drift,
+        /*
+         * ⚠ `inScope`, NO `rows` A SECAS. `fetchOfficials` NO aplica el filtro
+         * de sucursal --lo dice su propia nota-- asi que `rows` son los cierres
+         * de toda la division. Sin este filtro la comision salia 952.168,48 en
+         * 399 prestamos donde tenian que ser 20.863,79 en 39: el numero de la
+         * division entera bajo el rotulo de Affinity.
+         *
+         * Se usa el MISMO predicado que las tarjetas y la base de bps, por lo
+         * mismo que dice la nota de arriba: tres filtros escritos aparte son
+         * tres sitios donde pueden dejar de coincidir.
+         */
+        commission: await comisionDe(
+          rows.filter((o) => inScope(o.branch!)).map((o) => o.loan_number),
+        ),
       });
     }
 

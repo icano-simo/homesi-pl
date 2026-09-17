@@ -221,8 +221,8 @@ const SECCIONES: { key: OfficerGroup; label: string; hint: string; banda: string
     key: "support",
     label: "Support",
     hint: "Assistants, processors and support staff. They have a real cost and close no loans — that is their job, not a finding.",
-    banda: "border-l-4 border-l-violet-400",
-    fondo: "bg-violet-50",
+    banda: "border-l-4 border-l-[#001A40]",
+    fondo: "bg-[#001A40]/5",
   },
   {
     key: "nppm",
