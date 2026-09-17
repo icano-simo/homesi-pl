@@ -157,6 +157,33 @@ export default function PLPage() {
    * ⚠ SOLO SE OFRECE CON LA 716 SOLA. Con varias sucursales, dos de las tres
    * lentes darian lo mismo que la tercera en todo menos en una, y un control
    * que casi nunca cambia nada invita a pulsarlo y a desconfiar de el.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * ⚠ SON TRES VISTAS, NO TRES TROZOS DE UNA TARTA. NO SE SUMAN.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   *     Affinity            97.015,49
+   *     716 puro          -168.176,90
+   *     suma               -71.161,41
+   *     ambas              -50.297,62      <- el libro entero de la 716
+   *     diferencia         -20.863,79      <- la comision de Affinity
+   *
+   * EL PORQUE, EN UNA LINEA: esos 20.863,79 se ven en las dos --como fila
+   * propia en Affinity y dentro de la cuenta 60105 en la 716-- porque el libro
+   * los contabiliza en la 716 y no se pueden separar de esa cuenta.
+   *
+   * La nota va AQUI, donde se elige la lente, y no solo junto a la fila que lo
+   * provoca: quien cambia entre ellas es justo quien va a intentar sumarlas.
+   *
+   * ⚠ Y "ambas" DA EL LIBRO ENTERO DE LA 716, -50.297,62, que es lo correcto:
+   * esa lente no añade la fila de comision porque la cuenta 60105 ya la lleva
+   * dentro.
+   *
+   * ⚠ ESTA PROPIEDAD CAMBIO, y por eso esta escrita en vez de supuesta. Antes
+   * de la fila de comision las tres SI sumaban --1.828 + 379 = 2.207 filas, e
+   * importes al centimo-- y eso se verifico y se anuncio. Dejo de valer al
+   * añadirla. Una propiedad verificada que nadie revisa cuando cambia el codigo
+   * se convierte en una nota falsa, que es peor que no haberla escrito.
    */
   const [lente, setLente] = useState<AffinityLens>("ambas");
 
@@ -588,7 +615,10 @@ export default function PLPage() {
               * esa.
               */}
             {hayLente && (
-              <span className="ml-2 inline-flex overflow-hidden rounded-full border border-[#A6DEFF] text-xs">
+              <span
+                className="ml-2 inline-flex overflow-hidden rounded-full border border-[#A6DEFF] text-xs"
+                title="Three views, not three slices of a pie — they do not add up. Affinity's LO commission shows as its own row here and inside account 60105 under 716, because the ledger books it on 716 and it cannot be separated from that account."
+              >
                 {([
                   { v: "ambas", t: "716 + Affinity" },
                   { v: "716", t: "716 only" },
