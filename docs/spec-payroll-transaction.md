@@ -4,10 +4,10 @@
 > los de `fct_loan_commission` y `hours_logged`. Esto es el resumen del
 > contrato, para tenerlo del lado que lo consume.
 >
-> ⚠ **Y una cosa que este documento decía mal.** Decía que `txn_key` se
-> construye en el sync. **No: se construye arriba, en una vista de BigQuery**,
-> igual que `hours_key` — ver §2. El precedente de `hours_logged_v` es
-> explícito sobre por qué, y no lo había visto al escribir esto.
+> ⚠ **Dos cosas que este documento dijo mal, y se corrigen abajo.** Que
+> `txn_key` se construye en el sync — no: en una vista de BigQuery, como
+> `hours_key` (§2). Y que la carga era completa — **Compensafe carga
+> incremental** (§4.5).
 
 Vive en este repositorio, y no en `simo-sync`, porque la app depende de este
 mapeo: el día que una columna cambie de significado al otro lado, esto es lo
@@ -30,41 +30,57 @@ aplicado, la columna se llama `description`, no `check_description`.
 ## 2. La clave, y dónde se calcula
 
 ```
-txn_key = emp_no | pay_date | pay_type | loan_number | description | amount
+txn_key = SHA256(emp_no | pay_date | pay_type | loan_number | description | amount)
 ```
 
-Medido: **1.859 valores distintos sobre 1.859 filas.** El origen no trae
-ninguna columna que sirva de clave propia.
+**Verificada: 1.859 filas, 1.859 claves distintas, 0 nulas, 0 vacías, las 64
+posiciones del hash en todas.** El origen no trae ninguna columna que sirva de
+clave propia.
 
-⚠ **Se calcula en una vista de BigQuery, `comp_marts.fct_payroll_transaction_v`,
-que todavía no existe.** Ése es el bloqueo del paso 3: el spec está escrito y
-apunta a ella. El precedente es `hours_logged_v`, y su razón está escrita allí:
+⚠ **Es un hash, no la concatenación**, así que la clave no se puede leer para
+saber de qué fila es. Eso cuesta al depurar, y se paga a cambio de largo fijo
+—una descripción larga no la hace crecer— y de no llevar datos de una persona
+dentro de un identificador.
+
+⚠ **Se calcula en la vista de BigQuery `comp_marts.fct_payroll_transaction_v`**,
+no en el sync. El precedente es `hours_logged_v`, y su razón está escrita allí:
 una clave calculada en el job existiría solo en Supabase —no se podría joinear
 desde BigQuery ni comprobar un invariante sobre ella— y **podría divergir de sí
 misma**. Si alguien cambiara cómo se compone, las filas viejas quedarían con la
 clave vieja, el upsert dejaría de encontrarlas e insertaría duplicados en vez de
 actualizar.
 
-⚠ **El `COALESCE` no es defensivo, es lo que hace que funcione.** Misma lección
-que `hours_logged_v`, y aquí pega mucho más fuerte: allá fallaban 4 filas de 731
-por una descripción rara; aquí **`loan_number` es nulo en la mayoría de las
-líneas** —Bonus, las horas, todo lo que no es comisión—. Concatenar un `NULL` da
-`NULL` en toda la expresión, así que sin `COALESCE` la clave sería nula en más de
-la mitad de la tabla.
+⚠ **El `COALESCE` no es defensivo, es lo que hace que la clave exista.** Misma
+lección que `hours_logged_v`, y aquí pega mucho más fuerte — allá fallaban 4
+filas de 731 por una descripción rara. Aquí, medido sobre las 1.859:
+
+| | |
+|---|---|
+| filas sin `loan_number` | **1.120 — el 60%** |
+| filas sin `description` | **243** |
+
+Concatenar un `NULL` da `NULL` en toda la expresión: sin `COALESCE` la clave
+sería nula en **más de la mitad** de la tabla.
+
+⚠ **Y va solo en esas dos, a propósito.** `emp_no`, `pay_date`, `pay_type` y
+`amount` no pueden faltar, y si algún día faltan la clave sale nula y la carga
+revienta contra el `NOT NULL` del destino. Eso es lo correcto: un fallo
+ruidoso, no una clave inventada sobre un hueco.
 
 ⚠ **Sin ordinal.** Un `ROW_NUMBER()` habría hecho la clave única por
-construcción, pero solo aguanta mientras la carga sea completa. Esta aguanta
-las dos.
+construcción, y no es estable: el job lee la vista entera en cada corrida, así
+que el ordinal se recalcularía cada vez, y sin un `ORDER BY` determinista no da
+el mismo resultado ni con los mismos datos — y nada aquí da un orden natural del
+que colgarlo.
 
 ⚠ **Y ninguna combinación más corta vale** — el porqué, con los números, está
 en la migración. Resumen: Jorge Zuzunaga tiene seis líneas el 2025-11-14, una
 persona y una fecha de pago.
 
-El separador tiene que ser un carácter que no aparezca en ningún campo. `|`
-vale para `emp_no`, las fechas, `pay_type` y `amount`; **`description` es texto
-libre y hay que comprobarlo**, porque un `|` dentro de una descripción movería
-el troceo y dos filas distintas podrían producir la misma clave. Si aparece, se
-escapa o se usa un hash.
+⚠ **El hash no quita la ambigüedad del separador, solo la esconde.**
+`description` es texto libre: un `|` dentro movería el troceo. Hoy salen 1.859
+claves distintas y por eso no hay problema — pero si un día el conteo de claves
+baja sin que baje el de filas, es esto.
 
 ## 3. El mapeo
 
@@ -147,10 +163,36 @@ nombre propio**: el espejo y la fuente hablan el mismo idioma y el `select` no
 traduce nada. Una traducción solo se paga cuando el nombre de origen miente,
 como en `pay_category`.
 
-### 4.5 La carga es completa, y la tabla va al barrido
+### 4.5 Compensafe carga incremental, y el barrido sigue siendo correcto
 
 Upsert por `txn_key` más el sweep, como las otras dos de Compensafe —
 `comp.payroll_transaction` está en `SWEEPABLE`.
+
+La carga del 2026-09-16 trajo **49 filas de un solo corte de pago** contra las
+1.578 del histórico del día anterior. Son dos cosas distintas, y solo la primera
+es incremental:
+
+| | |
+|---|---|
+| Compensafe → stage | **incremental**, 49 filas de un corte |
+| mart → vista | **acumula**, la vista devuelve las 1.859 |
+| vista → Supabase | el job lee la vista **entera** cada corrida |
+
+Así que el sweep borra lo que **la vista** no devolvió, no lo que el archivo de
+hoy no traía. Sigue significando «esta fila ya no existe arriba».
+
+⚠ **Y no es una deducción, está medido en la tabla de al lado.**
+`comp.hours_logged` lleva semanas con esta misma fuente y hoy tiene 738 filas
+que van del 2025-09-15 al 2026-09-30 — **un año entero** — con un único
+`synced_at`. Si la vista devolviera solo el último corte, el sweep la habría
+dejado en una quincena hace semanas. Y ha crecido, nunca encogido: 448 → 731 →
+738, igual que `loan_commission` 361 → 470.
+
+⚠ **El riesgo que sí queda**, y vale para las tres de Compensafe: la guarda es
+`rows.length > 0` — protege de que el origen devuelva **cero**, no de que
+devuelva **poco**. Si un día la vista pasara a exponer solo el último corte,
+devolvería 49 filas, la guarda no saltaría y el sweep borraría las otras 1.810
+sin un solo error. Es anterior a esta tabla y no se cambia por cuenta propia.
 
 ⚠ **Y es la que más lo necesita, por algo que las otras dos no tienen: su clave
 incluye `amount` y la descripción.** Corregir un importe arriba no actualiza la

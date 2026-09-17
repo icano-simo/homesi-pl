@@ -44,11 +44,24 @@
 --         -> 1.859 claves distintas de 1.859 filas
 --
 -- ⚠ Y NO LLEVA ORDINAL, A PROPOSITO. Un ROW_NUMBER() dentro de la colision
--- habria hecho la clave unica por construccion, pero solo aguanta mientras la
--- carga sea completa --simo-sync borra y reescribe el lote entero, medido: un
--- unico `synced_at` por tabla--. Una clave de negocio no depende de eso: el
--- dia que la carga pase a incremental esta sigue valiendo y la del ordinal
--- habria empezado a reasignar claves en silencio.
+-- habria hecho la clave unica por construccion, pero no es estable: el job lee
+-- la vista entera en cada corrida, y un ROW_NUMBER() sin `ORDER BY`
+-- determinista se recalcula cada vez -- sin que nada en estos datos de un
+-- orden natural del que colgarlo. Una clave de negocio no tiene ese problema:
+-- los seis campos valen lo mismo se lean cuando se lean.
+--
+-- ⚠ AQUI DECIA ALGO FALSO Y SE CORRIGE EN
+-- `20260916_comp_payroll_transaction_clave_sha256.sql`. Decia que el ordinal
+-- "solo aguanta mientras la carga sea completa -- simo-sync borra y reescribe
+-- el lote entero, medido: un unico synced_at por tabla". La MEDICION era
+-- cierta y lo sigue siendo; la CONCLUSION no se seguia de ella. `synced_at`
+-- es uniforme porque el job estampa la marca de la corrida en cada fila que
+-- escribe, no porque el origen se recargue entero -- y Compensafe SI carga
+-- incremental: el 2026-09-16 trajo 49 filas de un solo corte de pago.
+--
+-- ⚠ Y `txn_key` NO ES LA CONCATENACION QUE SE LEE ABAJO: es su SHA256, de 64
+-- hex, calculado en la vista. Los seis campos son los mismos. Ver esa misma
+-- migracion.
 --
 -- ⚠ NO HACEN FALTA MAS CAMPOS. `adj_type`, `effective_date` y `scenario`
 -- anadidos a la clave dan tambien 1.859: no distinguen ninguna fila que las

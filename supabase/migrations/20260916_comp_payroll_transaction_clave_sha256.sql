@@ -1,0 +1,93 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- La clave es un SHA256, y la carga de Compensafe es INCREMENTAL
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- ⚠ NO EJECUTADA. Se escribe para que la aplique el usuario. Solo cambia
+-- comentarios: no toca ni una fila, ni una columna, ni un permiso.
+--
+-- DOS COSAS QUE DEJARON DE SER VERDAD EL MISMO DIA
+--
+-- 1. `txn_key` NO ES LA CONCATENACION, ES SU SHA256. La vista
+--    `comp_marts.fct_payroll_transaction_v` la construye con hash, no con el
+--    texto pegado, y por eso la columna son 64 caracteres hexadecimales
+--    siempre. Verificado sobre las 1.859 filas: 1.859 claves distintas, cero
+--    nulas, cero vacias, y las 64 posiciones en todas.
+--
+--    Los seis campos que entran son los mismos y el orden importa igual --lo
+--    que cambia es que ya no se puede leer la clave para saber de que fila es.
+--    Eso es una perdida real al depurar, y se compensa: el hash tiene largo
+--    fijo, no se rompe si una descripcion crece, y no arrastra datos de la
+--    persona dentro de un identificador.
+--
+-- 2. COMPENSAFE YA CARGA INCREMENTAL, Y ESTA MIGRACION DECIA LO CONTRARIO.
+--    La carga del 2026-09-16 trajo 49 filas de un solo corte de pago --el 30
+--    de septiembre-- contra las 1.578 del historico del dia anterior.
+--
+--    ⚠ LO QUE ESTABA MAL NO ERA LA MEDICION, ERA LA CONCLUSION. Se midio que
+--    `comp.hours_logged` y `comp.loan_commission` tienen UN SOLO `synced_at`
+--    distinto cada una, y de ahi se concluyo "simo-sync borra y reescribe el
+--    lote entero". El dato es cierto y sigue siendolo; la conclusion no se
+--    seguia de el. `synced_at` es uniforme porque el job ESTAMPA la marca de
+--    la corrida en cada fila que escribe --lo dice su propio codigo, porque un
+--    DEFAULT now() no se dispara en un UPDATE-- asi que saldria uniforme
+--    igual aunque el origen trajera una sola fila nueva.
+--
+--    Una medicion correcta y una inferencia que no se sigue de ella se
+--    parecen mucho a un hecho. Esta se sostuvo tres dias.
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+-- LO QUE NO CAMBIA, Y POR QUE: EL BARRIDO SIGUE SIENDO CORRECTO
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- "La carga es incremental" y "el sync lee un trozo" son dos cosas distintas,
+-- y solo la primera es cierta:
+--
+--   COMPENSAFE -> STAGE         incremental. 49 filas de un corte.
+--   MART -> VISTA               acumula. La vista devuelve las 1.859.
+--   VISTA -> SUPABASE           el job lee la vista ENTERA cada corrida,
+--                               estampa `synced_at` en todo, y borra lo que
+--                               quedo con marca anterior.
+--
+-- Asi que el barrido borra lo que la VISTA no devolvio, no lo que el archivo
+-- de hoy no traia. Sigue significando "esta fila ya no existe arriba".
+--
+-- ⚠ Y NO ES UNA DEDUCCION: ESTA MEDIDO EN LA TABLA DE AL LADO. `hours_logged`
+-- lleva semanas con esta misma fuente incremental y hoy tiene 738 filas que
+-- van del 2025-09-15 al 2026-09-30 -- UN AÑO ENTERO -- con un unico
+-- `synced_at`. Si la vista devolviera solo el ultimo corte, el barrido la
+-- habria dejado en una quincena hace semanas. Y ha crecido, nunca encogido:
+-- 448 filas cuando se escribio su spec, 731, 738. Igual `loan_commission`:
+-- 361 -> 470.
+--
+-- ⚠ EL RIESGO QUE SI QUEDA, Y QUE NO SE ARREGLA AQUI. La guarda del job es
+-- `rows.length > 0`: protege de que el origen devuelva CERO, no de que
+-- devuelva POCO. Si algun dia la vista pasara a exponer solo el ultimo corte,
+-- devolveria 49 filas, la guarda no saltaria y el barrido borraria las otras
+-- 1.810 sin un solo error. Esto vale igual para las tres tablas de Compensafe
+-- y es anterior a esta; se deja escrito, no se cambia por cuenta propia.
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Y LA DECISION DE NO USAR ORDINAL: ACERTADA, PERO NO POR ESTO
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- ⚠ NO ES CIERTO QUE UN ROW_NUMBER() SE HUBIERA ROTO EN LA CARGA DE HOY. Las
+-- 49 filas nuevas son de un corte de pago NUEVO --el 30 de septiembre-- asi
+-- que caen en particiones que no existian y no tocan el orden de ninguna
+-- anterior. Decirlo de otra forma seria darle a la decision un merito que no
+-- tuvo.
+--
+-- LA RAZON DE VERDAD ES PEOR QUE ESA, Y NO DEPENDE DE SI LA CARGA ES
+-- INCREMENTAL: `ROW_NUMBER()` sobre una particion SIN un `ORDER BY`
+-- determinista no es estable ENTRE CORRIDAS NI CON LOS MISMOS DATOS. Como el
+-- job lee la vista entera cada vez, el ordinal se recalcularia en cada
+-- corrida, y nada en estos datos da un orden natural del que colgarlo. O sea
+-- que el riesgo no era de algun dia: era de todos los dias.
+--
+-- La clave de negocio no tiene ese problema: los seis campos valen lo mismo
+-- se lean cuando se lean.
+
+comment on column comp.payroll_transaction.txn_key is
+  'SHA256 (64 hex) de emp_no + pay_date + pay_type + loan_number + description + amount, calculado en la vista comp_marts.fct_payroll_transaction_v. ⚠ ES UN HASH, NO LA CONCATENACION: no se puede leer para saber de que fila es. Verificado sobre 1.859 filas: 1.859 claves distintas, 0 nulas, 0 vacias, 64 posiciones en todas. ⚠ SINTETICA PORQUE EL ORIGEN NO TRAE NINGUNA columna que sirva de clave -- ni transaction_id ni numero de linea. ⚠ SE CALCULA ARRIBA, EN LA VISTA, y no en el job: una clave calculada en el job existiria solo aqui --no se podria joinear desde BigQuery ni comprobar un invariante sobre ella-- y podria DIVERGIR DE SI MISMA, dejando las filas viejas con la clave vieja y el upsert insertando duplicados en vez de actualizar. ⚠ NO LLEVA ORDINAL: un ROW_NUMBER() sin ORDER BY determinista no es estable entre corridas ni con los mismos datos, y el job lee la vista entera cada vez. ⚠ Y NINGUNA COMBINACION MAS CORTA VALE: 77 de las 738 filas de comp.hours_logged vienen de dos lineas con el mismo emp_no, periodo y fecha --un pago y una recuperacion--, Jorge Zuzunaga tiene SEIS lineas el 2025-11-14, y comp.lead_source_check ya midio que un mismo prestamo puede tener dos pagos legitimos la misma fecha.';
+
+comment on column comp.payroll_transaction.synced_at is
+  'La marca de la corrida que escribio esta fila. ⚠ QUE TODA LA TABLA TENGA EL MISMO VALOR NO SIGNIFICA QUE EL ORIGEN SE RECARGUE ENTERO -- esa inferencia se hizo y era falsa. El job estampa la marca de la corrida en CADA fila que escribe (un DEFAULT now() no se dispararia en un UPDATE), asi que sale uniforme aunque Compensafe traiga una sola linea nueva. Y Compensafe SI carga incremental: el 2026-09-16 trajo 49 filas de un solo corte. Lo que hace que el espejo siga completo es que la VISTA acumula y el job la lee entera cada vez; el barrido borra lo que la vista no devolvio, no lo que el archivo de hoy no traia.';
