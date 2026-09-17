@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { MARGIN_ALL_GL_LIST } from "@/lib/loan-detail-accounts";
-import { CORPORATE_BRANCH, resolveLoanBranchAlias } from "@/lib/loan-branch";
+import {
+  CORPORATE_BRANCH,
+  resolveLoanBranchAlias,
+  entraEnLente,
+  esCosteAE,
+  type AffinityLens,
+} from "@/lib/loan-branch";
 import { closePeriod } from "@/lib/close-period";
 import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
@@ -434,6 +440,12 @@ export interface LoanRow {
   loan_amount: number | null;
   /** El nombre con el que el origen la escribe. "Affinity" es la 716. */
   branch_raw: string | null;
+  /**
+   * Si el prestamo es de Affinity. ⚠ MANDA SOBRE `branch_raw`: hay un cierre
+   * con branch_raw = "Affinity" y esto en false, y es 716 puro por decision.
+   * La regla y su porque, en `esDeAffinity` de lib/loan-branch.ts.
+   */
+  is_affinity: boolean | null;
   /** Para poder nombrar el prestamo en su tarjeta: un numero no dice de quien es. */
   borrower_name: string | null;
   /*
@@ -974,6 +986,18 @@ export interface LoPnlResult {
   officers: OfficerBlock[];
   /** Nomina que no se pudo atribuir a nadie. Nunca se reparte ni se oculta. */
   unattributed: { rows: PayrollRow[]; total: number };
+  /**
+   * El coste de los account executives de Affinity, sacado de la 716.
+   *
+   * ⚠ NO ESTA EN `unattributed` NI EN LA NOMINA DE NADIE, y esa exclusividad es
+   * la que impide contar 59.349,28 dos veces: la fila sale del bucle de
+   * emparejamiento antes de llegar a ninguno de los dos cubos.
+   */
+  affinityAeCost: {
+    people: { name: string; amount: number; rows: number }[];
+    total: number;
+    rows: number;
+  };
   collapsedPairs: CollapsedPair[];
   /** La misma persona enseñada como dos filas. Ver findSplitByShape. */
   splitByShape: SplitByShape[];
@@ -1057,6 +1081,18 @@ export async function GET(req: NextRequest) {
    * el el unico caso que enseña por que este modulo existe.
    */
   const branches = searchParams.getAll("branch").filter(Boolean);
+
+  /*
+   * La lente de Affinity. Por defecto "ambas", que es lo que la pantalla
+   * enseñaba antes de que existiera: sin el parametro, nada cambia.
+   *
+   * ⚠ UN VALOR DESCONOCIDO CAE EN "ambas", NO FALLA. Es la lente que MAS
+   * enseña: equivocarse hacia enseñar de mas es visible --sobran prestamos-- y
+   * equivocarse hacia enseñar de menos no lo es.
+   */
+  const lenteParam = searchParams.get("lens");
+  const lente: AffinityLens =
+    lenteParam === "affinity" || lenteParam === "716" ? lenteParam : "ambas";
 
   /*
    * ─────────────────────────────────────────────────────────────────────────
@@ -1185,6 +1221,7 @@ export async function GET(req: NextRequest) {
     processing: l.processing === true,
     support_on_demand: l.supportOnDemand === true,
     branch: l.branch,
+    is_affinity: l.isAffinity,
     loan_amount: l.loanAmount,
     month: cierreMes.get(l.loanNumber) ?? null,
     year: cierreAnio.get(l.loanNumber) ?? null,
@@ -1267,9 +1304,50 @@ export async function GET(req: NextRequest) {
   const nominaPorPersona = new Map<string, PayrollRow[]>();
   const nominaFragil = new Map<string, PayrollRow[]>();
   const sinAtribuir: PayrollRow[] = [];
+  /*
+   * ⚠ EL COSTE AE SALE DEL BUCLE ANTES QUE NADIE, Y ESO ES LO QUE IMPIDE QUE SE
+   * CUENTE DOS VECES.
+   *
+   * Si se quedara y ademas se sumara en la linea de Affinity, los 59.349,28
+   * apareceran en los dos sitios. Por eso el `continue`: una fila esta en la
+   * linea de Affinity O en el cubo de siempre, nunca en los dos.
+   *
+   * ⚠ Y HOY NO ESTAN DONDE PARECE. Medido antes de tocarlo: de las 27 filas,
+   * NINGUNA entra en la nomina contada de nadie, 8 salen como "weaker match"
+   * sin sumar, y el resto queda sin atribuir. El emparejador las lee
+   * truncadas --"AE SERVICES MAY - SHIRLEY MELISSA C"-- y saca de ahi una clave
+   * que no casa con nadie.
+   *
+   * O SEA QUE ESTO NO MUEVE UN COSTE DE UNA TARJETA A OTRA: SACA A LA LUZ
+   * 59.349,28 QUE HOY NO SE VEN EN NINGUNA. Quien revise esto no esta mirando
+   * un reparto, esta mirando una aparicion.
+   */
+  const costeAE: PayrollRow[] = [];
 
   for (const t of sinPrestamo) {
     const desc = (t.check_description as string) ?? "";
+    if (esCosteAE(t.gl_code as string | null, desc)) {
+      /*
+       * Solo la pata de la sucursal. La de la 700 es el traslado a corporativo
+       * y se queda donde esta: llevarsela tambien borraria el traslado en vez
+       * de reubicar el coste, y a nivel division dejarian de anularse.
+       */
+      if ((t.branch as string | null) !== CORPORATE_BRANCH) {
+        costeAE.push({
+          check_description: desc,
+          gl_code: t.gl_code as string | null,
+          gl_name: t.gl_name as string | null,
+          month: t.month as string | null,
+          year: t.year as number | null,
+          branch: (t.branch as string | null) ?? null,
+          amount: Number(t.movement ?? 0),
+          shape: "prefixed",
+          method: null,
+          truncated: true,
+        });
+      }
+      continue;
+    }
     const parsed = parseDescription(desc);
     if (parsed.shape === "none") continue; // alquiler, publicidad, sucursal
     const m = matchDescription(parsed, censo.people);
@@ -1375,11 +1453,37 @@ export async function GET(req: NextRequest) {
       censo.people,
     ).person;
 
+  /*
+   * ⚠ LA LENTE DE AFFINITY SE APLICA AQUI, AL ARMAR LOS CIERRES DE CADA
+   * PERSONA, Y NO EN LA VISTA.
+   *
+   * Todo lo que la pantalla dice de un officer --gross revenue, costes
+   * directos, contribucion, bps-- se calcula mas abajo a partir de ESTA lista.
+   * Filtrar en el cliente obligaria a rehacer la escalera alli, o sea una
+   * segunda definicion de "cuanto produce esta persona" separandose de la
+   * primera sin que nada falle. Es el mismo motivo por el que el modulo entero
+   * vive en una sola ruta.
+   *
+   * ⚠ Y NO TOCA A QUIEN SALE EN LA LISTA, solo a que prestamos se le cuentan.
+   * Un officer de la 716 sin ni un cierre de Affinity sigue apareciendo en la
+   * lente de Affinity, con sus cifras vacias: que alguien NO participe es
+   * informacion, y si solo salieran los que si, no habria forma de verlo.
+   */
   const porOficial = new Map<string, Record<string, unknown>[]>();
   for (const o of officials) {
     const n = (o.loan_officer as string)?.trim();
     if (!n) continue;
-    porOficial.set(n, [...(porOficial.get(n) ?? []), o]);
+    /*
+     * ⚠ LA PERSONA SE REGISTRA SIEMPRE, AUNQUE ESTE CIERRE NO ENTRE EN LA
+     * LENTE. Por eso el `set` de la clave va antes del filtro y no despues: si
+     * se saltara la fila entera, quien no tenga ni un cierre de Affinity
+     * desapareceria de la lista de Affinity, y eso es justo lo que no se
+     * quiere. Tiene que salir con sus cifras vacias.
+     */
+    const previas = porOficial.get(n) ?? [];
+    porOficial.set(n, entraEnLente(o.is_affinity as boolean | null, lente)
+      ? [...previas, o]
+      : previas);
   }
 
   /*
@@ -1547,6 +1651,7 @@ export async function GET(req: NextRequest) {
          */
         branch: sucursalPrestamo,
         branch_raw: (f.branch as string | null) ?? null,
+        is_affinity: (f.is_affinity as boolean | null) ?? null,
         borrower_name: f.borrower_name as string | null,
         loan_program: f.loan_program as string | null,
         lead_source: f.lead_source as string | null,
@@ -2032,6 +2137,65 @@ export async function GET(req: NextRequest) {
         ? sinAtribuir.filter((r) => r.branch != null && branches.includes(r.branch))
         : sinAtribuir;
       return { rows: filas, total: filas.reduce((s, r) => s + r.amount, 0) };
+    })(),
+    /*
+     * El coste de los account executives de Affinity, agrupado por persona.
+     *
+     * ⚠ SE AGRUPA POR EL NOMBRE NORMALIZADO, NO POR LA DESCRIPCION. El texto
+     * lleva el mes dentro, viene truncado a 35 caracteres y cambia de
+     * mayusculas, asi que por descripcion salen 28 lineas para SEIS personas.
+     * Es la misma normalizacion que ya hace falta en el bloque de nomina, y por
+     * la misma razon: la fuente escribe el mismo concepto de varias maneras.
+     */
+    affinityAeCost: (() => {
+      /*
+       * ⚠ NORMALIZAR MAYUSCULAS Y ESPACIOS NO BASTA, Y SE COMPROBO EJECUTANDO:
+       * salian DIECISIETE personas en vez de seis.
+       *
+       * La causa es que el truncado a 35 caracteres cae sobre la DESCRIPCION
+       * ENTERA, y el mes va dentro -- asi que el nombre se corta a distinta
+       * altura segun lo largo que sea el mes:
+       *
+       *     "AE SERVICES MAY - SHIRLEY MELISSA C"   -> shirley melissa c
+       *     "AE Services August - Shirley Meliss"   -> shirley meliss
+       *     "AE SERVICES JANUARY - SHIRLEY MELIS"   -> shirley melis
+       *
+       * Son la misma persona cortada en tres sitios. Por eso se unen POR
+       * PREFIJO: la grafia mas corta manda como clave y las mas largas caen en
+       * ella. Se enseña la MAS LARGA, que es la menos mutilada.
+       *
+       * ⚠ EL RIESGO DE UNIR POR PREFIJO ES REAL Y HAY QUE SABERLO: dos personas
+       * distintas cuyo nombre truncado empiece igual se fundirian en una. Aqui
+       * no pasa --son seis y se verificaron una a una-- pero el dia que entre
+       * alguien nuevo hay que volver a mirarlo. La causa de fondo es el truncado
+       * del origen, y se arregla alli, no aqui.
+       */
+      const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+      const crudos = costeAE.map((r) => ({
+        bruto: (r.check_description ?? "").split(" - ").slice(1).join(" - ").trim(),
+        amount: r.amount,
+      }));
+      const claves: string[] = [];
+      for (const n of [...new Set(crudos.map((c) => norm(c.bruto)))].sort((a, b) => a.length - b.length)) {
+        if (!claves.some((k) => n.startsWith(k))) claves.push(n);
+      }
+      const canonica = (s: string) => claves.find((k) => norm(s).startsWith(k)) ?? norm(s);
+
+      const porPersona = new Map<string, { name: string; amount: number; rows: number }>();
+      for (const c of crudos) {
+        const k = canonica(c.bruto);
+        const e = porPersona.get(k) ?? { name: c.bruto, amount: 0, rows: 0 };
+        e.amount += c.amount;
+        e.rows++;
+        // La grafia mas larga es la menos truncada, y es la que se enseña.
+        if (c.bruto.length > e.name.length) e.name = c.bruto;
+        porPersona.set(k, e);
+      }
+      return {
+        people: [...porPersona.values()].sort((a, b) => a.amount - b.amount),
+        total: costeAE.reduce((s, r) => s + r.amount, 0),
+        rows: costeAE.length,
+      };
     })(),
     collapsedPairs,
     splitByShape,

@@ -12,6 +12,7 @@ import {
   EXPLICACION,
   totalComparable,
 } from "@/lib/payroll-categories";
+import type { AffinityLens } from "@/lib/loan-branch";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
@@ -952,10 +953,11 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
  * en total que alguien cobro: esconderlas para que la resta quede limpia seria
  * cambiar una pregunta sin respuesta por una respuesta falsa.
  */
-function ComparacionNomina({ o, pagoPorProducir, localizada }: {
+function ComparacionNomina({ o, pagoPorProducir, localizada, lente }: {
   o: OfficerBlock;
   pagoPorProducir: number;
   localizada: boolean;
+  lente: AffinityLens;
 }) {
   const c = o.compensafe;
   const hayDesglose = Object.values(c).some((v) => v !== 0);
@@ -1037,6 +1039,31 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
         </span>
       </div>
 
+      {/*
+        * ⚠ LA SALVEDAD VA DEBAJO DEL DIFFERENCE, EN EL BLOQUE Y NO EN UN
+        * TOOLTIP, y con el desglose de arriba hace mas falta que antes: ahora
+        * son TRES lineas y solo UNA de ellas se reparte.
+        *
+        *     Commission on loans   se reparte -- comp.loan_commission tiene una
+        *                           fila por prestamo y cada prestamo sabe su
+        *                           bandera
+        *     Hourly wages          NO -- son de la persona, de una quincena, y
+        *     Earnings recapture    NO    ningun prestamo las reclama
+        *
+        * Asi que en una lente partida la suma de arriba lleva la comision de
+        * esa mitad y las horas ENTERAS, y se enfrenta a una cuenta contable que
+        * tambien es entera. La resta no significa lo que parece.
+        *
+        * ⚠ NO SE OCULTA EL BLOQUE. Esconderlo en dos de las tres vistas haria
+        * pensar que esa persona no tiene comparacion, y eso es peor que un
+        * numero con su salvedad escrita al lado.
+        */}
+      {lente !== "ambas" && (
+        <p className="mt-1.5 border-t border-dashed border-slate-300 pt-1 text-[10px] leading-snug text-amber-700">
+          Not split by Affinity &mdash; commission is per loan, payroll is per person.
+        </p>
+      )}
+
       {fuera.length > 0 && (
         <div className="mt-2 border-t border-dashed border-slate-300 pt-1.5">
           <p className="pb-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-400"
@@ -1055,7 +1082,7 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
   );
 }
 
-function TarjetaTotales({ o }: { o: OfficerBlock }) {
+function TarjetaTotales({ o, lente }: { o: OfficerBlock; lente: AffinityLens }) {
   /*
    * ─────────────────────────────────────────────────────────────────────────
    * ⚠ AQUI SE AGRUPA Y EN LA TARJETA DE UN PRESTAMO NO. PARECE UNA
@@ -1233,7 +1260,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
             * que --dos calendarios, y que la comision se paga POR la nomina--
             * vive en el boton de ayuda, que para eso esta.
             */}
-          <ComparacionNomina o={o} pagoPorProducir={pagoPorProducir} localizada={localizada} />
+          <ComparacionNomina o={o} pagoPorProducir={pagoPorProducir} localizada={localizada} lente={lente} />
         </>
       }
     />
@@ -1258,7 +1285,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
  * panel se abriria DEBAJO del modal que lo contiene -- invisible, y sin que
  * nada pareciera roto.
  */
-function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) {
+function PanelDetalle({ o, onClose, lente }: { o: OfficerBlock; onClose: () => void; lente: AffinityLens }) {
   const [ayuda, setAyuda] = useState(false);
 
   /*
@@ -1383,7 +1410,7 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
             * esto, asi que queda dicho.
             */}
           <div className="scrollbar-thin-slate -mx-1 flex max-w-full flex-row items-stretch gap-4 overflow-x-auto px-1 pb-4">
-            <TarjetaTotales o={o} />
+            <TarjetaTotales o={o} lente={lente} />
             {o.loans.map((l) => (
               <TarjetaPrestamo
                 key={l.loan_number}
@@ -1451,6 +1478,27 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
    * abrir agosto seria el mismo desajuste que el bug, con otra cara.
    */
   useEffect(() => { setPeriodo({ tipo: "mes" }); }, [mesInicial, anioInicial]);
+
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * LA LENTE DE AFFINITY, Y SOLO EN LA 716
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * ⚠ NO ES UN FILTRO DE PERSONAS, ES UNA LENTE SOBRE SUS PRESTAMOS. El roster
+   * no tiene una sucursal "Affinity": son gente de la 716, y Nathan Martinez
+   * tiene cierres de los dos tipos. Lo que cambia al elegir una lente es que
+   * prestamos se le cuentan a cada uno, no quien sale en la lista.
+   *
+   * ⚠ Y SOLO APARECE EN LA 716, porque solo ahi significa algo: en el resto de
+   * sucursales no hay ni un cierre con la bandera, asi que un selector de tres
+   * botones donde dos dan siempre lo mismo es ruido que invita a pulsarlo.
+   */
+  const hayAffinity = branch === "716";
+  const [lente, setLente] = useState<AffinityLens>("ambas");
+  /* Al cambiar de sucursal se vuelve a "ambas": quedarse en la lente de
+     Affinity al abrir otra sucursal enseñaria una vista vacia sin decir por
+     que, que es el mismo desajuste que el del mes heredado. */
+  useEffect(() => { setLente("ambas"); }, [branch]);
 
   /** Como se nombra el periodo en los avisos. Una sola frase para las tres. */
   const etiquetaPeriodo =
@@ -1529,7 +1577,10 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
         : periodo.tipo === "ytd" ? `ytd=1&month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`
         : `month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`;
       // La sucursal acota los CIERRES, no la nomina: ver la nota en la ruta.
-      const q = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
+      const conSucursal = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
+      /* La lente solo se manda cuando NO es "ambas": sin el parametro la ruta
+         se comporta como siempre, asi que las otras pantallas no cambian. */
+      const q = lente === "ambas" ? conSucursal : `${conSucursal}&lens=${lente}`;
       const res = await fetch(`/api/lo-pnl?${q}`);
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
@@ -1693,6 +1744,33 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                 </button>
               ))}
           </span>
+
+          {/*
+            * ⚠ SOLO EN LA 716, y el porque esta en la nota de `hayAffinity`.
+            * Es una lente sobre los prestamos de la misma gente, no un filtro
+            * de personas: por eso va junto al selector de periodo --que es la
+            * otra cosa que acota lo que se cuenta-- y no junto al de sucursal.
+            */}
+          {hayAffinity && (
+            <span className="ml-3 inline-flex overflow-hidden rounded-md border border-gray-200 text-[11px]">
+              {([
+                { v: "ambas", t: "716 + Affinity", h: "Every closing of these people, however it is flagged. This is what the screen showed before the split existed." },
+                { v: "716", t: "716 only", h: "Closings NOT flagged as Affinity. Includes loan 700002021363, whose branch reads 'Affinity' but whose flag is false — the flag decides, by decision." },
+                { v: "affinity", t: "Affinity", h: "Closings flagged is_affinity. Payroll is NOT split: it stays whole on 716 for everyone." },
+              ] as const).map((b, i) => (
+                <button
+                  key={b.v}
+                  onClick={() => setLente(b.v)}
+                  title={b.h}
+                  className={`${i > 0 ? "border-l border-gray-200 " : ""}px-3 py-1 ${
+                    lente === b.v ? "bg-violet-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  {b.t}
+                </button>
+              ))}
+            </span>
+          )}
         </div>
       </div>
 
@@ -2287,6 +2365,74 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                   </div>
                 )}
 
+                {/*
+                  * ⚠ EL COSTE DE LOS AE VA COMO LINEA DE SUCURSAL, NO REPARTIDO
+                  * ENTRE ESTAS SEIS PERSONAS COMO SI FUERAN LOAN OFFICERS.
+                  *
+                  * ⚠ Y NO ES QUE NO ESTEN EN EL ROSTER -- eso se escribio aqui y
+                  * era FALSO. Comprobado: tres de las seis si estan, y su cargo
+                  * es literalmente ACCOUNT EXECUTIVE:
+                  *
+                  *     Shirley Camargo      ACCOUNT EXECUTIVE TPO            716
+                  *     David Alvarez        ACCOUNT EXECUTIVE TPO TEAM LEAD  716
+                  *     Yelitza Cantillo     ACCOUNT EXECUTIVE TPO            760
+                  *
+                  * El motivo es mejor que el que se creia: NO SON PRODUCTORES.
+                  * Los tres salen con CERO cierres, y ponerlos en una tabla de
+                  * loan officers con cero produccion y cero contribucion los
+                  * leeria como gente que no rinde, cuando su trabajo es otro.
+                  *
+                  * ⚠ Y ES UNA CONFIRMACION DEL PATRON DESDE OTRA FUENTE: la
+                  * descripcion empieza por "AE" y el cargo del roster dice
+                  * ACCOUNT EXECUTIVE. Dos sistemas que no se hablan coinciden en
+                  * quienes son, asi que la regla por prefijo no esta pescando al
+                  * azar.
+                  *
+                  * ⚠ YELITZA ESTA EN LA 760, NO EN LA 716, y su coste se carga
+                  * igualmente a la 716. Se deja dicho sin afirmar que sea un
+                  * error: puede ser una AE de otra sucursal que trabaja para
+                  * Affinity, o puede ser un cargo mal puesto. Quien lo sepa es
+                  * RRHH, no esta pantalla.
+                  *
+                  * ⚠ Y NO ES UN REPARTO, ES UNA APARICION. Estas 27 filas HOY NO
+                  * SE VEN EN NINGUNA TARJETA: el emparejador las lee truncadas
+                  * --"AE SERVICES MAY - SHIRLEY MELISSA C"-- y ninguna entra en
+                  * la nomina contada de nadie. Asi que esto no mueve dinero de
+                  * un sitio a otro: saca a la luz 59.349,28 que no aparecian.
+                  */}
+                {hayAffinity && lente !== "716" && data.affinityAeCost.rows > 0 && (
+                  <div>
+                    <span className="font-semibold text-violet-700">
+                      Affinity account executives, charged to 716.
+                    </span>{" "}
+                    {data.affinityAeCost.rows} rows, {usdExacto(data.affinityAeCost.total)} across{" "}
+                    {data.affinityAeCost.people.length} people, in 60125 Operations Payroll. Taken by
+                    pattern — any description starting with &ldquo;AE&nbsp;&rdquo; in that account —
+                    not from a list of names, so somebody joining is picked up on their own.
+                    {" "}These are account executives, <span className="font-medium">not</span> loan
+                    officers &mdash; three of them carry the role &ldquo;Account Executive TPO&rdquo;
+                    in the roster, with zero closings &mdash; so their cost is not attributed to
+                    anyone in the table above.{" "}
+                    <span className="text-gray-500">
+                      Their counterpart in 700 is the transfer to corporate and stays there, so at
+                      division level the two cancel and only 716 carries the cost.
+                    </span>
+                    <ul className="mt-1 space-y-0.5 pl-3">
+                      {data.affinityAeCost.people.map((p) => (
+                        <li key={p.name} className="flex items-baseline gap-2">
+                          {/* El nombre viene truncado a 35 caracteres por el origen y
+                              se enseña tal cual: completarlo aqui seria inventarlo. */}
+                          <span className="truncate" title={`${p.rows} entries · the source truncates this name at 35 characters`}>
+                            {p.name}
+                          </span>
+                          <span aria-hidden className="min-w-0 flex-1 translate-y-[-3px] border-b border-dotted border-gray-300" />
+                          <span className="shrink-0 font-mono tabular-nums">{usdExacto(p.amount)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 {data.unattributed.rows.length > 0 && (
                   <div>
                     <span className="font-semibold text-gray-700">
@@ -2331,7 +2477,7 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
         * el periodo anterior con los controles diciendo otra cosa.
         */}
       {personaAbierta && (
-        <PanelDetalle o={personaAbierta} onClose={() => setAbierto(null)} />
+        <PanelDetalle o={personaAbierta} onClose={() => setAbierto(null)} lente={lente} />
       )}
     </div>
   );
