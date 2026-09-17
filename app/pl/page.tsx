@@ -694,6 +694,7 @@ export default function PLPage() {
           defaultLevels={levels}
           costCenterFilter={costCenterFilter}
           onDrillCell={(ref) => setPanel({ kind: "cell", ref })}
+          payrollBreakdown={loanMetrics.data?.payroll_breakdown ?? null}
           onOpenNotes={(ref) => setPanel({ kind: "notes", ref })}
           // No storageKey: nothing to persist when the hierarchy cannot change,
           // and it keeps a stale saved order from ever resurfacing here.

@@ -8,6 +8,8 @@ import {
   baseIsDivisionWide,
 } from "@/lib/loan-branch";
 import { getClosedLoans } from "@/lib/loan-source";
+import { categoriaDe } from "@/lib/payroll-categories";
+import { tieneDesgloseDeNomina, DESGLOSE_GL_CODE } from "@/lib/payroll-breakdown";
 
 export const dynamic = "force-dynamic";
 
@@ -224,6 +226,87 @@ async function comisionDe(loanNumbers: string[]) {
   };
 }
 
+/**
+ * Lo que el LIBRO dice de la cuenta, para poder enfrentarlo a Compensafe.
+ *
+ * ⚠ `loan_number is null`, igual que el resto de la nomina del modulo: las
+ * lineas de 60105 no cuelgan de ningun prestamo, y pedir las que si colgaran
+ * traeria otra cosa.
+ */
+async function cuenta60105De(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  branch: string,
+  years: number[],
+): Promise<number> {
+  let q = supabase
+    .from("pl_transactions")
+    .select("movement")
+    .eq("gl_code", DESGLOSE_GL_CODE)
+    .eq("branch", branch)
+    .is("loan_number", null);
+  if (years.length) q = q.in("year", years);
+  const { data, error } = await q;
+  if (error || !data) return 0;
+  return (data as { movement: number | null }[]).reduce((s, r) => s + Number(r.movement ?? 0), 0);
+}
+
+/**
+ * Los componentes de `60105 Loan Officer Payroll` segun Compensafe.
+ *
+ * ⚠ SE CLASIFICA CON EL MISMO `categoriaDe` QUE EL MODULO POR LOAN OFFICER, y
+ * eso incluye su orden: `is_recapture` va ANTES que `is_hourly`, porque las
+ * lineas de recuperacion de horas llevan las DOS banderas y al reves contarian
+ * como horas cobradas. Dos clasificadores darian dos desgloses de la misma
+ * cuenta en la misma app.
+ *
+ * ⚠ Y EL HUECO SE DEVUELVE, NO SE REPARTE. `unexplained` es la diferencia entre
+ * lo que dice el libro y lo que dice Compensafe; repartirla entre los tres
+ * componentes afirmaria que las dos fuentes cuadran.
+ */
+async function desgloseDeNomina(branch: string, cuentaDelLibro: number) {
+  const comp = createServerClient("comp");
+  const filas = await (async () => {
+    const out: Record<string, unknown>[] = [];
+    for (let i = 0; ; i += PAGE) {
+      const { data, error } = await comp
+        .from("payroll_transaction")
+        .select("pay_type,is_hourly,is_recapture,amount")
+        .eq("branch_code", branch)
+        .range(i, i + PAGE - 1);
+      if (error) return null;
+      out.push(...((data ?? []) as Record<string, unknown>[]));
+      if (!data || data.length < PAGE) break;
+    }
+    return out;
+  })();
+  // Que Compensafe falle no puede tumbar el panel: sin ella no hay desglose,
+  // que es lo que la pantalla ya sabe enseñar.
+  if (!filas) return null;
+
+  const suma = { commission: 0, hourly: 0, recapture: 0 };
+  for (const r of filas) {
+    const cat = categoriaDe({
+      pay_type: r.pay_type as string | null,
+      is_hourly: r.is_hourly as boolean | null,
+      is_recapture: r.is_recapture as boolean | null,
+    });
+    // Solo las tres que se contabilizan en esta cuenta. Bonus y sueldo van por
+    // 60303 y 60125, asi que entran en el desglose de las suyas, no en este.
+    if (cat === "commission") suma.commission += Number(r.amount ?? 0);
+    else if (cat === "hourly") suma.hourly += Number(r.amount ?? 0);
+    else if (cat === "recapture") suma.recapture += Number(r.amount ?? 0);
+  }
+  const total = suma.commission + suma.hourly + suma.recapture;
+  return {
+    account: cuentaDelLibro,
+    commission: suma.commission,
+    hourly: suma.hourly,
+    recapture: suma.recapture,
+    unexplained: -cuentaDelLibro - total,
+  };
+}
+
 /** Paged read of the loan numbers a P&L filter selects. */
 async function fetchLoanNumbers(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -358,6 +441,23 @@ export async function GET(req: NextRequest) {
         commission: await comisionDe(
           rows.filter((o) => inScope(o.branch!)).map((o) => o.loan_number),
         ),
+        /*
+         * El desglose de 60105, solo donde reconcilia. La lista de sucursales y
+         * el porque --y sobre todo el porque NO en las otras once-- viven en
+         * lib/payroll-breakdown.ts, no aqui.
+         */
+        /*
+         * ⚠ NULL CON LA LENTE DE AFFINITY, y no es un caso raro: con esa lente
+         * NO HAY NI UNA fila de 60105 en la rejilla --verificado ejecutando:
+         * 130 filas con "716 + Affinity", 130 con "716 only", CERO con
+         * "Affinity"-- porque la nomina no cuelga de ningun prestamo y solo las
+         * filas AE se identifican como de Affinity. Devolver el desglose ahi
+         * pintaria el detalle de una fila que no esta en la tabla.
+         */
+        payroll_breakdown:
+          tieneDesgloseDeNomina(branches) && lente !== "affinity"
+            ? await desgloseDeNomina(branches[0], await cuenta60105De(supabase, branches[0], years))
+            : null,
       });
     }
 

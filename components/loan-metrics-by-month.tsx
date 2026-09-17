@@ -40,6 +40,20 @@ export interface LoanMetricsData {
    * afirmando que esos costaron cero.
    */
   commission?: { total: number; loans: number; sin_comision: number };
+  /**
+   * El desglose de 60105 segun Compensafe, o null donde no reconcilia.
+   *
+   * ⚠ NULL NO ES CERO: significa que esta sucursal no se abre, porque el libro
+   * y Compensafe no cuadran ahi. Las once que no reconcilian y las seis sin la
+   * cuenta estan medidas en lib/payroll-breakdown.ts.
+   */
+  payroll_breakdown?: {
+    account: number;
+    commission: number;
+    hourly: number;
+    recapture: number;
+    unexplained: number;
+  } | null;
 }
 
 interface Props {

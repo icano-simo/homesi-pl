@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ArrowUpAZ, ArrowDownAZ, ChevronsUpDown } from "lucide-react";
+import { DESGLOSE_GL_CODE } from "@/lib/payroll-breakdown";
 import {
   ALL_FIELDS,
   FIELD_LABELS,
@@ -390,6 +391,8 @@ interface RenderCtx {
    * transaction rows: the breakdown happens in that window instead.
    */
   onDrillCell: ((ref: CellRef) => void) | null;
+  /** El desglose de 60105 segun Compensafe, o null donde no reconcilia. */
+  payrollBreakdown: { account: number; commission: number; hourly: number; recapture: number; unexplained: number } | null;
 }
 
 /**
@@ -642,6 +645,7 @@ export interface PivotTableDynamicProps {
    * instead.
    */
   onDrillCell?: (ref: CellRef) => void;
+  payrollBreakdown?: { account: number; commission: number; hourly: number; recapture: number; unexplained: number } | null;
   /** Opens the notes-only window. Reached from the dot, never from a figure. */
   onOpenNotes?: (ref: CellRef) => void;
   /**
@@ -764,7 +768,10 @@ function renderPivotNodes(
     const hasContent = node.children.length > 0 ||
       (node.txLeaves.length > 0 && !ctx.onDrillCell);
     const isDrillable = !!ctx.onDrillCell;
-    const canToggle  = hasContent || isOpNonOp;
+    /* La 60105 se puede abrir aunque no tenga hijos: sus "hijos" son el
+       desglose de Compensafe, que no sale de ninguna transaccion. */
+    const esDesglose = !!ctx.payrollBreakdown && node.field === "gl" && node.key === DESGLOSE_GL_CODE;
+    const canToggle  = hasContent || isOpNonOp || esDesglose;
 
     // Flat (no-level) case: render leaf rows directly without a group header
     if (node.key === "__flat__") {
@@ -948,6 +955,62 @@ function renderPivotNodes(
 
     if (!isOpen) continue;
 
+    /*
+     * ⚠ EL DESGLOSE DE 60105: FILAS QUE NO SALEN DE NINGUNA TRANSACCION.
+     *
+     * Son las unicas de toda la tabla que no vienen del libro, y por eso van
+     * DENTRO de la cuenta y no como hermanas suyas: no se añade nada al P&L,
+     * se abre lo que ya hay. Salen en gris y sin celdas por mes -- tres marcas
+     * de que son otra cosa.
+     *
+     * "sin explicar" es la diferencia entre lo que dice el libro y lo que dice
+     * Compensafe, y NO se reparte entre los otros tres: repartirla afirmaria
+     * que las dos fuentes cuadran, y lo que hacen es parecerse. Por eso se
+     * pinta como una linea mas, con su nombre.
+     *
+     * Donde se ofrece y donde no --y sobre todo POR QUE no en las otras once
+     * sucursales-- vive en lib/payroll-breakdown.ts.
+     */
+    if (esDesglose && ctx.payrollBreakdown) {
+      const b = ctx.payrollBreakdown;
+      const items: { label: string; amount: number; hueco?: boolean }[] = [
+        { label: "Commission", amount: b.commission },
+        { label: "Hourly wages", amount: b.hourly },
+        { label: "Earnings recapture", amount: b.recapture },
+        { label: "Unexplained", amount: b.unexplained, hueco: true },
+      ];
+      for (const it of items) {
+        rows.push(
+          <tr
+            key={`${nodeKey}|comp:${it.label}`}
+            className={`border-b ${homesi ? "border-slate-200/50" : "border-gray-50"}`}
+            style={homesi ? { backgroundColor: homesiRowBg(rows.length) } : undefined}
+          >
+            <td
+              style={{ ...firstColStyle, paddingLeft: (depth + 1) * 16 + 8, zIndex: 20 }}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1 pr-3 text-[11px] ${
+                it.hueco ? "text-[#FF4040]" : "text-slate-500"
+              } ${homesi ? stickyCol : ""}`}
+              title={
+                it.hueco
+                  ? "What the ledger says minus what Compensafe says. Shown as its own line and never spread across the other three — spreading it would claim the two sources agree."
+                  : "From Compensafe, not from the ledger. This account is being opened, not added to."
+              }
+            >
+              {it.label}
+              {!it.hueco && <span className="ml-1 text-slate-300">· Compensafe</span>}
+            </td>
+            {months.map((m) => <td key={m} />)}
+            <td className={`px-2 py-1 text-right font-mono text-[11px] tabular-nums ${
+              it.hueco ? "text-[#FF4040]" : "text-slate-500"
+            }`}>
+              {fmtM(it.amount)}
+            </td>
+          </tr>,
+        );
+      }
+    }
+
     // Recurse into children
     if (node.children.length > 0) {
       renderPivotNodes(node.children, depth + 1, rows, nodeKey, nodeTrail, ctx,
@@ -1094,6 +1157,7 @@ export function PivotTableDynamic({
   bpsBaseLabel,
   costCenterFilter,
   onDrillCell,
+  payrollBreakdown,
   onOpenNotes,
 }: PivotTableDynamicProps) {
   /**
@@ -1422,6 +1486,7 @@ export function PivotTableDynamic({
     exp,
     toggle,
     descSort,
+    payrollBreakdown: payrollBreakdown ?? null,
     notesOn: enableNotes,
     noteAny: noteIndex.any,
     noteDirect: noteIndex.direct,
