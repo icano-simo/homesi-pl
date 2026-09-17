@@ -4,7 +4,14 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
 import { LoanPnlCard, usdEntero } from "@/components/loan-pnl-card";
-import { PRODUCTION_PAY_GL_CODES } from "@/lib/loan-detail-accounts";
+import { PRODUCTION_PAY_GL_CODES, PRODUCTION_PAY_ACCOUNT_NAMES } from "@/lib/loan-detail-accounts";
+import {
+  EN_LA_COMPARACION,
+  FUERA_DE_LA_COMPARACION,
+  ETIQUETA,
+  EXPLICACION,
+  totalComparable,
+} from "@/lib/payroll-categories";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
@@ -409,6 +416,33 @@ function BloqueNomina({ rows, fragiles, volumen }: {
       </div>
     );
   }
+  /*
+   * ═════════════════════════════════════════════════════════════════════════
+   * ⚠ AQUI SE AGRUPA Y EN LAS TARJETAS DE PRESTAMO NO. PARECE UNA
+   * CONTRADICCION Y NO LO ES
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * Es el mismo criterio que rige el cuerpo de la escalera, y la razon es que
+   * una fila suelta NO SIGNIFICA LO MISMO en los dos sitios:
+   *
+   *   DENTRO DE UN PRESTAMO, cada fila dice algo. Dos apuntes de la misma
+   *   cuenta con signos opuestos son un traslado entre sucursales, y agrupados
+   *   desaparecen: el par +126/-126 se vuelve un cero que nadie puede
+   *   distinguir de "no hubo nada".
+   *
+   *   SUMANDO MESES Y APUNTES, una fila suelta no dice nada. "Telephone & VOIP
+   *   -22" repetido trece veces son trece meses del mismo Zoom, y leerlos uno a
+   *   uno no informa de nada que no diga "-276 en 13 apuntes". Lo que se pierde
+   *   al agrupar aqui es ruido; lo que se gana es poder leer la tarjeta.
+   *
+   * MEDIDO antes de decidirlo, sobre todos los periodos: de los 345 grupos por
+   * cuenta de este bloque, 11 tienen apuntes de los dos signos y NINGUNO suma
+   * cero. O sea que agrupar aqui no esconde ni un solo par que se anule -- por
+   * eso es seguro, y no porque se haya supuesto.
+   *
+   * ⚠ LA LISTA DE ATRIBUCION DEBIL DE ABAJO ES OTRA COSA Y SE AGRUPA DISTINTO.
+   * Ver su nota: ahi los pares que se anulan son 64.
+   */
   const porCuenta = new Map<string, { nombre: string; total: number; filas: number }>();
   for (const r of rows) {
     const k = r.gl_code ?? "—";
@@ -417,6 +451,50 @@ function BloqueNomina({ rows, fragiles, volumen }: {
     porCuenta.set(k, e);
   }
   const total = rows.reduce((s, r) => s + r.amount, 0);
+
+  /*
+   * ⚠ LOS FRAGILES SE AGRUPAN POR CUENTA, DESCRIPCION **Y SIGNO**, y el signo
+   * es lo unico que hace que esto se pueda agrupar sin romperlo.
+   *
+   * MEDIDO sobre todos los periodos: de los 453 grupos de cuenta+descripcion,
+   * 75 tienen apuntes de los dos signos y SESENTA Y CUATRO SUMAN CERO EXACTO.
+   * El par +126/-126 de Juseth Castro no era una rareza: es el patron de
+   * "Salesforce User for X", que se carga y se abona, y pasa en 64 personas.
+   *
+   * Agrupar sin el signo convertiria esos 64 en una linea de "0,00" --o en
+   * ninguna-- y un par que se anula seria indistinguible de una cifra a cero.
+   * Con el signo en la clave, un par sale SIEMPRE como dos lineas opuestas y
+   * nunca se puede colapsar en un cero. La agrupacion deja de poder mentir por
+   * construccion, en vez de por vigilancia.
+   *
+   * Y la descripcion entra en la clave porque es lo que distingue dos cosas que
+   * comparten cuenta: en Juseth, "ZOOMPLUS" y "SALESFORCE USER" son las dos
+   * Telephone & VOIP. Sin ella, sus -66 de Zoom se mezclarian con los -378 de
+   * Salesforce y el par dejaria de verse aunque el signo estuviera.
+   *
+   * ⚠ Y VA NORMALIZADA --minusculas y espacios colapsados-- PORQUE LA FUENTE
+   * ESCRIBE EL MISMO CONCEPTO DE DOS MANERAS. Quien vuelva a medir esto por la
+   * grafia cruda va a sacar otro numero y va a pensar que el codigo falla.
+   * Medido sobre las lineas de "Salesforce User" del libro mayor:
+   *
+   *     clave                        grupos   dos signos   suman cero
+   *     grafia exacta                   107          103          101
+   *     normalizada                      58           56           54
+   *
+   * Las dos cifras son correctas y miden claves distintas. Normalizar vuelve a
+   * casi la mitad las lineas de Salesforce, ADEMAS de lo que ya hace el signo,
+   * y no funde nada que deba quedar separado: lo unico que cambia entre las dos
+   * grafias son mayusculas y espacios, o sea la misma persona y el mismo
+   * concepto escritos dos veces.
+   */
+  const porFragil = new Map<string, { nombre: string; desc: string; total: number; filas: number }>();
+  for (const r of fragiles) {
+    const desc = r.check_description ?? "";
+    const k = `${r.gl_code ?? "—"}|${desc.trim().toLowerCase().replace(/\s+/g, " ")}|${r.amount < 0 ? "-" : "+"}`;
+    const e = porFragil.get(k) ?? { nombre: r.gl_name ?? r.gl_code ?? "—", desc, total: 0, filas: 0 };
+    e.total += r.amount; e.filas++;
+    porFragil.set(k, e);
+  }
 
   return (
     /*
@@ -434,8 +512,19 @@ function BloqueNomina({ rows, fragiles, volumen }: {
       <dl className="space-y-0.5 text-[11px]">
         {[...porCuenta.entries()].sort((a, b) => a[1].total - b[1].total).map(([gl, v]) => (
           <div key={gl} className="flex items-baseline gap-2">
-            {/* Sangrados: se leen como los sumandos del total de abajo. */}
-            <dt className="shrink-0 pl-2 text-gray-600">{v.nombre || gl}</dt>
+            {/* Sangrados: se leen como los sumandos del total de abajo.
+                ⚠ Y CON EL NUMERO DE APUNTES CUANDO HAY MAS DE UNO: sin el, una
+                cuenta de trece meses se lee igual que una de un apunte suelto,
+                y la cifra no dice que es una suma. */}
+            <dt className="shrink-0 pl-2 text-gray-600">
+              {v.nombre || gl}
+              {v.filas > 1 && (
+                <span className="ml-1 text-[9px] text-slate-400"
+                      title={`${v.filas} entries in this period, added together.`}>
+                  ×{v.filas}
+                </span>
+              )}
+            </dt>
             {/* La guia de puntos ata el nombre con su importe sin una regla ni
                 una columna: a este tamaño, una tabla de cuatro columnas para
                 dos datos pesa mas que el dato. */}
@@ -464,8 +553,15 @@ function BloqueNomina({ rows, fragiles, volumen }: {
          * "+ 2 not counted" al recortar texto, y eso perdio informacion: en
          * Juseth Castro son "Salesforce User for Castro, Juseth" por +126,00 y
          * -126,00 -- un par que se anula, y que sin verlo parece una sola cifra
-         * de 0,00 o ninguna. Es el mismo criterio de filas crudas que rige el
-         * desglose por cuenta.
+         * de 0,00 o ninguna.
+         *
+         * ⚠ AHORA SE AGRUPAN, PERO POR CUENTA + DESCRIPCION + SIGNO. Crudas
+         * eran ilegibles: Nathan Martinez sacaba DIECISEIS lineas, trece de
+         * ellas "Telephone & VOIP" a -22 y -20, que son trece meses del mismo
+         * Zoom y no trece cosas distintas. Con el signo en la clave un par que
+         * se anula no puede colapsar en un cero, asi que el caso de Juseth
+         * sigue saliendo como DOS lineas opuestas. La construccion de la clave
+         * y lo que se midio para elegirla estan arriba, en `porFragil`.
          *
          * ⚠ Y VAN FUERA DEL TOTAL A PROPOSITO. `SHAPES_IN_TOTAL` solo admite
          * "comma" y "email"; estas llegan por la forma "for" --"SALESFORCE USER
@@ -478,15 +574,32 @@ function BloqueNomina({ rows, fragiles, volumen }: {
             Not counted &middot; weaker match
           </p>
           <dl className="mt-0.5 space-y-0.5 text-[10px] text-slate-400">
-            {fragiles.map((r, i) => (
-              <div key={i} className="flex items-baseline gap-2">
-                <dt className="truncate pl-2" title={r.check_description}>
-                  {r.gl_name || r.gl_code}
+            {/* ⚠ ORDENADAS POR DESCRIPCION, NO POR IMPORTE, y es por el par que
+                se anula. Por importe, las dos mitades de un par --el -1.134 y
+                el +1.134 de Juseth Castro-- caen en los DOS EXTREMOS de la
+                lista, y con 19 lineas en la peor tarjeta nadie las lee como lo
+                que son. Juntas se ven de un vistazo. Este bloque es un
+                diagnostico, no un ranking: no hay nada que ordenar por tamaño. */}
+            {[...porFragil.entries()]
+              .sort((a, b) => a[1].desc.localeCompare(b[1].desc) || a[1].total - b[1].total)
+              .map(([k, v]) => (
+              <div key={k} className="flex items-baseline gap-2">
+                {/* ⚠ LA DESCRIPCION SE VE, no solo el nombre de la cuenta. Es lo
+                    que distingue dos grupos que comparten cuenta --"ZOOMPLUS" y
+                    "SALESFORCE USER" son los dos Telephone & VOIP-- y sin ella
+                    el par que se anula saldria como dos lineas con el MISMO
+                    rotulo y numeros opuestos, que se lee como un error. Y
+                    ademas es la evidencia del emparejamiento debil, que es de lo
+                    que va este bloque. */}
+                <dt className="min-w-0 truncate pl-2" title={`${v.desc} · ${v.filas} entr${v.filas === 1 ? "y" : "ies"}`}>
+                  {v.nombre}
+                  <span className="ml-1 text-slate-300">· {v.desc}</span>
+                  {v.filas > 1 && <span className="ml-1 text-slate-400">×{v.filas}</span>}
                 </dt>
                 <span aria-hidden className="min-w-0 flex-1 translate-y-[-3px] border-b border-dotted border-slate-200" />
                 <dd className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
-                  <span className="w-[4.5rem] text-right">{usdEntero(r.amount)}</span>
-                  <span className="w-[4rem] text-right">{enBps(r.amount)}</span>
+                  <span className="w-[4.5rem] text-right">{usdEntero(v.total)}</span>
+                  <span className="w-[4rem] text-right">{enBps(v.total)}</span>
                 </dd>
               </div>
             ))}
@@ -819,6 +932,129 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
  * persona-- va en `extra`, con el mismo formato de bloque que los peldaños. Si
  * eso la convierte en la mas alta de la fila, ese es el alto de todas.
  */
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LO QUE COMPENSAFE DICE QUE SE PAGO, CONTRA LO QUE EL P&L TIENE
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Antes eran dos lineas --comision y nomina de produccion-- y su diferencia.
+ * Cuando no cuadraban, que es casi siempre, la pantalla no daba ni una pista de
+ * por que. El caso que lo destapo: Jorge Zuzunaga tenia 22.361 en su cuenta
+ * contra 15.156 de comision, y los 7.205 que faltaban eran HORAS.
+ *
+ * ⚠ SOLO TRES CATEGORIAS SUMAN, y cuales y por que esta medido en
+ * `lib/payroll-categories.ts`. Resumen: override no aparece NUNCA en estas
+ * cuentas (0 de 51 personas), el bonus a veces si y a veces no (sumarlo acerca
+ * a 8 y aleja a 15), y el sueldo va por 60112 y 60126, que estas cuentas
+ * excluyen a proposito.
+ *
+ * ⚠ LAS OTRAS TRES SE VEN IGUAL, debajo y fuera de la suma. Son 1.087.597,92
+ * en total que alguien cobro: esconderlas para que la resta quede limpia seria
+ * cambiar una pregunta sin respuesta por una respuesta falsa.
+ */
+function ComparacionNomina({ o, pagoPorProducir, localizada }: {
+  o: OfficerBlock;
+  pagoPorProducir: number;
+  localizada: boolean;
+}) {
+  const c = o.compensafe;
+  const hayDesglose = Object.values(c).some((v) => v !== 0);
+  const dentro = EN_LA_COMPARACION.filter((k) => c[k] !== 0);
+  const fuera = FUERA_DE_LA_COMPARACION.filter((k) => c[k] !== 0);
+  const sumaCompensafe = totalComparable(c);
+
+  /*
+   * ⚠ LA ETIQUETA DICE LA CUENTA DE ESTA PERSONA, no "Loan officer payroll"
+   * para todo el mundo. Sin cuentas localizadas se queda el nombre generico,
+   * que es lo unico honesto: no hay ninguna que nombrar.
+   */
+  const cuentas = o.productionAccounts;
+  const etiquetaCuenta =
+    cuentas.length === 1
+      ? `${PRODUCTION_PAY_ACCOUNT_NAMES[cuentas[0]] ?? "Production payroll"} (${cuentas[0]})`
+      : cuentas.length > 1
+        ? `Production payroll (${cuentas.join(" + ")})`
+        : "Loan officer payroll";
+
+  /*
+   * ⚠ TENER NOMINA Y NO TENERLA EN ESTAS TRES CUENTAS NO ES CERO. Medido sobre
+   * 2026: de las 59 personas con desglose de Compensafe, CATORCE tienen nomina
+   * localizada en el P&L y NI UNA linea en 60105, 60115 o 60117 -- su dinero
+   * esta en 60118 (asistente del loan officer), 60112 y 60126 (sueldos), 60125,
+   * 62210, 64100. Claudia Velasco tiene 51 filas de nomina, Isa Vasquez 82.
+   *
+   * Pintarles un 0 diria que el P&L no tiene nada suyo, y tiene mucho: lo que
+   * no tiene es nada EN ESTAS CUENTAS. Con el 0 la diferencia salia igual a
+   * todo lo que Compensafe les pago --38.044 en Isa Vasquez-- y se leia como
+   * un descuadre enorme que no existe.
+   *
+   * Son un cuarto de las tarjetas con desglose, asi que no es un caso raro.
+   */
+  const sinCuentasDeProduccion = localizada && cuentas.length === 0;
+  const comparable = localizada && !sinCuentasDeProduccion;
+
+  return (
+    <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
+      {hayDesglose ? (
+        dentro.map((k) => (
+          <div key={k} className="flex items-baseline justify-between gap-2">
+            <span className="text-slate-600" title={EXPLICACION[k]}>{ETIQUETA[k]}</span>
+            <span className="font-mono tabular-nums text-slate-700">{usdEntero(c[k])}</span>
+          </div>
+        ))
+      ) : (
+        /* ⚠ AUSENCIA, NO CERO. Que Compensafe no tenga ni una linea de esta
+           persona en este periodo no significa que no cobrara: significa que no
+           lo sabemos por aqui. Un 0 en su sitio seria una afirmacion. */
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-slate-600">Commission on loans</span>
+          <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
+        </div>
+      )}
+
+      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
+        <span className="text-slate-600"
+              title="Only the accounts that pay for production: 60105 Loan Officer Payroll, 60115 BM Personal Production, 60117 Sales Manager Payroll. Taxes, insurance and equipment are the cost of employing the person, not money they receive.">
+          {etiquetaCuenta}
+        </span>
+        <span className="font-mono tabular-nums text-slate-700">
+          {comparable ? usdEntero(pagoPorProducir)
+            : sinCuentasDeProduccion
+              ? <span className="text-amber-600"
+                      title={`This person has payroll in the P&L — ${o.payroll.length} row${o.payroll.length === 1 ? "" : "s"} — but none of it in 60105, 60115 or 60117. Their pay is booked to other accounts, so there is nothing here to compare against. Zero would say the P&L has nothing of theirs, and it has plenty.`}>
+                  none in these accounts
+                </span>
+              : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
+        </span>
+      </div>
+
+      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
+        <span className="font-medium text-slate-600">Difference</span>
+        <span className="font-mono tabular-nums font-medium text-slate-700">
+          {comparable
+            ? usdEntero((hayDesglose ? sumaCompensafe : o.commission) - pagoPorProducir)
+            : "—"}
+        </span>
+      </div>
+
+      {fuera.length > 0 && (
+        <div className="mt-2 border-t border-dashed border-slate-300 pt-1.5">
+          <p className="pb-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-400"
+             title="Compensafe paid these, but they are not booked to the production accounts above, so they do not enter the subtraction.">
+            Paid, but not in these accounts
+          </p>
+          {fuera.map((k) => (
+            <div key={k} className="flex items-baseline justify-between gap-2">
+              <span className="text-slate-500" title={EXPLICACION[k]}>{ETIQUETA[k]}</span>
+              <span className="font-mono tabular-nums text-slate-500">{usdEntero(c[k])}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TarjetaTotales({ o }: { o: OfficerBlock }) {
   /*
    * ─────────────────────────────────────────────────────────────────────────
@@ -997,28 +1233,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
             * que --dos calendarios, y que la comision se paga POR la nomina--
             * vive en el boton de ayuda, que para eso esta.
             */}
-          <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-slate-600">Commission on loans</span>
-              <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-slate-600"
-                    title="Only the accounts that pay for production: 60105 Loan Officer Payroll, 60115 BM Personal Production, 60117 Sales Manager Payroll. Taxes, insurance and equipment are the cost of employing the person, not money they receive.">
-                Loan officer payroll
-              </span>
-              <span className="font-mono tabular-nums text-slate-700">
-                {localizada ? usdEntero(pagoPorProducir)
-                  : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
-              </span>
-            </div>
-            <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
-              <span className="font-medium text-slate-600">Difference</span>
-              <span className="font-mono tabular-nums font-medium text-slate-700">
-                {localizada ? usdEntero(o.commission - pagoPorProducir) : "—"}
-              </span>
-            </div>
-          </div>
+          <ComparacionNomina o={o} pagoPorProducir={pagoPorProducir} localizada={localizada} />
         </>
       }
     />
@@ -1048,27 +1263,33 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
 
   /*
    * ─────────────────────────────────────────────────────────────────────────
-   * PLEGADAS A PARTIR DE 15 CIERRES, ABIERTAS POR DEBAJO
+   * ⚠ TODAS ABIERTAS, SIEMPRE. NO HAY UMBRAL, Y NO SE VUELVE A PONER
    * ─────────────────────────────────────────────────────────────────────────
    *
-   * Medido en el peor caso, Nathan Martinez: 64 de sus 65 cierres tienen
-   * lineas, 840 filas de cuenta en total --13,9 de media y 28 en el peor
-   * prestamo--, o sea mas de mil filas apiladas de una vez.
+   * Aqui vivia `UMBRAL_PLEGADO = 15`: con mas de quince cierres, TODAS las
+   * tarjetas del panel arrancaban plegadas. Se retiro por decision del usuario
+   * --no quiere plegado-- y VOLVIO. En la vista YTD casi todo el mundo pasa de
+   * quince, asi que el efecto era que el panel salia entero oculto y habia que
+   * ir pulsando tarjeta por tarjeta. Se retira otra vez y queda escrito, para
+   * que la tercera no haga falta.
    *
-   * ⚠ PLEGAR AQUI NO ESCONDE NINGUNA CIFRA, y es lo que hace que esta sea la
-   * salida buena y no las otras dos. La cabecera de cada tarjeta lleva ya
-   * numero, prestatario, periodo, importe, bps y contribucion: lo unico que se
-   * pliega es el desglose por cuenta. Paginar o enseñar "los N mayores" SI
-   * esconderia dinero, y este modulo no puede hacer eso.
+   * SE CONSERVA EL PLEGADO MANUAL: `alternar` y el chevron de cada tarjeta
+   * siguen. Lo que desaparece es que alguien pliegue POR TI.
    *
-   * El umbral va por numero de cierres y no por filas porque es lo que el
-   * lector ve antes de abrir: con doce prestamos quiere el detalle, con sesenta
-   * y cinco quiere primero la lista.
+   * ⚠ Y EL MOTIVO POR EL QUE SE PUSO ERA REAL, asi que conviene saberlo antes
+   * de proponerlo de nuevo: medido en el peor caso, Nathan Martinez, 64 de sus
+   * 65 cierres tienen lineas y suman 840 filas de cuenta --13,9 de media, 28 en
+   * el peor prestamo--, o sea mas de mil filas apiladas de una vez. Eso es
+   * incomodo de recorrer, y sigue siendolo.
+   *
+   * Pero incomodo no es lo mismo que ilegible, y el usuario prefiere
+   * desplazarse a pulsar. Si algun dia se retoma, la salida NO es un umbral por
+   * numero de cierres: es que el plegado tenga memoria --recordar lo que cada
+   * uno abrio-- o que se pliegue solo el desglose por cuenta y no la tarjeta
+   * entera. Paginar o enseñar "los N mayores" queda descartado en cualquier
+   * caso: eso SI esconderia dinero, y este modulo no puede hacer eso.
    */
-  const UMBRAL_PLEGADO = 15;
-  const [plegadas, setPlegadas] = useState<Set<string>>(
-    () => new Set(o.loans.length > UMBRAL_PLEGADO ? o.loans.map((l) => l.loan_number) : []),
-  );
+  const [plegadas, setPlegadas] = useState<Set<string>>(() => new Set<string>());
   const alternar = (ln: string) =>
     setPlegadas((prev) => {
       const n = new Set(prev);

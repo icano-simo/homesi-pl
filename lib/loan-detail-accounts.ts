@@ -79,6 +79,26 @@ export const CORPORATE_MARGIN_ACCOUNTS = ["DM Margin", "RM Margin"] as const;
 export const PRODUCTION_PAY_GL_CODES: readonly string[] = ["60105", "60115", "60117"];
 
 /**
+ * Como se llama cada una, para poder nombrar LA DE CADA PERSONA.
+ *
+ * ⚠ EXISTE PORQUE LA ETIQUETA UNICA MENTIA. La pantalla llamaba "Loan officer
+ * payroll" a la suma de las tres, y a un producing branch manager --que cobra
+ * por 60115-- le estaba poniendo a su dinero el nombre de otro puesto.
+ *
+ * Medido el 2026-09-17 sobre las tres cuentas: de 90 descripciones, 88 tienen
+ * UNA sola cuenta, asi que en 88 casos de 90 esto es exacto y no aproximado.
+ * El unico caso real con dos es Galo Rizzo --producing BM, 60115 con 45.275,21
+ * y 60105 con 2.184,16-- y las dos son suyas, asi que se suman y se nombran
+ * las dos. (La otra "persona" con dos cuentas es la descripcion vacia, con
+ * 0,00 en las dos: ruido, no alguien.)
+ */
+export const PRODUCTION_PAY_ACCOUNT_NAMES: Record<string, string> = {
+  "60105": "Loan officer payroll",
+  "60115": "BM personal production",
+  "60117": "Sales manager payroll",
+};
+
+/**
  * ═══════════════════════════════════════════════════════════════════════════
  * EL ORDEN EN QUE SE LEEN LAS CUENTAS DE UN PRESTAMO, SIEMPRE EL MISMO
  * ═══════════════════════════════════════════════════════════════════════════
