@@ -4,7 +4,14 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "lucide-react";
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
 import { LoanPnlCard, usdEntero } from "@/components/loan-pnl-card";
-import { PRODUCTION_PAY_GL_CODES } from "@/lib/loan-detail-accounts";
+import { PRODUCTION_PAY_GL_CODES, PRODUCTION_PAY_ACCOUNT_NAMES } from "@/lib/loan-detail-accounts";
+import {
+  EN_LA_COMPARACION,
+  FUERA_DE_LA_COMPARACION,
+  ETIQUETA,
+  EXPLICACION,
+  totalComparable,
+} from "@/lib/payroll-categories";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
 /*
@@ -819,6 +826,129 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
  * persona-- va en `extra`, con el mismo formato de bloque que los peldaños. Si
  * eso la convierte en la mas alta de la fila, ese es el alto de todas.
  */
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LO QUE COMPENSAFE DICE QUE SE PAGO, CONTRA LO QUE EL P&L TIENE
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Antes eran dos lineas --comision y nomina de produccion-- y su diferencia.
+ * Cuando no cuadraban, que es casi siempre, la pantalla no daba ni una pista de
+ * por que. El caso que lo destapo: Jorge Zuzunaga tenia 22.361 en su cuenta
+ * contra 15.156 de comision, y los 7.205 que faltaban eran HORAS.
+ *
+ * ⚠ SOLO TRES CATEGORIAS SUMAN, y cuales y por que esta medido en
+ * `lib/payroll-categories.ts`. Resumen: override no aparece NUNCA en estas
+ * cuentas (0 de 51 personas), el bonus a veces si y a veces no (sumarlo acerca
+ * a 8 y aleja a 15), y el sueldo va por 60112 y 60126, que estas cuentas
+ * excluyen a proposito.
+ *
+ * ⚠ LAS OTRAS TRES SE VEN IGUAL, debajo y fuera de la suma. Son 1.087.597,92
+ * en total que alguien cobro: esconderlas para que la resta quede limpia seria
+ * cambiar una pregunta sin respuesta por una respuesta falsa.
+ */
+function ComparacionNomina({ o, pagoPorProducir, localizada }: {
+  o: OfficerBlock;
+  pagoPorProducir: number;
+  localizada: boolean;
+}) {
+  const c = o.compensafe;
+  const hayDesglose = Object.values(c).some((v) => v !== 0);
+  const dentro = EN_LA_COMPARACION.filter((k) => c[k] !== 0);
+  const fuera = FUERA_DE_LA_COMPARACION.filter((k) => c[k] !== 0);
+  const sumaCompensafe = totalComparable(c);
+
+  /*
+   * ⚠ LA ETIQUETA DICE LA CUENTA DE ESTA PERSONA, no "Loan officer payroll"
+   * para todo el mundo. Sin cuentas localizadas se queda el nombre generico,
+   * que es lo unico honesto: no hay ninguna que nombrar.
+   */
+  const cuentas = o.productionAccounts;
+  const etiquetaCuenta =
+    cuentas.length === 1
+      ? `${PRODUCTION_PAY_ACCOUNT_NAMES[cuentas[0]] ?? "Production payroll"} (${cuentas[0]})`
+      : cuentas.length > 1
+        ? `Production payroll (${cuentas.join(" + ")})`
+        : "Loan officer payroll";
+
+  /*
+   * ⚠ TENER NOMINA Y NO TENERLA EN ESTAS TRES CUENTAS NO ES CERO. Medido sobre
+   * 2026: de las 59 personas con desglose de Compensafe, CATORCE tienen nomina
+   * localizada en el P&L y NI UNA linea en 60105, 60115 o 60117 -- su dinero
+   * esta en 60118 (asistente del loan officer), 60112 y 60126 (sueldos), 60125,
+   * 62210, 64100. Claudia Velasco tiene 51 filas de nomina, Isa Vasquez 82.
+   *
+   * Pintarles un 0 diria que el P&L no tiene nada suyo, y tiene mucho: lo que
+   * no tiene es nada EN ESTAS CUENTAS. Con el 0 la diferencia salia igual a
+   * todo lo que Compensafe les pago --38.044 en Isa Vasquez-- y se leia como
+   * un descuadre enorme que no existe.
+   *
+   * Son un cuarto de las tarjetas con desglose, asi que no es un caso raro.
+   */
+  const sinCuentasDeProduccion = localizada && cuentas.length === 0;
+  const comparable = localizada && !sinCuentasDeProduccion;
+
+  return (
+    <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
+      {hayDesglose ? (
+        dentro.map((k) => (
+          <div key={k} className="flex items-baseline justify-between gap-2">
+            <span className="text-slate-600" title={EXPLICACION[k]}>{ETIQUETA[k]}</span>
+            <span className="font-mono tabular-nums text-slate-700">{usdEntero(c[k])}</span>
+          </div>
+        ))
+      ) : (
+        /* ⚠ AUSENCIA, NO CERO. Que Compensafe no tenga ni una linea de esta
+           persona en este periodo no significa que no cobrara: significa que no
+           lo sabemos por aqui. Un 0 en su sitio seria una afirmacion. */
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-slate-600">Commission on loans</span>
+          <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
+        </div>
+      )}
+
+      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
+        <span className="text-slate-600"
+              title="Only the accounts that pay for production: 60105 Loan Officer Payroll, 60115 BM Personal Production, 60117 Sales Manager Payroll. Taxes, insurance and equipment are the cost of employing the person, not money they receive.">
+          {etiquetaCuenta}
+        </span>
+        <span className="font-mono tabular-nums text-slate-700">
+          {comparable ? usdEntero(pagoPorProducir)
+            : sinCuentasDeProduccion
+              ? <span className="text-amber-600"
+                      title={`This person has payroll in the P&L — ${o.payroll.length} row${o.payroll.length === 1 ? "" : "s"} — but none of it in 60105, 60115 or 60117. Their pay is booked to other accounts, so there is nothing here to compare against. Zero would say the P&L has nothing of theirs, and it has plenty.`}>
+                  none in these accounts
+                </span>
+              : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
+        </span>
+      </div>
+
+      <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
+        <span className="font-medium text-slate-600">Difference</span>
+        <span className="font-mono tabular-nums font-medium text-slate-700">
+          {comparable
+            ? usdEntero((hayDesglose ? sumaCompensafe : o.commission) - pagoPorProducir)
+            : "—"}
+        </span>
+      </div>
+
+      {fuera.length > 0 && (
+        <div className="mt-2 border-t border-dashed border-slate-300 pt-1.5">
+          <p className="pb-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-400"
+             title="Compensafe paid these, but they are not booked to the production accounts above, so they do not enter the subtraction.">
+            Paid, but not in these accounts
+          </p>
+          {fuera.map((k) => (
+            <div key={k} className="flex items-baseline justify-between gap-2">
+              <span className="text-slate-500" title={EXPLICACION[k]}>{ETIQUETA[k]}</span>
+              <span className="font-mono tabular-nums text-slate-500">{usdEntero(c[k])}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TarjetaTotales({ o }: { o: OfficerBlock }) {
   /*
    * ─────────────────────────────────────────────────────────────────────────
@@ -997,28 +1127,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
             * que --dos calendarios, y que la comision se paga POR la nomina--
             * vive en el boton de ayuda, que para eso esta.
             */}
-          <div className="my-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-slate-600">Commission on loans</span>
-              <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-slate-600"
-                    title="Only the accounts that pay for production: 60105 Loan Officer Payroll, 60115 BM Personal Production, 60117 Sales Manager Payroll. Taxes, insurance and equipment are the cost of employing the person, not money they receive.">
-                Loan officer payroll
-              </span>
-              <span className="font-mono tabular-nums text-slate-700">
-                {localizada ? usdEntero(pagoPorProducir)
-                  : <span className="text-amber-600" title="No payroll row anywhere in the P&L carries this name. This is an absence, not a zero.">not located</span>}
-              </span>
-            </div>
-            <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
-              <span className="font-medium text-slate-600">Difference</span>
-              <span className="font-mono tabular-nums font-medium text-slate-700">
-                {localizada ? usdEntero(o.commission - pagoPorProducir) : "—"}
-              </span>
-            </div>
-          </div>
+          <ComparacionNomina o={o} pagoPorProducir={pagoPorProducir} localizada={localizada} />
         </>
       }
     />

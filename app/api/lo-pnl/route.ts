@@ -17,8 +17,61 @@ import {
   type KnownPerson,
   type MatchMethod,
 } from "@/lib/lo-payroll-name";
+import {
+  categoriaDe,
+  BREAKDOWN_CERO,
+  type PayrollBreakdown,
+} from "@/lib/payroll-categories";
+import { PRODUCTION_PAY_GL_CODES } from "@/lib/loan-detail-accounts";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * El periodo de la pantalla, como rango de fechas para `comp.payroll_transaction`.
+ *
+ * ⚠ HACE FALTA PORQUE ESTA TABLA GUARDA `pay_date` Y EL P&L GUARDA EL NOMBRE
+ * DEL MES. Los dos lados tienen que acotar el MISMO periodo o la comparacion
+ * enfrentaria el desglose de un mes contra la nomina de otro, y la diferencia
+ * no significaria nada.
+ *
+ * ⚠ MEDIO ABIERTO, [desde, hasta), igual que `rangoDelMes` en lib/loan-source:
+ * un pago del ultimo dia del mes a las 00:00 entra, y uno del primero del
+ * siguiente no. Con `<=` sobre el ultimo dia, un mes de 31 dias y otro de 30
+ * se comportarian distinto sin que nadie lo notara.
+ *
+ * Devuelve null cuando no hay año --la vista "todo"--, que significa sin
+ * filtro, no vacio.
+ */
+/**
+ * Las cuentas de produccion en que ESTA persona tiene nomina.
+ *
+ * Ordenadas y sin repetir, para que la etiqueta salga siempre igual: dos
+ * tarjetas de la misma persona en dos meses no pueden decir "60105 · 60115" y
+ * "60115 · 60105" segun el orden en que llegaron las filas.
+ */
+function cuentasDeProduccion(filas: { gl_code: string | null }[]): string[] {
+  return [
+    ...new Set(
+      filas
+        .map((r) => r.gl_code)
+        .filter((g): g is string => g != null && PRODUCTION_PAY_GL_CODES.includes(g)),
+    ),
+  ].sort();
+}
+
+function rangoDeNomina(meses: string[] | null, year: number | null) {
+  if (year == null) return null;
+  const idx = (m: string) => MESES_NOMBRE.indexOf(m);
+  const lista = (meses ?? MESES_NOMBRE).map(idx).filter((i) => i >= 0);
+  if (!lista.length) return null;
+  const primero = Math.min(...lista);
+  const ultimo = Math.max(...lista);
+  const dos = (n: number) => String(n).padStart(2, "0");
+  const desde = `${year}-${dos(primero + 1)}-01`;
+  const hasta =
+    ultimo === 11 ? `${year + 1}-01-01` : `${year}-${dos(ultimo + 2)}-01`;
+  return { desde, hasta };
+}
 
 /**
  * Los dos grupos contables que forman los dos primeros escalones.
@@ -855,6 +908,29 @@ export interface OfficerBlock {
   /** Filas suyas que venian truncadas, para poder decir cuanto se fia uno. */
   truncatedRows: number;
 
+  /**
+   * Lo que Compensafe dice que se le pago en el periodo, por categoria.
+   *
+   * ⚠ NO SE SUMA A `block2Total` NI AL TOTAL, y no es un olvido: `payroll` ya
+   * trae el coste de esta persona segun el P&L, que es el dinero que salio de
+   * verdad. Esto es la MISMA nomina contada por la otra fuente, para poder
+   * enfrentarlas; sumarlas contaria a todo el mundo dos veces.
+   *
+   * Todas las claves estan siempre, valgan cero. Sin Compensafe salen los seis
+   * ceros, que aqui es correcto: la comparacion se enseña solo si hay filas.
+   */
+  compensafe: PayrollBreakdown;
+  /**
+   * Las cuentas de produccion donde ESTA persona tiene nomina, de las tres.
+   *
+   * ⚠ EXISTE PARA QUE LA ETIQUETA NO MIENTA. Un producing branch manager cobra
+   * por 60115 y un sales manager por 60117; llamarle "Loan officer payroll" a
+   * su cifra es decirle que es otra cosa. Medido: de 90 personas en estas
+   * cuentas, 88 tienen UNA sola y 2 tienen dos --Galo Rizzo, producing BM, con
+   * 60115 y 60105, las dos suyas, que por eso se suman--.
+   */
+  productionAccounts: string[];
+
   // ── Total ──
   /** block1Net + block2Total. La comision NO entra: ver la nota de block1Net. */
   total: number;
@@ -1216,6 +1292,71 @@ export async function GET(req: NextRequest) {
     const destino = SHAPES_IN_TOTAL.includes(parsed.shape) ? nominaPorPersona : nominaFragil;
     const id = idDe(m.person);
     destino.set(id, [...(destino.get(id) ?? []), fila]);
+  }
+
+  /*
+   * ── 5b. El desglose de la nomina, de comp.payroll_transaction ────────────
+   *
+   * Lo mismo que la comision --puede faltar sin tumbar nada-- pero linea a
+   * linea y por categoria, que es lo que convierte "Loan officer payroll" de
+   * un total opaco en una cuenta que se puede leer.
+   *
+   * ⚠ ACOTADA AL MISMO PERIODO QUE TODO LO DEMAS, y aqui es por FECHA porque
+   * esta tabla guarda `pay_date` y no el nombre del mes. Si no se acotara, el
+   * desglose de un mes se compararia contra la nomina de ese mes y no
+   * cuadraria nunca por una razon que nadie podria ver en pantalla.
+   *
+   * ⚠ Y SE LEE SOLO ESTA TABLA, NUNCA JUNTO A `comp.hours_logged`. Las dos
+   * tienen las mismas lineas de horas --alli agrupadas por periodo, aqui
+   * sueltas-- y sumarlas contaria 1,24 millones dos veces. Verificado fila a
+   * fila el 2026-09-17: los 738 grupos de `is_hourly` de aqui son las 738
+   * filas de alli, 734 cruzan con lineas, pagado y recuperado identicos, cero
+   * discrepancias, y las 4 que no cruzan son las MISMAS cuatro por los dos
+   * lados --las del periodo nulo, que no casan porque NULL nunca es igual a
+   * NULL--. Son el mismo conjunto, no dos parecidos.
+   */
+  const desglosePorPersona = new Map<string, PayrollBreakdown>();
+  const desgloseSinAtribuir = BREAKDOWN_CERO();
+  try {
+    const comp = createServerClient("comp");
+    const rango = rangoDeNomina(meses ?? (month ? [month] : null), year);
+    const filas = await paginar<Record<string, unknown>>(() => {
+      let q = comp
+        .from("payroll_transaction")
+        .select("employee_in_file,person_name,pay_type,is_hourly,is_recapture,amount,pay_date");
+      if (rango) q = q.gte("pay_date", rango.desde).lt("pay_date", rango.hasta);
+      return q;
+    });
+    for (const r of filas) {
+      const cat = categoriaDe({
+        pay_type: r.pay_type as string | null,
+        is_hourly: r.is_hourly as boolean | null,
+        is_recapture: r.is_recapture as boolean | null,
+      });
+      const importe = Number(r.amount ?? 0);
+      /*
+       * ⚠ EL MISMO EMPAREJADOR QUE LA NOMINA DEL P&L, no uno nuevo. Es lo que
+       * hace que el desglose caiga sobre el MISMO `id` que las cuentas contra
+       * las que se compara; con dos emparejadores distintos la comparacion
+       * enfrentaria a dos personas parecidas y la diferencia no significaria
+       * nada. `employee_in_file` viene en "Apellido, Nombre", igual que
+       * `check_description` y que `lo_name`.
+       */
+      const parsed = parseDescription(
+        (r.employee_in_file as string | null) ?? (r.person_name as string | null),
+      );
+      const m = parsed.shape === "none" ? null : matchDescription(parsed, censo.people).person;
+      if (!m) {
+        desgloseSinAtribuir[cat] += importe;
+        continue;
+      }
+      const id = idDe(m);
+      const b = desglosePorPersona.get(id) ?? BREAKDOWN_CERO();
+      b[cat] += importe;
+      desglosePorPersona.set(id, b);
+    }
+  } catch (e) {
+    console.error("[lo-pnl] comp.payroll_transaction no disponible:", e);
   }
 
   // ── 6. Armar un bloque por loan officer ────────────────────────────────────
@@ -1640,6 +1781,8 @@ export async function GET(req: NextRequest) {
       block2FragileTotal,
       payrollStatus,
       truncatedRows: [...payroll, ...payrollFragile].filter((r) => r.truncated).length,
+      compensafe: desglosePorPersona.get(id) ?? BREAKDOWN_CERO(),
+      productionAccounts: cuentasDeProduccion(payroll),
       // block2Total ya viene con su signo del P&L (los costes son negativos), asi
       // que se SUMA. Restarlo invertiria el signo y daria un neto mejor que el
       // real, que es el unico error que este modulo no puede cometer.
@@ -1718,6 +1861,8 @@ export async function GET(req: NextRequest) {
       block2FragileTotal: fragil.reduce((s, r) => s + r.amount, 0),
       payrollStatus: "located",
       truncatedRows: [...filas, ...fragil].filter((r) => r.truncated).length,
+      compensafe: desglosePorPersona.get(id) ?? BREAKDOWN_CERO(),
+      productionAccounts: cuentasDeProduccion(filas),
       total: block2Total,
       commissionInPayroll: true,
       commissionOutsidePayroll: false,
