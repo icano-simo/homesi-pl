@@ -170,6 +170,137 @@ const BRANCH_ALIASES: Record<string, string> = {
  * asi: ver la nota de memoria del success fee antes de proponer tocar gl 70100.
  */
 
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * AFFINITY DENTRO DE LA 716: LA BANDERA MANDA, Y ES UNA DECISION
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * El P&L por Loan Officer separa los prestamos de Affinity de los puros de la
+ * 716. Quien decide cual es cual es `is_affinity`, NO `branch`.
+ *
+ * ⚠ ESO NO SE SIGUE DE LOS DATOS. SE MIDIO Y APUNTABA AL CONTRARIO. El
+ * 2026-09-17, sobre los 101 cierres que hoy cuentan como 716:
+ *
+ *     branch = 'Affinity'  ·  is_affinity = true    39 cierres
+ *     branch = 'Affinity'  ·  is_affinity = false    1 cierre    <- 700002021363
+ *     branch = '716'       ·  is_affinity = false   61 cierres
+ *
+ * Y las tres cosas que se miraron sobre ese unico prestamo discrepante
+ * --700002021363, de Nathan Martinez, 441.849-- decian que era de Affinity:
+ *
+ *   · NINGUN prestamo tiene is_affinity = true fuera de branch = 'Affinity',
+ *     asi que la bandera no añadia ninguna distincion que `branch` no diera.
+ *   · Su dinero se reparte entre la 716 y la 700 EXACTAMENTE como los otros 32:
+ *     la contabilidad no lo distingue de ninguna forma.
+ *   · Cerro en enero de 2026, en pleno rango de Affinity (dic-25 a jul-26), o
+ *     sea que tampoco es un corte temporal.
+ *
+ * ⚠ AUN ASI SE QUEDA EN LA 716, PORQUE EL USUARIO LO DECIDIO. Sabe algo del
+ * negocio que el dato no dice. Queda escrito para que nadie "arregle" la
+ * discrepancia mirando solo estas tres medidas -- que es exactamente lo que
+ * recomendaba quien escribio esto antes de preguntar.
+ *
+ * ⚠ Y ES SOLO PARA ESTA PANTALLA. `BRANCH_ALIASES` sigue mapeando "Affinity" a
+ * 716 para TODO lo demas de la app: en Loan Count, en el P&L por sucursal y en
+ * las bps, Affinity ES la 716 y no hay nada que separar. Lo que cambia aqui es
+ * que el P&L por Loan Officer puede MIRAR las dos mitades por separado.
+ */
+
+/** Las tres lentes del selector cuando la sucursal es la 716. */
+export type AffinityLens = "716" | "affinity" | "ambas";
+
+/**
+ * Si un cierre cuenta como Affinity.
+ *
+ * ⚠ SOLO `true` ES AFFINITY. `false` y `null` son 716 puro, y eso incluye el
+ * caso de `branch = 'Affinity'` con la bandera en false. No se mira `branch`
+ * aqui A PROPOSITO: mirarlo reintroduciria la discrepancia que la decision
+ * resuelve.
+ */
+export function esDeAffinity(isAffinity: boolean | null | undefined): boolean {
+  return isAffinity === true;
+}
+
+/*
+ * ⚠ LA BANDERA MANDA TAMBIEN SOBRE EL ESTADO DE CIERRE. Un prestamo con
+ * `is_affinity` es de Affinity este cerrado o no.
+ *
+ * Suena obvio y no lo es, porque la rejilla del P&L clasifica sus filas
+ * buscando el prestamo en la lista de CIERRES, y de ~190 prestamos Affinity
+ * abiertos hay CUATRO con filas ya contabilizadas en la 716:
+ *
+ *     -910,00  -200,00  -155,88  -77,94   =  -1.343,82
+ *
+ * Son costes cargados ANTES del cierre, que es justo lo que se espera de un
+ * prestamo en vuelo. Buscarlos solo entre los cerrados los dejaria en 716 puro
+ * y APARECERIAN EN AFFINITY EL DIA QUE CIERREN, sin que nada avise: alguien
+ * veria moverse 1.344 dolares de una lente a otra sin causa visible.
+ *
+ * Por eso quien clasifique filas del P&L tiene que mirar `is_affinity` en
+ * `loan_records_v2` SIN filtrar por `is_closed`. El filtro de cierres sirve
+ * para contar cierres, no para decidir de quien es una fila.
+ *
+ * ⚠ Y HAY UN TERCER GRUPO QUE NO SE PUEDE CLASIFICAR: 15 prestamos con filas en
+ * la 716 que NO ESTAN en `loan_records_v2` -- 32 filas, unos -2.896. No es que
+ * sean de la 716: es que no se sabe. Se quedan en 716 puro porque es donde ya
+ * estaban, y la pantalla LO DICE en vez de dejarlos pasar como propios.
+ */
+
+/** Si un cierre entra en la lente elegida. */
+export function entraEnLente(
+  isAffinity: boolean | null | undefined,
+  lente: AffinityLens,
+): boolean {
+  if (lente === "ambas") return true;
+  return esDeAffinity(isAffinity) === (lente === "affinity");
+}
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * EL COSTE "AE" DE AFFINITY: UNA REGLA POR PATRON, NO UNA LISTA DE NOMBRES
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Los account executives de Affinity se cargan en la 716 y se abonan en la
+ * 700, asi que a nivel division se anulan pero la 716 carga el coste. Medido el
+ * 2026-09-17:
+ *
+ *     en la 716    27 filas   -59.349,28
+ *     en la 700    27 filas   +59.349,28     <- el traslado a corporativo
+ *     de diciembre 2025 a agosto 2026
+ *
+ * Solo se mueve LA PATA DE LA 716. La de la 700 es el traslado y se queda donde
+ * esta: moverla tambien borraria el traslado en vez de reubicar el coste.
+ *
+ * ⚠ ES UN PATRON Y NO UNA LISTA DE SEIS NOMBRES, por decision del usuario y con
+ * razon: una lista se queda vieja en cuanto entra alguien y nadie se entera.
+ * Cualquier descripcion que empiece por "AE " en la 60125 entra sola.
+ *
+ * ⚠ VERIFICADO QUE NO PILLA DE MAS: no hay NI UNA fila que empiece por "AE "
+ * fuera de la 60125, y dentro de la 60125 son 27 de las 77 filas de la 716 --
+ * las otras 50 son nomina de operaciones normal y no se tocan.
+ *
+ * ⚠ Y SON SEIS PERSONAS, NO DIECINUEVE. El texto lleva el mes dentro
+ * --"AE SERVICES MAY - ..." contra "AE Services July - ..."--, viene TRUNCADO a
+ * 35 caracteres y cambia de mayusculas, asi que son 28 descripciones y 17
+ * grafias para seis personas. Contar descripciones da 19 y es la trampa:
+ *
+ *     SHIRLEY MELISSA C...   5 grafias   -22.659,24
+ *     ALFREDO ALBERTO P...   4           -18.405,12
+ *     DAVID JOSE ALVARE...   4           -15.300,42
+ *     YELITZA ZULE...        1            -1.756,03
+ *     MAYRA ALEJAND...       2            -1.228,47
+ *     JOSE ALEJAND...        1                 0,00   <- se anula solo
+ */
+export const AE_GL_CODE = "60125";
+
+/** Si una linea de nomina es coste de un account executive de Affinity. */
+export function esCosteAE(
+  glCode: string | null | undefined,
+  descripcion: string | null | undefined,
+): boolean {
+  return glCode === AE_GL_CODE && /^AE\s/i.test((descripcion ?? "").trim());
+}
+
 /** The corporate branch: centralized costs, division-wide loan volume. */
 export const CORPORATE_BRANCH = "700";
 
