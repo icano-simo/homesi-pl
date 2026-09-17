@@ -425,6 +425,18 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
                 }
                 month={data?.month ?? month}
                 year={data?.year ?? year}
+                /*
+                 * ⚠ SIN ESTO LA PESTAÑA SE QUEDA EN "ambas" Y NADIE SE ENTERA.
+                 * Falto en la primera version: el drawer recibia `lente` y no
+                 * se la pasaba, asi que con Affinity puesto esta pestaña seguia
+                 * enseñando los 15 officers de la 716 en vez de solo Nathan.
+                 *
+                 * Y NO LO CAZO EL COMPILADOR, que es lo que lo hizo durar: el
+                 * prop es opcional con defecto "ambas" --para que las pantallas
+                 * que no conocen la lente no cambien-- y ese mismo defecto
+                 * convierte olvidarlo en algo que compila y se ve razonable.
+                 */
+                lente={lente}
               />
             </div>
           )}
