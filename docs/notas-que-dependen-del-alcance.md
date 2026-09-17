@@ -1,5 +1,10 @@
 # Notas que dependen del alcance, y por eso caducan sin avisar
 
+> Compañero: [`el-agregado-no-verifica-las-partes.md`](./el-agregado-no-verifica-las-partes.md).
+> Aquí, mediciones que **caducan** al cambiar el alcance. Allí, mediciones que
+> **nunca fueron suficientes** aunque el número saliera bien — comprobar un
+> total no comprueba su reparto.
+
 Este proyecto mide antes de decidir y deja la medición escrita al lado del
 código. Eso funciona — hasta que alguien cambia **el alcance sobre el que se
 midió** y la nota se queda igual.
