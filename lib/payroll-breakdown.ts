@@ -108,22 +108,40 @@ export interface PayrollBreakdownRow {
 }
 
 /*
- * ⚠ LA LENTE DE AFFINITY NO PARTE ESTA CUENTA, Y NO PUEDE.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ⚠ LA LENTE DE AFFINITY NO PARTE ESTA CUENTA. NO ES EL CODIGO, ES EL DATO
+ * ═══════════════════════════════════════════════════════════════════════════
  *
  * Se pidio que con la lente de Affinity el componente "Commission" fuera la
- * comision de sus prestamos --20.863,79-- y eso NO PUEDE PASAR: con esa lente
- * no hay NI UNA fila de 60105 en la rejilla. Verificado ejecutando la ruta:
- * 130 filas con "716 + Affinity", 130 con "716 only", CERO con "Affinity".
+ * comision de sus prestamos --20.863,79-- y no se puede.
  *
- * Y no es un defecto: es consecuencia de una regla que ya estaba decidida. La
- * nomina de un loan officer se queda ENTERA en la 716 --solo la comision se
- * reparte por prestamo, y solo la nomina de los AE se mueve-- y la cuenta
- * 60105 ES esa nomina. Una fila de 60105 no cuelga de ningun prestamo, asi que
- * no hay nada que la haga de Affinity.
+ * LO QUE LO IMPIDE ES EL DATO, Y ESTA MEDIDO: las 130 filas de 60105 de la 716
+ * NO TIENEN `loan_number`. Ninguna. No es que el codigo no sepa repartirlas: es
+ * que no hay nada en el apunte que diga a que prestamo pertenece, asi que no
+ * existe un criterio con el que partirlas.
  *
- * O sea que el desglose vive donde la fila existe: "716 + Affinity" y
- * "716 only", con los mismos 130 apuntes y los mismos cuatro componentes.
+ * Y se ve en la rejilla: con "Affinity" salen CERO filas de 60105 --verificado
+ * ejecutando la ruta: 130 con "716 + Affinity", 130 con "716 only", 0 con
+ * "Affinity"-- porque `filaEsDeAffinity` solo reconoce lo que cuelga de un
+ * prestamo de Affinity o lo que es coste AE, y una fila de nomina no es
+ * ninguna de las dos.
  *
- * La comision de los prestamos de Affinity SI se ve, pero en el cierre de
- * debajo de la rejilla, que es donde vive lo que no es una cuenta del libro.
+ * ⚠ Y LA REGLA QUE LO ACOMPAÑA ES DEL USUARIO, NO UNA CONSECUENCIA TECNICA:
+ * la nomina de un loan officer SE QUEDA ENTERA EN LA 716. Solo la comision se
+ * reparte por prestamo --ahi si hay una fila por prestamo en
+ * comp.loan_commission-- y solo la nomina de los AE se mueve, porque se
+ * identifica por su descripcion. La cuenta 60105 ES esa nomina.
+ *
+ * ⚠ NO SE REVISITA. Partir 291.803,96 de nomina entre dos lineas de negocio sin
+ * un dato que lo respalde seria INVENTAR UN REPARTO, y un reparto inventado no
+ * se distingue de uno medido una vez esta en pantalla. Es la misma razon por la
+ * que la 776 no se mapea a una sucursal en lib/loan-branch.ts: elegir sobre una
+ * corazonada mueve dinero de un sitio a otro y nadie puede deshacerlo despues.
+ *
+ * QUE SE HACE EN SU LUGAR: el desglose vive donde la fila existe --"716 +
+ * Affinity" y "716 only", los mismos 130 apuntes-- y la ruta devuelve null con
+ * la lente de Affinity, en vez de pintar el detalle de una fila que no esta.
+ *
+ * La comision de los prestamos de Affinity SI se ve, en el cierre de debajo de
+ * la rejilla, que es donde vive lo que no es una cuenta del libro.
  */
