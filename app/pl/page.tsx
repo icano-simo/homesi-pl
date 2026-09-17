@@ -286,6 +286,35 @@ export default function PLPage() {
      * en la contabilidad, y por eso la fila lleva su origen en la
      * descripcion: quien intente cuadrar la pantalla contra el libro tiene
      * que poder ver cual es.
+     *
+     * ═════════════════════════════════════════════════════════════════════
+     * ⚠ Y LAS DOS LENTES YA NO SUMAN A "AMBAS". ES CORRECTO Y HAY QUE SABERLO
+     * ═════════════════════════════════════════════════════════════════════
+     *
+     *     Affinity            97.015,49
+     *     716 puro          -168.176,90
+     *     suma               -71.161,41
+     *     ambas              -50.297,62
+     *     diferencia         -20.863,79   <- la comision de Affinity
+     *
+     * Antes de esta fila las tres cuadraban al centimo --1.828 + 379 = 2.207
+     * filas, e importes que sumaban-- y esa propiedad se verifico y se
+     * anuncio. Ya no se cumple, y la diferencia es EXACTAMENTE la comision.
+     *
+     * LA RAZON, y es la que lo hace correcto: los 20.863,79 YA ESTAN en el
+     * libro, dentro de los 269.790,66 de comision que lleva la cuenta 60105
+     * --pero contabilizados en la 716, porque la nomina del loan officer se
+     * queda alli entera--. La lente de Affinity los enseña como fila propia
+     * porque en su vista no hay 60105; la de 716 los lleva dentro de esa
+     * cuenta sin poder separarlos. O sea que el mismo dinero se ve en las dos
+     * lentes, en sitios distintos, y por eso sumarlas lo cuenta dos veces.
+     *
+     * NO SE ARREGLA restandolo de la 716: exigiria partir las 130 filas de
+     * 60105 por prestamo y ninguna tiene loan_number.
+     *
+     * ⚠ LO QUE ESTO SIGNIFICA PARA QUIEN LEA LA PANTALLA: las tres lentes son
+     * TRES VISTAS, no tres trozos de una tarta. Cada una contesta bien su
+     * pregunta y no estan hechas para sumarse.
      */
     const c = loanMetrics.data?.commission;
     if (lente === "affinity" && c && c.total !== 0) {
