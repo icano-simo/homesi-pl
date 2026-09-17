@@ -416,6 +416,33 @@ function BloqueNomina({ rows, fragiles, volumen }: {
       </div>
     );
   }
+  /*
+   * ═════════════════════════════════════════════════════════════════════════
+   * ⚠ AQUI SE AGRUPA Y EN LAS TARJETAS DE PRESTAMO NO. PARECE UNA
+   * CONTRADICCION Y NO LO ES
+   * ═════════════════════════════════════════════════════════════════════════
+   *
+   * Es el mismo criterio que rige el cuerpo de la escalera, y la razon es que
+   * una fila suelta NO SIGNIFICA LO MISMO en los dos sitios:
+   *
+   *   DENTRO DE UN PRESTAMO, cada fila dice algo. Dos apuntes de la misma
+   *   cuenta con signos opuestos son un traslado entre sucursales, y agrupados
+   *   desaparecen: el par +126/-126 se vuelve un cero que nadie puede
+   *   distinguir de "no hubo nada".
+   *
+   *   SUMANDO MESES Y APUNTES, una fila suelta no dice nada. "Telephone & VOIP
+   *   -22" repetido trece veces son trece meses del mismo Zoom, y leerlos uno a
+   *   uno no informa de nada que no diga "-276 en 13 apuntes". Lo que se pierde
+   *   al agrupar aqui es ruido; lo que se gana es poder leer la tarjeta.
+   *
+   * MEDIDO antes de decidirlo, sobre todos los periodos: de los 345 grupos por
+   * cuenta de este bloque, 11 tienen apuntes de los dos signos y NINGUNO suma
+   * cero. O sea que agrupar aqui no esconde ni un solo par que se anule -- por
+   * eso es seguro, y no porque se haya supuesto.
+   *
+   * ⚠ LA LISTA DE ATRIBUCION DEBIL DE ABAJO ES OTRA COSA Y SE AGRUPA DISTINTO.
+   * Ver su nota: ahi los pares que se anulan son 64.
+   */
   const porCuenta = new Map<string, { nombre: string; total: number; filas: number }>();
   for (const r of rows) {
     const k = r.gl_code ?? "—";
@@ -424,6 +451,35 @@ function BloqueNomina({ rows, fragiles, volumen }: {
     porCuenta.set(k, e);
   }
   const total = rows.reduce((s, r) => s + r.amount, 0);
+
+  /*
+   * ⚠ LOS FRAGILES SE AGRUPAN POR CUENTA, DESCRIPCION **Y SIGNO**, y el signo
+   * es lo unico que hace que esto se pueda agrupar sin romperlo.
+   *
+   * MEDIDO sobre todos los periodos: de los 453 grupos de cuenta+descripcion,
+   * 75 tienen apuntes de los dos signos y SESENTA Y CUATRO SUMAN CERO EXACTO.
+   * El par +126/-126 de Juseth Castro no era una rareza: es el patron de
+   * "Salesforce User for X", que se carga y se abona, y pasa en 64 personas.
+   *
+   * Agrupar sin el signo convertiria esos 64 en una linea de "0,00" --o en
+   * ninguna-- y un par que se anula seria indistinguible de una cifra a cero.
+   * Con el signo en la clave, un par sale SIEMPRE como dos lineas opuestas y
+   * nunca se puede colapsar en un cero. La agrupacion deja de poder mentir por
+   * construccion, en vez de por vigilancia.
+   *
+   * Y la descripcion entra en la clave porque es lo que distingue dos cosas que
+   * comparten cuenta: en Juseth, "ZOOMPLUS" y "SALESFORCE USER" son las dos
+   * Telephone & VOIP. Sin ella, sus -66 de Zoom se mezclarian con los -378 de
+   * Salesforce y el par dejaria de verse aunque el signo estuviera.
+   */
+  const porFragil = new Map<string, { nombre: string; desc: string; total: number; filas: number }>();
+  for (const r of fragiles) {
+    const desc = r.check_description ?? "";
+    const k = `${r.gl_code ?? "—"}|${desc.trim().toLowerCase().replace(/\s+/g, " ")}|${r.amount < 0 ? "-" : "+"}`;
+    const e = porFragil.get(k) ?? { nombre: r.gl_name ?? r.gl_code ?? "—", desc, total: 0, filas: 0 };
+    e.total += r.amount; e.filas++;
+    porFragil.set(k, e);
+  }
 
   return (
     /*
@@ -441,8 +497,19 @@ function BloqueNomina({ rows, fragiles, volumen }: {
       <dl className="space-y-0.5 text-[11px]">
         {[...porCuenta.entries()].sort((a, b) => a[1].total - b[1].total).map(([gl, v]) => (
           <div key={gl} className="flex items-baseline gap-2">
-            {/* Sangrados: se leen como los sumandos del total de abajo. */}
-            <dt className="shrink-0 pl-2 text-gray-600">{v.nombre || gl}</dt>
+            {/* Sangrados: se leen como los sumandos del total de abajo.
+                ⚠ Y CON EL NUMERO DE APUNTES CUANDO HAY MAS DE UNO: sin el, una
+                cuenta de trece meses se lee igual que una de un apunte suelto,
+                y la cifra no dice que es una suma. */}
+            <dt className="shrink-0 pl-2 text-gray-600">
+              {v.nombre || gl}
+              {v.filas > 1 && (
+                <span className="ml-1 text-[9px] text-slate-400"
+                      title={`${v.filas} entries in this period, added together.`}>
+                  ×{v.filas}
+                </span>
+              )}
+            </dt>
             {/* La guia de puntos ata el nombre con su importe sin una regla ni
                 una columna: a este tamaño, una tabla de cuatro columnas para
                 dos datos pesa mas que el dato. */}
@@ -471,8 +538,15 @@ function BloqueNomina({ rows, fragiles, volumen }: {
          * "+ 2 not counted" al recortar texto, y eso perdio informacion: en
          * Juseth Castro son "Salesforce User for Castro, Juseth" por +126,00 y
          * -126,00 -- un par que se anula, y que sin verlo parece una sola cifra
-         * de 0,00 o ninguna. Es el mismo criterio de filas crudas que rige el
-         * desglose por cuenta.
+         * de 0,00 o ninguna.
+         *
+         * ⚠ AHORA SE AGRUPAN, PERO POR CUENTA + DESCRIPCION + SIGNO. Crudas
+         * eran ilegibles: Nathan Martinez sacaba DIECISEIS lineas, trece de
+         * ellas "Telephone & VOIP" a -22 y -20, que son trece meses del mismo
+         * Zoom y no trece cosas distintas. Con el signo en la clave un par que
+         * se anula no puede colapsar en un cero, asi que el caso de Juseth
+         * sigue saliendo como DOS lineas opuestas. La construccion de la clave
+         * y lo que se midio para elegirla estan arriba, en `porFragil`.
          *
          * ⚠ Y VAN FUERA DEL TOTAL A PROPOSITO. `SHAPES_IN_TOTAL` solo admite
          * "comma" y "email"; estas llegan por la forma "for" --"SALESFORCE USER
@@ -485,15 +559,32 @@ function BloqueNomina({ rows, fragiles, volumen }: {
             Not counted &middot; weaker match
           </p>
           <dl className="mt-0.5 space-y-0.5 text-[10px] text-slate-400">
-            {fragiles.map((r, i) => (
-              <div key={i} className="flex items-baseline gap-2">
-                <dt className="truncate pl-2" title={r.check_description}>
-                  {r.gl_name || r.gl_code}
+            {/* ⚠ ORDENADAS POR DESCRIPCION, NO POR IMPORTE, y es por el par que
+                se anula. Por importe, las dos mitades de un par --el -1.134 y
+                el +1.134 de Juseth Castro-- caen en los DOS EXTREMOS de la
+                lista, y con 19 lineas en la peor tarjeta nadie las lee como lo
+                que son. Juntas se ven de un vistazo. Este bloque es un
+                diagnostico, no un ranking: no hay nada que ordenar por tamaño. */}
+            {[...porFragil.entries()]
+              .sort((a, b) => a[1].desc.localeCompare(b[1].desc) || a[1].total - b[1].total)
+              .map(([k, v]) => (
+              <div key={k} className="flex items-baseline gap-2">
+                {/* ⚠ LA DESCRIPCION SE VE, no solo el nombre de la cuenta. Es lo
+                    que distingue dos grupos que comparten cuenta --"ZOOMPLUS" y
+                    "SALESFORCE USER" son los dos Telephone & VOIP-- y sin ella
+                    el par que se anula saldria como dos lineas con el MISMO
+                    rotulo y numeros opuestos, que se lee como un error. Y
+                    ademas es la evidencia del emparejamiento debil, que es de lo
+                    que va este bloque. */}
+                <dt className="min-w-0 truncate pl-2" title={`${v.desc} · ${v.filas} entr${v.filas === 1 ? "y" : "ies"}`}>
+                  {v.nombre}
+                  <span className="ml-1 text-slate-300">· {v.desc}</span>
+                  {v.filas > 1 && <span className="ml-1 text-slate-400">×{v.filas}</span>}
                 </dt>
                 <span aria-hidden className="min-w-0 flex-1 translate-y-[-3px] border-b border-dotted border-slate-200" />
                 <dd className="flex shrink-0 items-baseline gap-1.5 font-mono tabular-nums">
-                  <span className="w-[4.5rem] text-right">{usdEntero(r.amount)}</span>
-                  <span className="w-[4rem] text-right">{enBps(r.amount)}</span>
+                  <span className="w-[4.5rem] text-right">{usdEntero(v.total)}</span>
+                  <span className="w-[4rem] text-right">{enBps(v.total)}</span>
                 </dd>
               </div>
             ))}
