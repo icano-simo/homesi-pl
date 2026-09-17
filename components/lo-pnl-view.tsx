@@ -471,6 +471,21 @@ function BloqueNomina({ rows, fragiles, volumen }: {
    * comparten cuenta: en Juseth, "ZOOMPLUS" y "SALESFORCE USER" son las dos
    * Telephone & VOIP. Sin ella, sus -66 de Zoom se mezclarian con los -378 de
    * Salesforce y el par dejaria de verse aunque el signo estuviera.
+   *
+   * ⚠ Y VA NORMALIZADA --minusculas y espacios colapsados-- PORQUE LA FUENTE
+   * ESCRIBE EL MISMO CONCEPTO DE DOS MANERAS. Quien vuelva a medir esto por la
+   * grafia cruda va a sacar otro numero y va a pensar que el codigo falla.
+   * Medido sobre las lineas de "Salesforce User" del libro mayor:
+   *
+   *     clave                        grupos   dos signos   suman cero
+   *     grafia exacta                   107          103          101
+   *     normalizada                      58           56           54
+   *
+   * Las dos cifras son correctas y miden claves distintas. Normalizar vuelve a
+   * casi la mitad las lineas de Salesforce, ADEMAS de lo que ya hace el signo,
+   * y no funde nada que deba quedar separado: lo unico que cambia entre las dos
+   * grafias son mayusculas y espacios, o sea la misma persona y el mismo
+   * concepto escritos dos veces.
    */
   const porFragil = new Map<string, { nombre: string; desc: string; total: number; filas: number }>();
   for (const r of fragiles) {
