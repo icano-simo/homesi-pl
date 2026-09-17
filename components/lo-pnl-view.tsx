@@ -1263,27 +1263,33 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
 
   /*
    * ─────────────────────────────────────────────────────────────────────────
-   * PLEGADAS A PARTIR DE 15 CIERRES, ABIERTAS POR DEBAJO
+   * ⚠ TODAS ABIERTAS, SIEMPRE. NO HAY UMBRAL, Y NO SE VUELVE A PONER
    * ─────────────────────────────────────────────────────────────────────────
    *
-   * Medido en el peor caso, Nathan Martinez: 64 de sus 65 cierres tienen
-   * lineas, 840 filas de cuenta en total --13,9 de media y 28 en el peor
-   * prestamo--, o sea mas de mil filas apiladas de una vez.
+   * Aqui vivia `UMBRAL_PLEGADO = 15`: con mas de quince cierres, TODAS las
+   * tarjetas del panel arrancaban plegadas. Se retiro por decision del usuario
+   * --no quiere plegado-- y VOLVIO. En la vista YTD casi todo el mundo pasa de
+   * quince, asi que el efecto era que el panel salia entero oculto y habia que
+   * ir pulsando tarjeta por tarjeta. Se retira otra vez y queda escrito, para
+   * que la tercera no haga falta.
    *
-   * ⚠ PLEGAR AQUI NO ESCONDE NINGUNA CIFRA, y es lo que hace que esta sea la
-   * salida buena y no las otras dos. La cabecera de cada tarjeta lleva ya
-   * numero, prestatario, periodo, importe, bps y contribucion: lo unico que se
-   * pliega es el desglose por cuenta. Paginar o enseñar "los N mayores" SI
-   * esconderia dinero, y este modulo no puede hacer eso.
+   * SE CONSERVA EL PLEGADO MANUAL: `alternar` y el chevron de cada tarjeta
+   * siguen. Lo que desaparece es que alguien pliegue POR TI.
    *
-   * El umbral va por numero de cierres y no por filas porque es lo que el
-   * lector ve antes de abrir: con doce prestamos quiere el detalle, con sesenta
-   * y cinco quiere primero la lista.
+   * ⚠ Y EL MOTIVO POR EL QUE SE PUSO ERA REAL, asi que conviene saberlo antes
+   * de proponerlo de nuevo: medido en el peor caso, Nathan Martinez, 64 de sus
+   * 65 cierres tienen lineas y suman 840 filas de cuenta --13,9 de media, 28 en
+   * el peor prestamo--, o sea mas de mil filas apiladas de una vez. Eso es
+   * incomodo de recorrer, y sigue siendolo.
+   *
+   * Pero incomodo no es lo mismo que ilegible, y el usuario prefiere
+   * desplazarse a pulsar. Si algun dia se retoma, la salida NO es un umbral por
+   * numero de cierres: es que el plegado tenga memoria --recordar lo que cada
+   * uno abrio-- o que se pliegue solo el desglose por cuenta y no la tarjeta
+   * entera. Paginar o enseñar "los N mayores" queda descartado en cualquier
+   * caso: eso SI esconderia dinero, y este modulo no puede hacer eso.
    */
-  const UMBRAL_PLEGADO = 15;
-  const [plegadas, setPlegadas] = useState<Set<string>>(
-    () => new Set(o.loans.length > UMBRAL_PLEGADO ? o.loans.map((l) => l.loan_number) : []),
-  );
+  const [plegadas, setPlegadas] = useState<Set<string>>(() => new Set<string>());
   const alternar = (ln: string) =>
     setPlegadas((prev) => {
       const n = new Set(prev);
