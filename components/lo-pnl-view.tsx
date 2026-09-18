@@ -12,6 +12,7 @@ import {
   ETIQUETA,
   EXPLICACION,
   totalComparable,
+  veredictoDelBonus,
 } from "@/lib/payroll-categories";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
@@ -960,9 +961,27 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
 }) {
   const c = o.compensafe;
   const hayDesglose = Object.values(c).some((v) => v !== 0);
-  const dentro = EN_LA_COMPARACION.filter((k) => c[k] !== 0);
-  const fuera = FUERA_DE_LA_COMPARACION.filter((k) => c[k] !== 0);
-  const sumaCompensafe = totalComparable(c);
+
+  /*
+   * ⚠ EL BONO SE DECIDE POR PERSONA, no por la regla global. Medido: de 27
+   * personas con bonus, en 3 el total de sus cuentas de produccion cuadra al
+   * centimo CON el bono y en 2 cuadra SIN el. La regla y la medicion completa,
+   * en lib/payroll-categories.ts.
+   *
+   * Cuando se prueba que esta dentro, entra en la suma y la diferencia de esa
+   * persona se va a cero -- que es lo que era desde el principio.
+   */
+  const bonoDentro =
+    veredictoDelBonus(c, localizada ? pagoPorProducir : null) === "dentro";
+
+  const dentro = [
+    ...EN_LA_COMPARACION.filter((k) => c[k] !== 0),
+    ...(bonoDentro ? (["bonus"] as const) : []),
+  ];
+  const fuera = FUERA_DE_LA_COMPARACION.filter(
+    (k) => c[k] !== 0 && !(k === "bonus" && bonoDentro),
+  );
+  const sumaCompensafe = totalComparable(c) + (bonoDentro ? c.bonus : 0);
 
   /*
    * ⚠ LA ETIQUETA DICE LA CUENTA DE ESTA PERSONA, no "Loan officer payroll"
@@ -999,7 +1018,17 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
       {hayDesglose ? (
         dentro.map((k) => (
           <div key={k} className="flex items-baseline justify-between gap-2">
-            <span className="text-slate-600" title={EXPLICACION[k]}>{ETIQUETA[k]}</span>
+            <span
+              className="text-slate-600"
+              title={
+                k === "bonus"
+                  ? "Counted here for this person: the production accounts reconcile to the cent with the bonus and not without it, so this money is inside that account. The bonus is left out for everyone else, where that is not the case."
+                  : EXPLICACION[k]
+              }
+            >
+              {ETIQUETA[k]}
+              {k === "bonus" && <span className="text-slate-400"> · in the account below</span>}
+            </span>
             <span className="font-mono tabular-nums text-slate-700">{usdEntero(c[k])}</span>
           </div>
         ))
@@ -1040,9 +1069,16 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
 
       {fuera.length > 0 && (
         <div className="mt-2 border-t border-dashed border-slate-300 pt-1.5">
+          {/*
+            * ⚠ LA ETIQUETA YA NO AFIRMA DONDE NO ESTA ESE DINERO. Decia "Paid,
+            * but not in these accounts", que es una afirmacion sobre CADA caso
+            * y es falsa en algunos: el bono de Matthew Gomez Bruckner esta en
+            * 60105, al centimo. Lo que si es cierto de las tres categorias es
+            * que no entran en la resta, y eso es lo que dice ahora.
+            */}
           <p className="pb-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-400"
-             title="Compensafe paid these, but they are not booked to the production accounts above, so they do not enter the subtraction.">
-            Paid, but not in these accounts
+             title="Compensafe paid these in this period and they do not enter the subtraction above. Where it can be proven that a bonus is inside the production account, it is counted above instead of here.">
+            Paid, not included in this comparison
           </p>
           {fuera.map((k) => (
             <div key={k} className="flex items-baseline justify-between gap-2">

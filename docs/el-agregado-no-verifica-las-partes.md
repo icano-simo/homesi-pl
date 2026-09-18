@@ -69,6 +69,50 @@ ejecutarlo, porque se ejecutó con el corte equivocado.
 
 ---
 
+## La otra dirección: el agregado **impide** verificar la parte
+
+El caso de arriba es el agregado que *no basta* para verificar. Existe el
+simétrico, y apareció el 2026-09-18: el agregado que **hace imposible** ver la
+parte, de modo que no encontrarla no significa nada.
+
+**La pregunta:** ¿el bono de esta persona está dentro de su cuenta de producción?
+
+**La comprobación que parecía obvia** —y que hice primero— era buscar el importe
+exacto del bono entre las filas de `60105/60115/60117` de esa persona. Salió
+**1 dentro y 17 «no aparece»**.
+
+**Los 17 no estaban medidos.** Las filas del P&L son **agregados mensuales por
+persona**: un bono pagado en un mes que también tiene comisión viaja *dentro*
+del total de ese mes y no existe como fila propia. Buscar su importe sólo puede
+**probar presencia, nunca ausencia**.
+
+> ⚠ **El test asimétrico.** Cuando el dato está agregado por encima del grano de
+> la pregunta, encontrar algo es prueba y no encontrarlo no es nada. Un
+> resultado negativo de un test así no es un hallazgo: es la ausencia de
+> hallazgo, y escribirlo como «no está» lo convierte en una afirmación falsa.
+
+**Por qué los dos casos limpios se dejaron ver:** Matthew Gomez Bruckner y July
+Castro tienen **cero cierres**, así que su bono **es toda su nómina** y su fila
+del mes es el bono y nada más. No se vieron porque el test funcionara, sino
+porque en ellos el agregado y la parte coinciden.
+
+**Lo que sí decide**, y es lo que quedó en `lib/payroll-categories.ts`: la
+**reconciliación** del total. Si lo pagado en esas cuentas cuadra al céntimo
+*con* el bono, está dentro; si cuadra *sin* él, está fuera; y si no cuadra de
+ninguna de las dos, **no se sabe** — y entonces la pantalla no lo afirma. De 27
+personas: 3 dentro, 2 fuera, 15 indeterminadas, 7 sin cuentas.
+
+**Lo que costaba:** la etiqueta decía `PAID, BUT NOT IN THESE ACCOUNTS`, que es
+una afirmación sobre **cada** caso y era falsa en cuatro. Ahora dice
+`PAID, NOT INCLUDED IN THIS COMPARISON`, que es cierto siempre.
+
+**La regla que queda:** antes de escribir un test de ausencia, preguntar a qué
+grano está el dato. Si está por encima del grano de la pregunta, el test no
+puede contestarla en la dirección negativa — y el número que devuelve es
+plausible, alarmante y vacío a la vez.
+
+---
+
 ## Qué hacer
 
 1. **Comprobar el total Y su reparto.** Si la cifra se va a pintar por mes, por
@@ -81,6 +125,8 @@ ejecutarlo, porque se ejecutó con el corte equivocado.
    `?? null`, un valor sacado fuera del bucle: si un campo de una fila no
    depende de esa fila, casi siempre es el error.
 4. **Que el total siga cuadrando no es evidencia.** Es la condición mínima.
+5. **Antes de un test de ausencia, mirar el grano del dato.** Si está agregado
+   por encima de la pregunta, «no lo encuentro» no es un resultado.
 
 ---
 
