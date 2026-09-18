@@ -369,7 +369,13 @@ export default function PLPage() {
           branch: AFFINITY_HOST_BRANCH,
           // Sin gl_code: no es una cuenta del libro, y el hueco es la señal.
           gl_code: null,
-          gl_name: "LO commission · Compensafe",
+          /* ⚠ "by closing month" EN EL ROTULO, no en un tooltip. La tarjeta del
+             prestamo y esta fila dan cifras distintas para el mismo mes --500
+             contra 1.000 en julio-- porque cada una ordena por una fecha, y sin
+             decirlo parece que falta dinero. Son cuatro prestamos de 500: dos
+             cerraron en junio y se pagaron el 15 de julio, uno cerro y se pago
+             en julio, y otro cerro en julio y se pago el 14 de agosto. */
+          gl_name: "LO commission · Compensafe · by closing month",
           // En el grupo de 60105, que es donde alguien la busca.
           category_2: "Operating Income (Loss) Before BM Payroll",
           category_6: "Production Compensation",
@@ -436,7 +442,9 @@ export default function PLPage() {
           month: mes,
           branch: AFFINITY_HOST_BRANCH,
           gl_code: null,
-          gl_name: "less: commission on Affinity loans · Compensafe",
+          /* Esta va por fecha de PAGO, porque saca de una cuenta que el libro
+             contabiliza asi. Ver la nota de la ruta. */
+          gl_name: "less: commission on Affinity loans · Compensafe · by pay date",
           category_2: "Operating Income (Loss) Before BM Payroll",
           category_6: "Production Compensation",
           category_7: "Loan Officer Payroll",
@@ -787,12 +795,10 @@ export default function PLPage() {
             {hierarchyLabel({ shape, opNonOp })}
           </span>
         </div>
-        <p className="mt-0.5 text-sm text-slate-500">
-          Click a figure to open it one level down — a cost center into
-          categories, a category into accounts, an account into descriptions —
-          and to write a note about that cell or any row beneath it. Click the
-          dot beside a figure to read, edit and add notes on that same cell.
-        </p>
+        {/* La explicacion de como se navega la rejilla vivia aqui, en cuatro
+            lineas sobre la tabla. Se retira: quien usa esta pantalla ya lo
+            sabe, y quien no, lo descubre pulsando. Cuatro lineas de texto que
+            se leen una vez ocupan sitio todos los dias. */}
       </div>
 
       {/* Indicator legend — the two dot styles are not self-evident. */}

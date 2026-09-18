@@ -1008,7 +1008,7 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
            persona en este periodo no significa que no cobrara: significa que no
            lo sabemos por aqui. Un 0 en su sitio seria una afirmacion. */
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-slate-600">Commission on loans</span>
+          <span className="text-slate-600" title="By closing month — Compensafe groups commission by the date the loan closed. The P&L row for the same money goes by pay date, so the two can differ within a month.">Commission on loans <span className="text-slate-400">· by closing month</span></span>
           <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
         </div>
       )}
@@ -1530,6 +1530,21 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
     });
 
   const cargar = useCallback(async () => {
+    /*
+     * ⚠ SE BORRA EL DATO ANTERIOR AL EMPEZAR, y sin esto la pantalla MIENTE
+     * durante la peticion.
+     *
+     * `data` se quedaba con la respuesta vieja mientras llegaba la nueva, asi
+     * que al cambiar de mes, de sucursal o de lente esta vista pintaba las
+     * cifras del periodo ANTERIOR --con su rotulo nuevo encima-- y un segundo
+     * despues se corregia sola. Quien mirase en ese segundo leia numeros que
+     * no eran de lo que decia la cabecera.
+     *
+     * Con `null`, el estado intermedio es "cargando", que es lo que de verdad
+     * esta pasando. Una pantalla vacia un instante es peor de ver y mejor de
+     * creer que una llena de datos de otra cosa.
+     */
+    setData(null);
     setLoading(true); setError("");
     try {
       /* Un solo sitio construye el periodo, y cada opcion dice exactamente

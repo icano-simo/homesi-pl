@@ -112,7 +112,7 @@ export const FUERA_DE_LA_COMPARACION: readonly PayrollCategory[] = [
 ];
 
 export const ETIQUETA: Record<PayrollCategory, string> = {
-  commission: "Commission on loans",
+  commission: "Commission on loans · by closing month",
   hourly: "Hourly wages",
   recapture: "Earnings recapture",
   bonus: "Bonus",

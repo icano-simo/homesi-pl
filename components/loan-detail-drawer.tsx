@@ -31,6 +31,8 @@ interface LoanRow {
   branch: string;
   loan_program: string | null;
   loan_info_channel: string | null;
+  /** De Encompass, `lead_source` en loan_records_v2. */
+  lead_source: string | null;
   loan_amount: number;
   b2b: boolean;
   processing: boolean;
@@ -696,7 +698,7 @@ function MiniPL({ l }: { l: LoanRow }) {
       title={l.loan_number}
       tag={l.branch}
       subtitle={l.borrower_name}
-      meta={[l.loan_program, l.loan_info_channel, l.loan_officer].filter(Boolean).join(" · ") || null}
+      meta={[l.loan_program, l.lead_source, l.loan_info_channel, l.loan_officer].filter(Boolean).join(" · ") || null}
       amount={l.loan_amount}
       branch={l.branch}
       b2b={l.b2b}

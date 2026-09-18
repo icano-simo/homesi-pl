@@ -99,6 +99,8 @@ export interface LoanDetailRow {
   branch: string;
   loan_program: string | null;
   loan_info_channel: string | null;
+  /** De Encompass, `lead_source` en loan_records_v2. */
+  lead_source: string | null;
   loan_amount: number;
   b2b: boolean;
   processing: boolean;
@@ -211,6 +213,10 @@ export async function GET(req: NextRequest) {
       loan_amount: l.loanAmount,
       loan_program: l.loanProgram,
       loan_info_channel: l.loanChannel,
+      // De Encompass. Se enseña en la tarjeta junto al programa y al officer,
+      // igual que en el modulo por Loan Officer: la misma ficha en las dos
+      // pantallas, o son dos fichas del mismo prestamo.
+      lead_source: l.leadSource,
       b2b: l.b2bManual === true,
       processing: l.processing === true,
       support_on_demand: l.supportOnDemand === true,
@@ -494,6 +500,7 @@ export async function GET(req: NextRequest) {
         branch: l.branch!,
         loan_program: l.loan_program,
         loan_info_channel: l.loan_info_channel,
+        lead_source: l.lead_source,
         loan_amount: amount,
         b2b: !!l.b2b,
         processing: !!l.processing,
