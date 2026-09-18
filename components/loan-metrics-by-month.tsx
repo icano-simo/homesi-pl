@@ -252,15 +252,18 @@ function MonthCard({ month, m, mode, onOpen }: {
      * ⚠ DENSIDAD, NO MENOS INFORMACION. Estaban en 168px --212 en importes-- y
      * con siete meses ya pedian barra de desplazamiento, para un contenido que
      * es un mes, un numero, dos cifras y tres etiquetas. Bajan a 132/168 y se
-     * quitan cuatro cosas, ninguna de ellas un dato:
+     * quitan tres cosas, ninguna de ellas un dato:
      *
      *   · el relleno de 12px pasa a 8, y el vertical a 6
      *   · la palabra "total" al lado del numero, que no distingue nada: es el
      *     unico numero grande de la tarjeta
      *   · el numero baja de text-2xl a text-xl -- sigue siendo lo primero que
      *     se ve, que es todo lo que tenia que hacer
-     *   · las etiquetas pasan a `flex-nowrap` con su propio scroll, para que no
-     *     partan la tarjeta en dos filas cuando hay tres o mas
+     *
+     * ⚠ LO QUE SE REDUCE ES EL ANCHO, NO COMO SE REPARTE LO DE DENTRO. Hubo una
+     * cuarta "mejora" --las etiquetas en una sola fila con scroll propio-- y
+     * salio mal: ver la nota de ellas mas abajo. Las etiquetas se envuelven, en
+     * dos filas o en tres, y el alto que eso cueste lo comparten todas.
      *
      * El mes, el total, el desglose banked/brokered y las etiquetas siguen
      * todos. Y `shrink-0` se queda: sin el, flex comprime las tarjetas para que
@@ -300,9 +303,21 @@ function MonthCard({ month, m, mode, onOpen }: {
       </div>
 
       {hasTags && (
-        /* `flex-nowrap` con scroll propio: partirlas en dos filas es lo que
-           hacia alta la tarjeta, y son el dato menos consultado de las cuatro. */
-        <div className="scrollbar-thin-slate -mx-0.5 flex flex-nowrap gap-0.5 overflow-x-auto px-0.5">
+        /*
+         * ⚠ SE ENVUELVEN, Y NUNCA CON SCROLL PROPIO. Esto llego a ser
+         * `flex-nowrap` con `overflow-x-auto` para ahorrar alto, y fue peor:
+         * ponia UNA BARRA DENTRO DE CADA TARJETA. Una tira de siete tarjetas
+         * pasaba a tener ocho barras, y las etiquetas que no cabian quedaban
+         * escondidas detras de un gesto que nadie hace dentro de algo tan
+         * pequeño -- o sea que el dato dejaba de verse, que es lo contrario de
+         * compactar.
+         *
+         * Que ocupen dos filas, o tres si hacen falta. El alto crece un poco y
+         * lo comparten todas, asi que la tira se sigue leyendo en horizontal.
+         * Lo que habia que estrechar era el ANCHO de la tarjeta, no como se
+         * reparten las etiquetas dentro.
+         */
+        <div className="flex flex-wrap gap-0.5">
           {m.b2b > 0               && <MiniTag label="B2B"  v={m.b2b} />}
           {m.processing > 0        && <MiniTag label="Proc" v={m.processing} />}
           {m.support_on_demand > 0 && <MiniTag label="OD"   v={m.support_on_demand} />}
