@@ -20,6 +20,7 @@ import {
   PenLine,
   MessageSquare,
   UserCircle,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { useActiveBranches } from "@/components/branch-filter-provider";
@@ -40,6 +41,9 @@ const NAV_ITEMS: NavItem[] = [
   { label: "P&L", href: "/pl", icon: TrendingUp },
   { label: "Vendors", href: "/vendors", icon: Store },
   { label: "Offshore Allocations", href: "/offshore-allocations", icon: Globe },
+  // Quien trabaja aqui y donde. Sin importes: el coste de estas personas
+  // sigue viviendo en Offshore Allocations y en el P&L.
+  { label: "Roster", href: "/roster", icon: Users },
   { label: "Manual Entry", href: "/manual-entry", icon: PenLine },
   { label: "Loan Count", href: "/loan-count", icon: BookOpen },
   // Va detras de Loan Count porque lee de ahi: los cierres de cada persona son
