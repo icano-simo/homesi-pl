@@ -1,5 +1,6 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { sucursalDelArchivo } from "@/lib/roster-file";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,28 @@ export type OAGroupRow = {
   months: string[];
   category: string | null;
   position: string | null;
-  branch_allocation: string | null;
+  /**
+   * La sucursal que dice el ARCHIVO de offshore, no donde esta el apunte.
+   *
+   * ⚠ ES UNA LISTA Y ANTES ERA UN SOLO VALOR, "gana el primero". De las 70
+   * personas del roster offshore, 23 sirven a MAS DE UNA sucursal --Igleth
+   * Mercado a 700, 707 y 716--, asi que quedarse con la primera escondia las
+   * demas sin que nada fallara: la celda enseñaba un dato correcto y
+   * incompleto, que es peor que no enseñar nada.
+   *
+   * Normalizada: "Hired by Jim" y "Hired by for Jim" son Affinity, igual que en
+   * el modulo Roster. La regla vive en lib/roster-file.ts y es la misma.
+   *
+   * Vacia en 310 de las 981 filas --los vendors y las 15 de "Homesi ...
+   * payroll"--, que simplemente no la traen.
+   *
+   * ⚠ SE ENSEÑA Y NO REASIGNA NADA. Las 981 filas estan contabilizadas en la
+   * 700 y el archivo dice otra cosa en 204, por -317.770,35 en nueve
+   * sucursales. Que no se corrija es una DECISION, no un pendiente: el reparto
+   * medido y por que se dejo asi estan en
+   * docs/la-sucursal-del-archivo-no-reasigna.md.
+   */
+  branch_allocations: string[];
   cc_labels: string[];
   tx_count: number;
   tx_count_unassigned: number;
@@ -78,7 +100,7 @@ export async function GET(req: NextRequest) {
     months: Set<string>;
     category: string | null;
     position: string | null;
-    branch_allocation: string | null;
+    branch_allocations: Set<string>;
     cc_labels: Set<string>;
     tx_count: number;
     tx_count_unassigned: number;
@@ -147,7 +169,7 @@ export async function GET(req: NextRequest) {
         months: new Set(),
         category: null,
         position: null,
-        branch_allocation: null,
+        branch_allocations: new Set(),
         cc_labels: new Set(),
         tx_count: 0,
         tx_count_unassigned: 0,
@@ -160,7 +182,8 @@ export async function GET(req: NextRequest) {
     if (tx.month) row.months.add(tx.month);
     if (!row.category && tx.category) row.category = tx.category;
     if (!row.position && tx.position) row.position = tx.position;
-    if (!row.branch_allocation && tx.branch_allocation) row.branch_allocation = tx.branch_allocation;
+    const sucursalArchivo = sucursalDelArchivo(tx.branch_allocation);
+    if (sucursalArchivo) row.branch_allocations.add(sucursalArchivo);
     if (tx.cost_centers?.name) row.cc_labels.add(tx.cost_centers.name);
     if (blockType === "other" && row.raw_cd2s) {
       const label = cd2Raw || "(empty)";
@@ -183,7 +206,7 @@ export async function GET(req: NextRequest) {
         months:             MONTH_ORDER.filter((m) => r.months.has(m)),
         category:           r.category,
         position:           r.position,
-        branch_allocation:  r.branch_allocation,
+        branch_allocations: [...r.branch_allocations].sort(),
         cc_labels:          [...r.cc_labels].sort(),
         tx_count:           r.tx_count,
         tx_count_unassigned: r.tx_count_unassigned,
