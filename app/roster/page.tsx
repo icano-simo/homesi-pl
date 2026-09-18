@@ -74,6 +74,8 @@ export default function RosterPage() {
         position_in_file: p.positionInFile ?? "",
         in_hr_roster: p.inRoster ? "yes" : "no",
         in_offshore_file: p.inFile ? "yes" : "no",
+        status: p.status,
+        last_paid: p.lastPaid ?? "",
       })),
       [
         { key: "name", label: "Name" },
@@ -83,6 +85,8 @@ export default function RosterPage() {
         { key: "position_in_file", label: "Position in file" },
         { key: "in_hr_roster", label: "In HR roster" },
         { key: "in_offshore_file", label: "In offshore file" },
+        { key: "status", label: "Status" },
+        { key: "last_paid", label: "Last paid" },
       ],
     );
 
@@ -143,6 +147,29 @@ export default function RosterPage() {
         </span>
       </div>
 
+      {/*
+        * ⚠ EL ALCANCE DE LA MARCA, ESCRITO DONDE SE VE LA MARCA. Sin esta
+        * linea, 70 filas en gris se leen como "comprobado y sigue aqui", y lo
+        * que dicen es "aqui no hay forma de saberlo".
+        */}
+      {data && !loading && (
+        <p className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] leading-relaxed text-slate-600">
+          <span className="font-semibold text-[#001A40]">Who is still here comes from the payroll file, not from HR.</span>{" "}
+          Anyone in the offshore file who stopped appearing by{" "}
+          <span className="font-medium">{data.lastLoadedMonth ?? "the latest month"}</span> — the latest month loaded — is
+          marked <span className="font-semibold text-[#FF4040]">Left</span>, with the month they were last paid. That is{" "}
+          {data.counts.inactive} {data.counts.inactive === 1 ? "person" : "people"}.
+          <br />
+          <span className="text-slate-500">
+            The rule reaches offshore staff only. The other {data.counts.unknown}
+            {data.unknownUS > 0 && <> — including the {data.unknownUS} in the US</>} — are not in that file, so for them
+            there is <span className="font-medium">no data</span> either way. The HR roster is not a substitute: it lists{" "}
+            {data.hrRoster.active} of {data.hrRoster.total} people as active and has recorded{" "}
+            {data.hrRoster.withLeftDate === 0 ? "no departure at all" : `${data.hrRoster.withLeftDate} departures`}.
+          </span>
+        </p>
+      )}
+
       {data?.notes.map((n) => (
         <p key={n} className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
           {n}
@@ -162,14 +189,15 @@ export default function RosterPage() {
               <th className="px-3 py-2 font-semibold">Branch</th>
               <th className="px-3 py-2 font-semibold">Position</th>
               <th className="px-3 py-2 font-semibold">Source</th>
+              <th className="px-3 py-2 font-semibold">Status</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={4} className="px-3 py-6 text-center text-slate-400">Loading…</td></tr>
+              <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-400">Loading…</td></tr>
             )}
             {!loading && visibles.length === 0 && (
-              <tr><td colSpan={4} className="px-3 py-6 text-center text-slate-400">No one matches.</td></tr>
+              <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-400">No one matches.</td></tr>
             )}
             {!loading && visibles.map((p) => <Fila key={p.key} p={p} />)}
           </tbody>
@@ -237,6 +265,46 @@ function Fila({ p }: { p: RosterPerson }) {
           </span>
         )}
       </td>
+      <td className="px-3 py-1.5 whitespace-nowrap">
+        <Estado p={p} />
+      </td>
     </tr>
+  );
+}
+
+/**
+ * ⚠ TRES ESTADOS, NO DOS, y el tercero es el que hace util a la columna.
+ *
+ * "Sin dato" no es "activo". Son 70 personas --entre ellas las 68 de EE.UU.--
+ * que no salen en el archivo de nomina offshore, que es la unica fuente que
+ * sabe quien dejo de cobrar. Pintarlas activas diria que se comprobo, y no se
+ * ha comprobado nada: el roster de RR.HH. no registra ni una sola baja.
+ */
+function Estado({ p }: { p: RosterPerson }) {
+  if (p.status === "inactive") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-[#FF4040]/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#FF4040]"
+        title={`Stopped appearing in the offshore payroll file. Last paid ${p.lastPaid}. The HR roster still lists this person — it has never recorded anyone leaving.`}
+      >
+        Left · last paid {p.lastPaid}
+      </span>
+    );
+  }
+  if (p.status === "active") {
+    return (
+      <span className="text-[10px] uppercase tracking-wide text-emerald-700"
+            title={`Paid in ${p.lastPaid}, the latest month loaded.`}>
+        Paid {p.lastPaid}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-[10px] uppercase tracking-wide text-slate-400"
+      title="This person is not in the offshore payroll file, so the rule that detects leavers does not apply to them. This is an absence of data, not a statement that they are still here."
+    >
+      no data
+    </span>
   );
 }

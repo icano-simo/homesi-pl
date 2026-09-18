@@ -11,6 +11,22 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const MESES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
+
+/** year*100 + mes, para poder comparar periodos con un `<`. */
+function periodoDe(year: number | null, month: string | null): number | null {
+  if (year == null || !month) return null;
+  const i = MESES.indexOf(month);
+  return i < 0 ? null : year * 100 + i + 1;
+}
+
+function etiquetaDePeriodo(p: number): string {
+  return `${MESES[(p % 100) - 1]} ${Math.floor(p / 100)}`;
+}
+
 /**
  * ─────────────────────────────────────────────────────────────────────────────
  * UNA FILA POR PERSONA. SIEMPRE.
@@ -44,12 +60,61 @@ export interface RosterPerson {
   inRoster: boolean;
   inFile: boolean;
   country: string | null;
+
+  /**
+   * ⚠ QUIEN NO COBRA, NO ESTA -- Y EL ROSTER DE RR.HH. NO LO SABE.
+   *
+   * Medido el 2026-09-18: `org.roster_current` tiene 115 personas, 111
+   * marcadas activas y **CERO** con `left_detected_at`. Ninguna baja
+   * registrada, nunca. Mientras tanto el archivo de nomina enseña 16 que
+   * dejaron de cobrar, dos de ellas confirmadas por el usuario como salidas
+   * --John Bedoya y Walter Serrano--.
+   *
+   * Asi que el estado NO sale del roster: sale de si la persona aparece en el
+   * ultimo mes cargado del archivo. El hallazgo completo, las 16 y por que no
+   * son 18, en docs/el-roster-no-registra-bajas.md.
+   *
+   *   active     cobro en el ultimo mes cargado
+   *   inactive   esta en el archivo y dejo de aparecer. `lastPaid` dice cuando
+   *   unknown    no esta en el archivo, asi que esta regla no le aplica
+   *
+   * ⚠ "unknown" NO ES "active", y es la distincion que hace util a la columna.
+   * Son 70 personas, entre ellas las 68 de EE.UU., que no salen en el archivo
+   * de offshore y para las que NO HAY DATO de si siguen. Pintarlas activas
+   * diria que se comprobo, y no se ha comprobado nada.
+   */
+  status: "active" | "inactive" | "unknown";
+  /** El ultimo mes en que cobro, con nombre. Null si no esta en el archivo. */
+  lastPaid: string | null;
 }
 
 export interface RosterResult {
   people: RosterPerson[];
   branches: string[];
-  counts: { total: number; inBoth: number; onlyRoster: number; onlyFile: number };
+  counts: {
+    total: number; inBoth: number; onlyRoster: number; onlyFile: number;
+    inactive: number; unknown: number;
+  };
+  /**
+   * El ultimo mes cargado del archivo, DERIVADO DEL DATO.
+   *
+   * ⚠ NO SE ESCRIBE EN NINGUN SITIO. Es el maximo periodo que trae el archivo,
+   * asi que el dia que entre octubre la regla se mueve sola y nadie tiene que
+   * acordarse de tocar una constante. Una fecha a mano aqui seria una bomba de
+   * relojeria: seguiria dando por activos a los de septiembre para siempre.
+   */
+  lastLoadedMonth: string | null;
+  /**
+   * Lo que dice el roster de RR.HH. sobre si mismo.
+   *
+   * ⚠ SE DEVUELVE PARA QUE LA PANTALLA NO LO ESCRIBA A MANO. El hallazgo --111
+   * activas de 115 y CERO bajas registradas-- es la razon de que el estado
+   * salga de la nomina y no de aqui, y una frase con numeros fijos deja de ser
+   * cierta en cuanto RR.HH. toque algo, sin que nada avise.
+   */
+  hrRoster: { total: number; active: number; withLeftDate: number };
+  /** De los "unknown", cuantos son de EE.UU. Tambien derivado. */
+  unknownUS: number;
   /** Fuentes que no respondieron. Una lista vacia es lo normal. */
   notes: string[];
 }
@@ -67,11 +132,14 @@ export async function GET(req: NextRequest) {
    * por su columna `vendor`, y las 15 de "Homesi ... payroll" son nomina
    * agregada. El porque, en lib/roster-file.ts.
    */
-  const filas: { nombre: string; sucursal: string | null; cargo: string | null }[] = [];
+  const filas: {
+    nombre: string; sucursal: string | null; cargo: string | null;
+    periodo: number | null;
+  }[] = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await fd
       .from("pl_transactions")
-      .select("check_description_3,branch_allocation,position")
+      .select("check_description_3,branch_allocation,position,year,month")
       .eq("source", "offshore_allocations")
       .eq("check_description_2", GRUPO_ROSTER_EN_EL_ARCHIVO)
       .order("id", { ascending: true })
@@ -85,6 +153,7 @@ export async function GET(req: NextRequest) {
         nombre,
         sucursal: sucursalDelArchivo(r.branch_allocation),
         cargo: r.position,
+        periodo: periodoDe(r.year, r.month),
       });
     }
     if (data.length < 1000) break;
@@ -99,12 +168,13 @@ export async function GET(req: NextRequest) {
   type RosterRow = {
     person_code: string; display_name: string | null;
     branch_code: string | null; position: string | null; country: string | null;
+    is_active: boolean | null; left_detected_at: string | null;
   };
   let roster: RosterRow[] = [];
   try {
     const { data, error } = await org
       .from("roster_current")
-      .select("person_code,display_name,branch_code,position,country")
+      .select("person_code,display_name,branch_code,position,country,is_active,left_detected_at")
       .range(0, 999);
     if (error) throw new Error(error.message);
     roster = (data ?? []) as RosterRow[];
@@ -170,6 +240,8 @@ export async function GET(req: NextRequest) {
     name: string; personCode: string | null;
     branches: Set<string>; cargosArchivo: (string | null)[];
     inFile: boolean; inRoster: boolean;
+    /** El periodo mas alto en que esta persona aparece en el archivo. */
+    ultimoPeriodo: number | null;
   };
   const gente = new Map<string, Acc>();
 
@@ -180,11 +252,22 @@ export async function GET(req: NextRequest) {
       name: f.nombre, personCode: code,
       branches: new Set<string>(), cargosArchivo: [],
       inFile: true, inRoster: code != null,
+      ultimoPeriodo: null,
     };
     // El nombre mas largo del archivo, que es el que trae el segundo nombre.
     if (f.nombre.length > a.name.length) a.name = f.nombre;
     if (f.sucursal) a.branches.add(f.sucursal);
     a.cargosArchivo.push(f.cargo);
+    /*
+     * ⚠ SE ACUMULA POR PERSONA YA UNIFICADA, NO POR TEXTO. Es la diferencia
+     * entre 16 bajas y 17: "Jimena Ferrer Gutierrez" deja de aparecer en junio
+     * y "Jimena Ines Ferrer Gutierrez" cobra hasta septiembre. Son la misma
+     * persona --`jimena.ferrer`-- y NO es una baja. Comparando el texto crudo
+     * lo seria, y saldria en la lista con nombre y apellidos.
+     */
+    if (f.periodo != null && (a.ultimoPeriodo == null || f.periodo > a.ultimoPeriodo)) {
+      a.ultimoPeriodo = f.periodo;
+    }
     gente.set(key, a);
   }
 
@@ -197,8 +280,19 @@ export async function GET(req: NextRequest) {
       // Sin filas en el archivo, la sucursal es la del roster.
       branches: new Set(r.branch_code ? [r.branch_code.toUpperCase()] : []),
       cargosArchivo: [], inFile: false, inRoster: true,
+      ultimoPeriodo: null,
     });
   }
+
+  /*
+   * El ultimo mes cargado: el maximo del archivo, no una fecha escrita.
+   * Si el archivo estuviera vacio no hay regla que aplicar y todos quedan en
+   * "unknown", que es lo honesto: sin archivo no se sabe quien sigue.
+   */
+  const ultimoCargado = filas.reduce<number | null>(
+    (max, f) => (f.periodo != null && (max == null || f.periodo > max) ? f.periodo : max),
+    null,
+  );
 
   const porCodigo = new Map(roster.map((r) => [r.person_code, r]));
   const people: RosterPerson[] = [...gente.entries()].map(([key, a]) => {
@@ -220,6 +314,13 @@ export async function GET(req: NextRequest) {
       inRoster: a.inRoster,
       inFile: a.inFile,
       country: rr?.country ?? null,
+      status:
+        a.ultimoPeriodo == null || ultimoCargado == null
+          ? "unknown"
+          : a.ultimoPeriodo >= ultimoCargado
+            ? "active"
+            : "inactive",
+      lastPaid: a.ultimoPeriodo == null ? null : etiquetaDePeriodo(a.ultimoPeriodo),
     };
   });
 
@@ -253,7 +354,16 @@ export async function GET(req: NextRequest) {
       inBoth: visibles.filter((p) => p.inRoster && p.inFile).length,
       onlyRoster: visibles.filter((p) => p.inRoster && !p.inFile).length,
       onlyFile: visibles.filter((p) => !p.inRoster && p.inFile).length,
+      inactive: visibles.filter((p) => p.status === "inactive").length,
+      unknown: visibles.filter((p) => p.status === "unknown").length,
     },
+    lastLoadedMonth: ultimoCargado == null ? null : etiquetaDePeriodo(ultimoCargado),
+    hrRoster: {
+      total: roster.length,
+      active: roster.filter((r) => r.is_active).length,
+      withLeftDate: roster.filter((r) => r.left_detected_at != null).length,
+    },
+    unknownUS: visibles.filter((p) => p.status === "unknown" && p.country === "US").length,
     notes,
   };
   return NextResponse.json(res);
