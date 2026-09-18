@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
-import { normalizeLoanBranch, resolveBaseBranches } from "@/lib/loan-branch";
+import { normalizeLoanBranch, resolveBaseBranches, prestamoEntraEnLente, type AffinityLens } from "@/lib/loan-branch";
 import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   ALL_MARGIN_ACCOUNTS,
@@ -99,6 +99,8 @@ export interface LoanDetailRow {
   branch: string;
   loan_program: string | null;
   loan_info_channel: string | null;
+  /** De Encompass, `lead_source` en loan_records_v2. */
+  lead_source: string | null;
   loan_amount: number;
   b2b: boolean;
   processing: boolean;
@@ -160,6 +162,13 @@ export async function GET(req: NextRequest) {
   const year     = Number(sp.get("year"));
   const branches = sp.getAll("branch");
   const sources  = sp.getAll("source");
+  /*
+   * La lente de Affinity. Sin el parametro, "ambas": el resto de la app no
+   * cambia. Se aplica sobre los CIERRES, que es de donde salen las tarjetas.
+   */
+  const lenteParam = sp.get("lens");
+  const lente: AffinityLens =
+    lenteParam === "affinity" || lenteParam === "716" ? lenteParam : "ambas";
 
   if (!month || !year) {
     return NextResponse.json({ error: "month and year are required" }, { status: 400 });
@@ -194,7 +203,9 @@ export async function GET(req: NextRequest) {
      * conserva las mismas claves para que nada de lo que sigue --el filtro de
      * canal, normalizeLoanBranch, los conceptos-- tenga que cambiar.
      */
-    const rawLoans = (await getClosedLoans({ month, year })).map((l) => ({
+    const rawLoans = (await getClosedLoans({ month, year }))
+      .filter((l) => prestamoEntraEnLente(l.branch, l.isAffinity, lente))
+      .map((l) => ({
       loan_number: l.loanNumber,
       borrower_name: l.borrowerName,
       loan_officer: l.loanOfficer,
@@ -202,6 +213,10 @@ export async function GET(req: NextRequest) {
       loan_amount: l.loanAmount,
       loan_program: l.loanProgram,
       loan_info_channel: l.loanChannel,
+      // De Encompass. Se enseña en la tarjeta junto al programa y al officer,
+      // igual que en el modulo por Loan Officer: la misma ficha en las dos
+      // pantallas, o son dos fichas del mismo prestamo.
+      lead_source: l.leadSource,
       b2b: l.b2bManual === true,
       processing: l.processing === true,
       support_on_demand: l.supportOnDemand === true,
@@ -485,6 +500,7 @@ export async function GET(req: NextRequest) {
         branch: l.branch!,
         loan_program: l.loan_program,
         loan_info_channel: l.loan_info_channel,
+        lead_source: l.lead_source,
         loan_amount: amount,
         b2b: !!l.b2b,
         processing: !!l.processing,

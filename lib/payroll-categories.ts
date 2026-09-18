@@ -112,7 +112,7 @@ export const FUERA_DE_LA_COMPARACION: readonly PayrollCategory[] = [
 ];
 
 export const ETIQUETA: Record<PayrollCategory, string> = {
-  commission: "Commission on loans",
+  commission: "Commission on loans · by closing month",
   hourly: "Hourly wages",
   recapture: "Earnings recapture",
   bonus: "Bonus",
@@ -138,6 +138,70 @@ export const EXPLICACION: Record<PayrollCategory, string> = {
 /** La suma que se enfrenta al P&L. Solo las tres de arriba. */
 export function totalComparable(b: PayrollBreakdown): number {
   return EN_LA_COMPARACION.reduce((s, c) => s + b[c], 0);
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ¿EL BONO DE **ESTA** PERSONA ESTA DENTRO DE SUS CUENTAS DE PRODUCCION?
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * La exclusion del bonus de la suma es una decision AGREGADA y sigue siendo
+ * buena. Pero la pantalla la contaba como si fuera una afirmacion sobre cada
+ * caso --"Paid, but not in these accounts"-- y eso es FALSO en algunos.
+ *
+ * Lo destapo Matthew Gomez Bruckner: su unica linea de Compensafe es un bono de
+ * 3.530,80 y el P&L tiene -3.530,80 en 60105 con su nombre. El mismo dinero al
+ * centimo. La tarjeta decia que no estaba en esa cuenta, que la diferencia era
+ * -3.531, y las dos cosas eran mentira: la diferencia es cero.
+ *
+ * ── MEDIDO el 2026-09-18, año 2026, las 27 personas con bonus ───────────────
+ *
+ *     casa CON el bono, al centimo        3   Matthew Gomez Bruckner,
+ *                                             Aileen Perez, Susan Aguilar
+ *     casa SIN el bono, al centimo        2   Daniella Ottone, Kelvin Flores
+ *     no casa de ninguna de las dos      15
+ *     sin cuentas de produccion           7
+ *
+ * A VECES SI Y A VECES NO, asi que la marca se decide POR PERSONA. Con una
+ * regla global cualquiera de las dos direcciones miente en unos cuantos.
+ *
+ * ⚠ EL TEST DEL IMPORTE EXACTO NO SIRVE PARA ESTO, y esa fue mi primera
+ * version. El fenomeno tiene nombre y documento: la otra direccion de
+ * `docs/el-agregado-no-verifica-las-partes.md` -- ahi el agregado no basta para
+ * verificar la parte, aqui IMPIDE verla.
+ *
+ * Buscar el importe del bono entre las filas de 60105/60115/60117
+ * PRUEBA PRESENCIA PERO NUNCA AUSENCIA: las filas del P&L son agregados
+ * mensuales, asi que un bono pagado en un mes con comision viaja DENTRO del
+ * total del mes y no aparece como fila propia. Matthew se deja ver justamente
+ * porque tiene CERO cierres y su fila de agosto es el bono y nada mas. Buscando
+ * el importe salian 1 dentro y 17 "no aparece"; de esos 17, ninguno estaba
+ * medido -- solo no era visible.
+ *
+ * Lo que si decide es la reconciliacion: si el total pagado en esas cuentas
+ * cuadra al centimo CON el bono, esta dentro; si cuadra SIN el, esta fuera; y
+ * si no cuadra de ninguna, no se sabe -- y entonces la pantalla no lo afirma.
+ */
+export type VeredictoBonus = "dentro" | "fuera" | "indeterminado";
+
+const CENTIMOS = (n: number) => Math.round(n * 100);
+
+/**
+ * @param pagadoEnCuentas Lo que el P&L tiene de esta persona en las tres
+ *   cuentas de produccion, EN POSITIVO. `null` cuando no hay con que comparar
+ *   --nomina sin localizar, o localizada pero ninguna fila en esas cuentas--.
+ */
+export function veredictoDelBonus(
+  b: PayrollBreakdown,
+  pagadoEnCuentas: number | null,
+): VeredictoBonus {
+  if (b.bonus === 0 || pagadoEnCuentas == null) return "indeterminado";
+  const sin = CENTIMOS(totalComparable(b));
+  const pagado = CENTIMOS(pagadoEnCuentas);
+  /* Sin bono las dos ramas coinciden, y ese caso ya salio arriba. */
+  if (pagado === sin + CENTIMOS(b.bonus)) return "dentro";
+  if (pagado === sin) return "fuera";
+  return "indeterminado";
 }
 
 /** Lo que se enseña pero no cuenta. */

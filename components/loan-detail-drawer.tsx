@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { X, ArrowUpDown, LayoutGrid, Rows3, UserCircle } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { LoPnlView } from "@/components/lo-pnl-view";
+import type { AffinityLens } from "@/lib/loan-branch";
 import { LoanPnlCard } from "@/components/loan-pnl-card";
 import {
   ALL_MARGIN_ACCOUNTS,
@@ -30,6 +31,8 @@ interface LoanRow {
   branch: string;
   loan_program: string | null;
   loan_info_channel: string | null;
+  /** De Encompass, `lead_source` en loan_records_v2. */
+  lead_source: string | null;
   loan_amount: number;
   b2b: boolean;
   processing: boolean;
@@ -92,6 +95,8 @@ interface Props {
   /** Null when the report spans several years — see the notice in the body. */
   year: number | null;
   branches: string[];
+  /** La lente de Affinity, elegida en la pantalla del P&L. */
+  lente?: AffinityLens;
   sources: string[];
   onClose: () => void;
 }
@@ -153,7 +158,7 @@ function signHint(v: number): string {
   return v > 0 ? "Adds to the net" : "Takes from the net";
 }
 
-export function LoanDetailDrawer({ open, month, year, branches, sources, onClose }: Props) {
+export function LoanDetailDrawer({ open, month, year, branches, sources, lente = "ambas", onClose }: Props) {
   const [data, setData]       = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
@@ -176,13 +181,16 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const key = `${month}|${year}|${branches.join(",")}|${sources.join(",")}`;
+  /* ⚠ LA LENTE VA EN LA CLAVE. Es la cuarta vez en esta pantalla que el mismo
+     olvido tiene el mismo sintoma: el control se marca y los datos no cambian. */
+  const key = `${month}|${year}|${branches.join(",")}|${sources.join(",")}|${lente}`;
 
   useEffect(() => {
     if (!open || !month || !year) return;
     const p = new URLSearchParams({ month, year: String(year) });
     branches.forEach((b) => p.append("branch", b));
     sources.forEach((s) => p.append("source", s));
+    if (lente !== "ambas") p.append("lens", lente);
 
     let cancelled = false;
     setLoading(true); setError("");
@@ -419,6 +427,18 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, onClose
                 }
                 month={data?.month ?? month}
                 year={data?.year ?? year}
+                /*
+                 * ⚠ SIN ESTO LA PESTAÑA SE QUEDA EN "ambas" Y NADIE SE ENTERA.
+                 * Falto en la primera version: el drawer recibia `lente` y no
+                 * se la pasaba, asi que con Affinity puesto esta pestaña seguia
+                 * enseñando los 15 officers de la 716 en vez de solo Nathan.
+                 *
+                 * Y NO LO CAZO EL COMPILADOR, que es lo que lo hizo durar: el
+                 * prop es opcional con defecto "ambas" --para que las pantallas
+                 * que no conocen la lente no cambien-- y ese mismo defecto
+                 * convierte olvidarlo en algo que compila y se ve razonable.
+                 */
+                lente={lente}
               />
             </div>
           )}
@@ -678,7 +698,7 @@ function MiniPL({ l }: { l: LoanRow }) {
       title={l.loan_number}
       tag={l.branch}
       subtitle={l.borrower_name}
-      meta={[l.loan_program, l.loan_info_channel, l.loan_officer].filter(Boolean).join(" · ") || null}
+      meta={[l.loan_program, l.lead_source, l.loan_info_channel, l.loan_officer].filter(Boolean).join(" · ") || null}
       amount={l.loan_amount}
       branch={l.branch}
       b2b={l.b2b}

@@ -32,6 +32,36 @@ export interface LoanMetricsData {
   unmatched_branches: string[];
   excluded_loans: number;
   bucket_drift_months: string[];
+  /**
+   * Lo pagado al loan officer por estos prestamos, de Compensafe.
+   *
+   * ⚠ `sin_comision` no es ruido: son prestamos cuya comision se DESCONOCE, no
+   * prestamos sin comision. Quien enseñe `total` sin ese contador esta
+   * afirmando que esos costaron cero.
+   */
+  commission?: { total: number; loans: number; sin_comision: number; by_month?: Record<string, number> };
+  /**
+   * El desglose de 60105 segun Compensafe, o null donde no reconcilia.
+   *
+   * ⚠ NULL NO ES CERO: significa que esta sucursal no se abre, porque el libro
+   * y Compensafe no cuadran ahi. Las once que no reconcilian y las seis sin la
+   * cuenta estan medidas en lib/payroll-breakdown.ts.
+   */
+  payroll_breakdown?: {
+    account: number;
+    commission: number;
+    hourly: number;
+    recapture: number;
+    unexplained: number;
+  } | null;
+  /**
+   * Cuanto de la cuenta 60105 es comision de prestamos Affinity.
+   *
+   * ⚠ ES LO QUE LA CUENTA LLEVA DENTRO, no lo que la linea de negocio costo:
+   * 20.363,79 y no 20.863,79, porque los 500 de Gian Laino estan en el 60105
+   * de la 747 y no en el de la 716. Ver la nota de la ruta.
+   */
+  affinity_in_account?: { total: number; lines: number; by_month?: Record<string, number> } | null;
 }
 
 interface Props {
@@ -76,6 +106,26 @@ export function LoanMetricsByMonthBar({
     .sort((a, b) => MONTH_ORDER.indexOf(a) - MONTH_ORDER.indexOf(b));
 
   const unmatched = data?.unmatched_branches ?? [];
+
+  /*
+   * ⚠ "TODAVIA NO HAY DATO" NO ES "NO HAY NADA QUE ENSEÑAR", y confundirlos era
+   * el bug de las tarjetas que no salian a la primera.
+   *
+   * Entre que el informe se carga --y el padre decide pintar esta barra-- y que
+   * el efecto del hook arranca su peticion, hay un render con `data` en null y
+   * `loading` todavia en false. Con la condicion de abajo a secas, ese render
+   * devolvia null: la barra desaparecia entera, y solo reaparecia al volver a
+   * pulsar "Run report".
+   *
+   * `data == null` significa que aun no ha contestado nadie. Eso es el esqueleto
+   * de carga, igual que `loading`. El `return null` se reserva para cuando SI
+   * hay respuesta y esta vacia, que es lo unico que de verdad no hay que
+   * enseñar.
+   */
+  if (data == null) {
+    return <div className="mb-6 h-[186px] animate-pulse rounded-2xl border border-slate-200/80 bg-slate-50" />;
+  }
+
   // Nothing to show, but a branch filter with no loan counterpart still has to
   // explain itself — otherwise an empty panel reads as a loading failure.
   if (months.length === 0 && unmatched.length === 0) return null;
@@ -198,44 +248,76 @@ function MonthCard({ month, m, mode, onOpen }: {
   const showOther = isAmount ? m.amount_other > 0 : m.other > 0;
 
   return (
-    // shrink-0 is what makes the strip work: without it flex would compress
-    // every card to fit the container, squashing the pills onto separate lines.
-    // Amounts need more room than counts, hence the wider card in that mode.
-    <div className={`flex ${isAmount ? "w-[212px]" : "w-[168px]"} shrink-0 snap-start flex-col justify-between rounded-xl border border-slate-200/60 bg-slate-50/60 p-3 transition-all hover:border-[#A6DEFF] hover:bg-white hover:shadow-xs`}>
-      <div className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+    /*
+     * ⚠ DENSIDAD, NO MENOS INFORMACION. Estaban en 168px --212 en importes-- y
+     * con siete meses ya pedian barra de desplazamiento, para un contenido que
+     * es un mes, un numero, dos cifras y tres etiquetas. Bajan a 132/168 y se
+     * quitan tres cosas, ninguna de ellas un dato:
+     *
+     *   · el relleno de 12px pasa a 8, y el vertical a 6
+     *   · la palabra "total" al lado del numero, que no distingue nada: es el
+     *     unico numero grande de la tarjeta
+     *   · el numero baja de text-2xl a text-xl -- sigue siendo lo primero que
+     *     se ve, que es todo lo que tenia que hacer
+     *
+     * ⚠ LO QUE SE REDUCE ES EL ANCHO, NO COMO SE REPARTE LO DE DENTRO. Hubo una
+     * cuarta "mejora" --las etiquetas en una sola fila con scroll propio-- y
+     * salio mal: ver la nota de ellas mas abajo. Las etiquetas se envuelven, en
+     * dos filas o en tres, y el alto que eso cueste lo comparten todas.
+     *
+     * El mes, el total, el desglose banked/brokered y las etiquetas siguen
+     * todos. Y `shrink-0` se queda: sin el, flex comprime las tarjetas para que
+     * quepan y machaca justo lo que se acaba de compactar.
+     *
+     * Todas mantienen el mismo ancho entre si, que es lo que deja leer la tira
+     * en horizontal sin que cada mes empiece a distinta altura.
+     */
+    <div className={`flex ${isAmount ? "w-[168px]" : "w-[132px]"} shrink-0 snap-start flex-col gap-0.5 rounded-xl border border-slate-200/60 bg-slate-50/60 px-2.5 py-1.5 transition-all hover:border-[#A6DEFF] hover:bg-white hover:shadow-xs`}>
+      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
         {MONTH_SHORT[month] ?? month}
       </div>
 
-      <div className="flex items-baseline">
-        {/* The total is the way into the loans behind it, in either mode. */}
-        <button
-          type="button"
-          disabled={!onOpen}
-          onClick={() => onOpen?.(month)}
-          title={onOpen ? `Show the ${m.total} loans behind ${month}` : undefined}
-          className={`font-bold tabular-nums text-[#001A40] ${isAmount ? "text-lg" : "text-2xl"} ${
-            onOpen ? "cursor-pointer rounded underline decoration-[#A6DEFF] decoration-2 underline-offset-4 hover:decoration-[#001A40]" : ""
-          }`}
-        >
-          {hero}
-        </button>
-        <span className="ml-1.5 text-xs font-medium text-slate-500">total</span>
-      </div>
+      {/* The total is the way into the loans behind it, in either mode. */}
+      <button
+        type="button"
+        disabled={!onOpen}
+        onClick={() => onOpen?.(month)}
+        title={onOpen ? `Show the ${m.total} loans behind ${month}` : undefined}
+        className={`self-start font-bold tabular-nums leading-none text-[#001A40] ${isAmount ? "text-base" : "text-xl"} ${
+          onOpen ? "cursor-pointer rounded underline decoration-[#A6DEFF] decoration-2 underline-offset-4 hover:decoration-[#001A40]" : ""
+        }`}
+      >
+        {hero}
+      </button>
 
-      <div className="mb-2 text-[11px] font-semibold text-slate-600">
+      <div className="text-[10px] font-semibold leading-tight text-slate-600">
         <span className="tabular-nums">{banked}</span> B
-        <span className="mx-1 text-slate-300">·</span>
+        <span className="mx-0.5 text-slate-300">·</span>
         <span className="tabular-nums">{brokered}</span> Br
         {showOther && (
           <>
-            <span className="mx-1 text-slate-300">·</span>
-            <span className="tabular-nums">{other}</span> Other
+            <span className="mx-0.5 text-slate-300">·</span>
+            <span className="tabular-nums">{other}</span> Ot
           </>
         )}
       </div>
 
       {hasTags && (
-        <div className="mt-1 flex flex-wrap gap-1">
+        /*
+         * ⚠ SE ENVUELVEN, Y NUNCA CON SCROLL PROPIO. Esto llego a ser
+         * `flex-nowrap` con `overflow-x-auto` para ahorrar alto, y fue peor:
+         * ponia UNA BARRA DENTRO DE CADA TARJETA. Una tira de siete tarjetas
+         * pasaba a tener ocho barras, y las etiquetas que no cabian quedaban
+         * escondidas detras de un gesto que nadie hace dentro de algo tan
+         * pequeño -- o sea que el dato dejaba de verse, que es lo contrario de
+         * compactar.
+         *
+         * Que ocupen dos filas, o tres si hacen falta. El alto crece un poco y
+         * lo comparten todas, asi que la tira se sigue leyendo en horizontal.
+         * Lo que habia que estrechar era el ANCHO de la tarjeta, no como se
+         * reparten las etiquetas dentro.
+         */
+        <div className="flex flex-wrap gap-0.5">
           {m.b2b > 0               && <MiniTag label="B2B"  v={m.b2b} />}
           {m.processing > 0        && <MiniTag label="Proc" v={m.processing} />}
           {m.support_on_demand > 0 && <MiniTag label="OD"   v={m.support_on_demand} />}
@@ -249,7 +331,7 @@ function MonthCard({ month, m, mode, onOpen }: {
 
 function MiniTag({ label, v }: { label: string; v: number }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-[#A6DEFF]/40 bg-[#A6DEFF]/25 px-2 py-0.5 text-[10px] font-bold text-[#001A40]">
+    <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-[#A6DEFF]/40 bg-[#A6DEFF]/25 px-1.5 py-px text-[9px] font-bold text-[#001A40]">
       <span className="tabular-nums">{v}</span>
       {label}
     </span>

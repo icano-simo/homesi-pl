@@ -15,6 +15,7 @@ import { buildSplitsMap } from "@/lib/apply-splits";
 import { downloadCSV } from "@/lib/csv";
 import { hierarchyLabel, hierarchyLevels, SHAPE_LABELS, type HierarchyShape } from "@/lib/pl-hierarchies";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
+import { AFFINITY_HOST_BRANCH, type AffinityLens } from "@/lib/loan-branch";
 import type { SplitEntry } from "@/lib/apply-splits";
 import { OrphanedNotesPanel } from "@/components/orphaned-notes-panel";
 import { defaultScopeLabel, isPivotScope, reportBaseScope, scopeContains } from "@/lib/note-scope";
@@ -130,8 +131,78 @@ export default function PLPage() {
   const [loadedBranches, setLoadedBranches] = useState<string[]>([]);
   const [loadedSources,  setLoadedSources]  = useState<string[]>([]);
 
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * LA LENTE DE AFFINITY: SE ELIGE UNA VEZ Y VALE PARA TODA LA PANTALLA
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * ⚠ VIVE AQUI Y NO DENTRO DE CADA MODULO, y ese es todo el diseño. Un primer
+   * intento la puso dentro del P&L por Loan Officer, y entonces la rejilla, el
+   * loan count y las tarjetas seguian enseñando la 716 entera mientras el
+   * modulo enseñaba una mitad: dos respuestas distintas en la misma pantalla,
+   * sin nada que dijera cual era cual.
+   *
+   * ⚠ Y SU ESTADO TIENE QUE ENTRAR EN LAS CUATRO PETICIONES:
+   *
+   *     /api/pl-all        `lens` en la URL, y `lente` en el efecto de recarga
+   *     /api/loan-metrics  `lens` en la URL, y `lente` en la CLAVE del hook
+   *     /api/loan-detail   `lens` en la URL, y `lente` en la clave del drawer
+   *     /api/lo-pnl        `lens` en la URL, y `lente` en el useCallback
+   *
+   * Por que eso es una trampa y no una lista --el mismo olvido con cuatro
+   * formas distintas, y el sintoma de que la interfaz responde y los datos
+   * no-- esta junto al tipo `AffinityLens`, en lib/loan-branch.ts, que es lo
+   * que va a leer quien añada el quinto consumidor.
+   *
+   * ⚠ SOLO SE OFRECE CON LA 716 SOLA. Con varias sucursales, dos de las tres
+   * lentes darian lo mismo que la tercera en todo menos en una, y un control
+   * que casi nunca cambia nada invita a pulsarlo y a desconfiar de el.
+   *
+   * ═══════════════════════════════════════════════════════════════════════
+   * ⚠ SON TRES VISTAS, NO TRES TROZOS DE UNA TARTA. NO SE SUMAN.
+   * ═══════════════════════════════════════════════════════════════════════
+   *
+   *     Affinity            97.015,49
+   *     716 puro          -147.813,11
+   *     suma               -50.797,62
+   *     ambas              -50.297,62      <- el libro entero de la 716
+   *     diferencia            -500,00      <- Gian Laino, sucursal 747
+   *
+   * EL PORQUE, EN UNA LINEA: lo que queda son los 500 de Gian Laino, que
+   * Affinity cuenta como coste de sus prestamos y la 716 nunca tuvo -- su
+   * comision esta en el 60105 de la SUCURSAL 747, porque el libro contabiliza
+   * donde esta la persona.
+   *
+   * La nota va AQUI, donde se elige la lente, y no solo junto a las filas que
+   * lo provocan: quien cambia entre ellas es justo quien va a intentar
+   * sumarlas.
+   *
+   * ⚠ Y "ambas" DA EL LIBRO ENTERO DE LA 716, -50.297,62, que es lo correcto:
+   * esa lente no añade ni quita nada, porque la cuenta 60105 ya lo lleva todo
+   * dentro.
+   *
+   * ⚠ ESTA PROPIEDAD HA CAMBIADO DOS VECES, y por eso se escribe con su
+   * historia en vez de como un hecho:
+   *
+   *   1. Al principio las tres SUMABAN al centimo --1.828 + 379 = 2.207 filas.
+   *   2. Al añadir la fila de comision en Affinity dejaron de sumar, por
+   *      20.863,79.
+   *   3. Al poder sacar de la 716 la comision de Affinity que su cuenta lleva
+   *      dentro --20.363,79, via comp.payroll_transaction-- el hueco bajo a
+   *      500,00.
+   *
+   * Los 500 que quedan no son un defecto ni se pueden cerrar desde aqui: son
+   * dinero contabilizado en una TERCERA sucursal. Cerrarlos exigiria que la
+   * lente de Affinity dejara fuera la comision de gente de otras sucursales, y
+   * eso cambiaria lo que la lente significa.
+   *
+   * Una propiedad verificada que nadie revisa cuando cambia el codigo se
+   * convierte en una nota falsa, que es peor que no haberla escrito.
+   */
+  const [lente, setLente] = useState<AffinityLens>("ambas");
+
   // Same panel as P&L All, same hook, same filters the table is showing.
-  const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources);
+  const loanMetrics = useLoanMetrics(loadedYears, loadedBranches, loadedSources, undefined, lente);
 
   const [panel, setPanel] = useState<Panel>(null);
 
@@ -156,6 +227,7 @@ export default function PLPage() {
       yrs.forEach(y => p.append("year", y));
       effectiveBranches.forEach(b => p.append("branch", b));
       srcs.forEach(s => p.append("source", s));
+      if (lente !== "ambas") p.append("lens", lente);
       const res = await fetch(`/api/pl-all?${p}`);
       if (!res.ok) { const j = await res.json(); setError(j.error ?? "Error"); return; }
       setRawTxs(await res.json());
@@ -219,8 +291,179 @@ export default function PLPage() {
     let out = rawTxs;
     if (months.length  > 0) out = out.filter(t => t.month   && months.includes(t.month));
     if (glCodes.length > 0) out = out.filter(t => t.gl_code && glCodes.includes(t.gl_code));
+
+    /*
+     * ═════════════════════════════════════════════════════════════════════
+     * LA COMISION DEL LO, COMO UNA FILA MAS DE LA TABLA
+     * ═════════════════════════════════════════════════════════════════════
+     *
+     * Estuvo en un cuadro aparte bajo la rejilla y estaba mal: dejaba DOS
+     * totales en la misma pantalla --el del libro y el de la linea de
+     * negocio-- y quien mirara el de arriba leia una cifra a la que le
+     * faltaba el coste del loan officer. Ahora entra en la tabla, suma en el
+     * total como las demas, y hay un solo total.
+     *
+     * ⚠ SOLO EN LA LENTE DE AFFINITY, Y NO ES UNA PREFERENCIA: EN LAS OTRAS
+     * DOS CONTARIA EL MISMO DINERO DOS VECES. Medido ejecutando las rutas:
+     *
+     *     lente       60105 en la rejilla   de eso, comision   ¿duplica?
+     *     Affinity          0 filas                 --          NO
+     *     716 puro       -291.803,96         -269.790,66        SI
+     *     ambas          -291.803,96         -269.790,66        SI
+     *
+     * La nomina del loan officer ES la cuenta 60105, y en "716 puro" y en
+     * "ambas" ya esta en la tabla con su comision dentro. Solo la lente de
+     * Affinity se queda sin ella --sus filas de nomina no existen, porque la
+     * nomina se queda entera en la 716-- y ahi la comision es la UNICA forma
+     * de ver lo que costo el loan officer de esos prestamos.
+     *
+     * ⚠ Y NO SE PUEDE RESTAR DE LA 716 PARA COMPENSAR. Restarla exigiria
+     * partir las 130 filas de 60105 por prestamo, y NINGUNA tiene
+     * loan_number: la misma limitacion del dato que documenta
+     * lib/payroll-breakdown.ts.
+     *
+     * ⚠ ESTO CAMBIA EL TOTAL DE LA PANTALLA con esa lente, a proposito: de
+     * 117.879,28 a 97.015,49. El total pasa a incluir una cifra que NO esta
+     * en la contabilidad, y por eso la fila lleva su origen en la
+     * descripcion: quien intente cuadrar la pantalla contra el libro tiene
+     * que poder ver cual es.
+     *
+     * ═════════════════════════════════════════════════════════════════════
+     * ⚠ Y LAS DOS LENTES YA NO SUMAN A "AMBAS". ES CORRECTO Y HAY QUE SABERLO
+     * ═════════════════════════════════════════════════════════════════════
+     *
+     *     Affinity            97.015,49
+     *     716 puro          -168.176,90
+     *     suma               -71.161,41
+     *     ambas              -50.297,62
+     *     diferencia         -20.863,79   <- la comision de Affinity
+     *
+     * Antes de esta fila las tres cuadraban al centimo --1.828 + 379 = 2.207
+     * filas, e importes que sumaban-- y esa propiedad se verifico y se
+     * anuncio. Ya no se cumple, y la diferencia es EXACTAMENTE la comision.
+     *
+     * LA RAZON, y es la que lo hace correcto: los 20.863,79 YA ESTAN en el
+     * libro, dentro de los 269.790,66 de comision que lleva la cuenta 60105
+     * --pero contabilizados en la 716, porque la nomina del loan officer se
+     * queda alli entera--. La lente de Affinity los enseña como fila propia
+     * porque en su vista no hay 60105; la de 716 los lleva dentro de esa
+     * cuenta sin poder separarlos. O sea que el mismo dinero se ve en las dos
+     * lentes, en sitios distintos, y por eso sumarlas lo cuenta dos veces.
+     *
+     * NO SE ARREGLA restandolo de la 716: exigiria partir las 130 filas de
+     * 60105 por prestamo y ninguna tiene loan_number.
+     *
+     * ⚠ LO QUE ESTO SIGNIFICA PARA QUIEN LEA LA PANTALLA: las tres lentes son
+     * TRES VISTAS, no tres trozos de una tarta. Cada una contesta bien su
+     * pregunta y no estan hechas para sumarse.
+     */
+    const c = loanMetrics.data?.commission;
+    if (lente === "affinity" && c && c.total !== 0) {
+      const base = rawTxs[0];
+      const sintetica = Object.entries(c.by_month ?? {})
+        .filter(([, v]) => v !== 0)
+        .map(([mes, v], i) => ({
+          ...base,
+          id: `compensafe-commission-${mes}-${i}`,
+          month: mes,
+          branch: AFFINITY_HOST_BRANCH,
+          // Sin gl_code: no es una cuenta del libro, y el hueco es la señal.
+          gl_code: null,
+          /* ⚠ "by closing month" EN EL ROTULO, no en un tooltip. La tarjeta del
+             prestamo y esta fila dan cifras distintas para el mismo mes --500
+             contra 1.000 en julio-- porque cada una ordena por una fecha, y sin
+             decirlo parece que falta dinero. Son cuatro prestamos de 500: dos
+             cerraron en junio y se pagaron el 15 de julio, uno cerro y se pago
+             en julio, y otro cerro en julio y se pago el 14 de agosto. */
+          gl_name: "LO commission · Compensafe · by closing month",
+          // En el grupo de 60105, que es donde alguien la busca.
+          category_2: "Operating Income (Loss) Before BM Payroll",
+          category_6: "Production Compensation",
+          category_7: "Loan Officer Payroll",
+          check_description:
+            "Loan officer commission on Affinity loans — from Compensafe, not from the general ledger",
+          vendor: null,
+          ref_numb: null,
+          loan_number: null,
+          debit: 0,
+          credit: 0,
+          movement: -v,
+          cost_center_id: null,
+          cost_center_status: null,
+        })) as unknown as PLReportTx[];
+      if (base) out = [...out, ...sintetica];
+    }
+
+    /*
+     * ═════════════════════════════════════════════════════════════════════
+     * Y EN "716 PURO", LA COMISION DE AFFINITY SALE DE LA CUENTA
+     * ═════════════════════════════════════════════════════════════════════
+     *
+     * Esto se dijo imposible y no lo era. Las 130 filas de 60105 del P&L no
+     * tienen `loan_number` --cierto, verificado-- asi que DESDE EL LIBRO no hay
+     * forma de saber cuales son de Affinity. Pero `comp.payroll_transaction` SI
+     * lo trae en sus lineas de comision, y esa es la tabla de la que ya sale el
+     * desglose de la cuenta: el reparto no se inventa, se lee de la fuente que
+     * la explica.
+     *
+     * ⚠ VA COMO FILA APARTE Y NO CAMBIANDO EL IMPORTE DE 60105. La cuenta sigue
+     * enseñando lo que dice el libro --291.803,96-- y el ajuste se ve como lo
+     * que es. Cambiar la cifra de la cuenta habria dejado la rejilla diciendo
+     * de 60105 algo que contabilidad no dice, que es lo que llevamos toda la
+     * pantalla evitando. El total del grupo sale igual: -271.440,17.
+     *
+     * ⚠ SON 20.363,79, NO 20.863,79, y la diferencia son 500 de Gian Laino:
+     * sucursal 747, un prestamo de Affinity, comision contabilizada en el 60105
+     * de la 747 y no en el de la 716. Se resta lo que la cuenta LLEVA DENTRO,
+     * no lo que la linea de negocio costo.
+     */
+    /*
+     * ⚠ UNA FILA POR MES, Y ESO FUE UN BUG. La primera version ponia
+     * `month: rawTxs[0]?.month` -- el ajuste ENTERO en el mes de la primera
+     * transaccion del payload, uno cualquiera. En julio salia 0,00 y en el mes
+     * que tocara salian los 20.363,79 de golpe. El total anual cuadraba, que es
+     * justo lo que hizo que pasara desapercibido.
+     *
+     * ⚠ Y POR MES DE PAGO, no de cierre, al reves que la fila de Affinity. No
+     * es una incoherencia: esta saca de la cuenta 60105 lo que la cuenta lleva
+     * dentro, y el libro la contabiliza por fecha de PAGO. Verificado sobre
+     * julio de 2026: la cuenta trae 28.896,38 y la comision de Affinity pagada
+     * en julio son 1.000,00 -- neto 27.896,38. Por mes de cierre habrian sido
+     * 500,00, que es otra cosa. El porque completo, en la ruta.
+     */
+    const enCuenta = loanMetrics.data?.affinity_in_account;
+    if (lente === "716" && enCuenta && enCuenta.total !== 0) {
+      const base = rawTxs[0];
+      const porMes = Object.entries(enCuenta.by_month ?? {}).filter(([, v]) => v !== 0);
+      if (base) {
+        out = [...out, ...porMes.map(([mes, v], i) => ({
+          ...base,
+          id: `compensafe-affinity-out-of-60105-${mes}-${i}`,
+          month: mes,
+          branch: AFFINITY_HOST_BRANCH,
+          gl_code: null,
+          /* Esta va por fecha de PAGO, porque saca de una cuenta que el libro
+             contabiliza asi. Ver la nota de la ruta. */
+          gl_name: "less: commission on Affinity loans · Compensafe · by pay date",
+          category_2: "Operating Income (Loss) Before BM Payroll",
+          category_6: "Production Compensation",
+          category_7: "Loan Officer Payroll",
+          check_description:
+            `Commission on Affinity loans that account 60105 carries, by payment month — ${enCuenta.lines} lines in total. Taken out here so this lens shows 716 without Affinity. Identified through comp.payroll_transaction, which carries the loan number that the ledger rows do not.`,
+          vendor: null,
+          ref_numb: null,
+          loan_number: null,
+          debit: 0,
+          credit: 0,
+          movement: v,
+          cost_center_id: null,
+          cost_center_status: null,
+        })) as unknown as PLReportTx[]];
+      }
+    }
+
     return out;
-  }, [rawTxs, months, glCodes]);
+  }, [rawTxs, months, glCodes, lente, loanMetrics.data]);
 
   const splitsMap = useMemo(() => buildSplitsMap(allSplits), [allSplits]);
 
@@ -275,6 +518,32 @@ export default function PLPage() {
     () => (loadedBranches.length === 1 ? loadedBranches[0] : null),
     [loadedBranches],
   );
+
+  /** La lente solo significa algo en la sucursal que se parte en dos. */
+  const hayLente = scopeBranch === AFFINITY_HOST_BRANCH;
+
+  /*
+   * ⚠ AL SALIR DE LA 716 SE VUELVE A "ambas". Quedarse en la lente de Affinity
+   * al cargar otra sucursal enseñaria sus cifras enteras bajo un rotulo que ya
+   * no sale en pantalla, porque el selector desaparece con ella.
+   */
+  useEffect(() => {
+    if (!hayLente && lente !== "ambas") setLente("ambas");
+  }, [hayLente, lente]);
+
+  /*
+   * La rejilla se recarga al cambiar de lente. `fetchData` ya lleva `lens` en
+   * la URL; esto es lo que hace que se vuelva a llamar -- sin ello el selector
+   * cambiaria el loan count y las tarjetas, y dejaria la rejilla como estaba.
+   */
+  const lenteCargada = useRef<AffinityLens>("ambas");
+  useEffect(() => {
+    if (!loaded) { lenteCargada.current = lente; return; }
+    if (lenteCargada.current === lente) return;
+    lenteCargada.current = lente;
+    void fetchData(loadedYears, loadedBranches, loadedSources);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lente, loaded]);
 
   /**
    * The one cost centre the report is scoped to, or null.
@@ -426,6 +695,72 @@ export default function PLPage() {
             {loadedChips.map((chip) => (
               <FilterChip key={chip.label} label={chip.label} value={chip.value} />
             ))}
+
+            {/*
+              * ⚠ EL SELECTOR VA JUNTO A LOS CHIPS DEL FILTRO, no junto a la
+              * rejilla: acota TODA la pantalla igual que ellos, y ponerlo sobre
+              * una de las cuatro cosas que cambia haria pensar que solo cambia
+              * esa.
+              */}
+            {hayLente && (
+              <span
+                className="ml-2 inline-flex overflow-hidden rounded-full border border-[#A6DEFF] text-xs"
+                title="Three views, not three slices of a pie — they do not quite add up. The 500 gap is Gian Laino: his commission on an Affinity loan sits in branch 747's account, so Affinity counts it and 716 never had it."
+              >
+                {([
+                  { v: "ambas", t: "716 + Affinity" },
+                  { v: "716", t: "716 only" },
+                  { v: "affinity", t: "Affinity" },
+                ] as const).map((b, i) => (
+                  <button
+                    key={b.v}
+                    onClick={() => setLente(b.v)}
+                    className={`${i > 0 ? "border-l border-[#A6DEFF] " : ""}px-3 py-1 font-medium ${
+                      lente === b.v
+                        ? "bg-[#A6DEFF]/20 text-[#001A40]"
+                        : "bg-white text-slate-500 hover:bg-slate-50"
+                    }`}
+                  >
+                    {b.t}
+                  </button>
+                ))}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/*
+          * ⚠ EL ROTULO NO DICE "P&L de Affinity", Y ESO ES LO QUE EVITA LA
+          * LECTURA FALSA. Affinity es una LINEA DE NEGOCIO, no una sucursal con
+          * estructura: lleva el revenue de sus prestamos, sus costes directos y
+          * la nomina de sus account executives, y NADA MAS. El alquiler, el
+          * marketing y el resto de la nomina se quedan enteros en la 716 --no se
+          * prorratea nada-- asi que su resultado no es "lo que gana Affinity":
+          * es lo que deja antes de lo que cuesta sostenerla.
+          *
+          * Escrito en el bloque y no en un tooltip, porque quien lea la cifra
+          * sin esto va a leer una rentabilidad que no existe.
+          */}
+        {loaded && hayLente && lente !== "ambas" && (
+          <div className="mt-2 rounded-lg border border-[#A6DEFF] bg-[#A6DEFF]/10 px-3 py-2 text-[11px] text-[#001A40]">
+            {/* ⚠ UNA LINEA, y el resto en el title. El criterio: si hay que leer
+                dos lineas para entender una cifra, el texto esta en el sitio
+                equivocado -- la cifra se explica por su etiqueta y su posicion.
+                Lo largo vivia aqui y se fue al tooltip. */}
+            <span
+              className="font-semibold"
+              title={
+                lente === "affinity"
+                  ? "Revenue and direct costs of its loans, the LO commission on them, and the payroll of its account executives. Nothing is prorated: rent, marketing and the rest of 716's payroll stay whole on 716, so this is what the line leaves before what it costs to sustain it."
+                  : "716's own loans and the general costs in full — rent, marketing and all payroll except the account executives. Nothing was moved out except what Affinity could be identified by."
+              }
+            >
+              {lente === "affinity" ? "Affinity · business line" : "716 · without Affinity"}
+            </span>
+
+            {/* La comision NO se repite aqui: su sitio es el cierre de debajo
+                de la rejilla, que es donde se lee un total. Dos veces en la
+                misma pantalla invita a sumarlas. */}
           </div>
         )}
       </div>
@@ -460,12 +795,10 @@ export default function PLPage() {
             {hierarchyLabel({ shape, opNonOp })}
           </span>
         </div>
-        <p className="mt-0.5 text-sm text-slate-500">
-          Click a figure to open it one level down — a cost center into
-          categories, a category into accounts, an account into descriptions —
-          and to write a note about that cell or any row beneath it. Click the
-          dot beside a figure to read, edit and add notes on that same cell.
-        </p>
+        {/* La explicacion de como se navega la rejilla vivia aqui, en cuatro
+            lineas sobre la tabla. Se retira: quien usa esta pantalla ya lo
+            sabe, y quien no, lo descubre pulsando. Cuatro lineas de texto que
+            se leen una vez ocupan sitio todos los dias. */}
       </div>
 
       {/* Indicator legend — the two dot styles are not self-evident. */}
@@ -574,6 +907,7 @@ export default function PLPage() {
           defaultLevels={levels}
           costCenterFilter={costCenterFilter}
           onDrillCell={(ref) => setPanel({ kind: "cell", ref })}
+          payrollBreakdown={loanMetrics.data?.payroll_breakdown ?? null}
           onOpenNotes={(ref) => setPanel({ kind: "notes", ref })}
           // No storageKey: nothing to persist when the hierarchy cannot change,
           // and it keeps a stale saved order from ever resurfacing here.
@@ -593,6 +927,8 @@ export default function PLPage() {
           emptyMessage="No transactions found for the selected filters."
         />
       )}
+
+
         <CellDetailModal
           cell={panel?.kind === "cell" ? panel.ref : null}
           notes={placedNotes}
@@ -630,6 +966,7 @@ export default function PLPage() {
           year={loadedYears.length === 1 ? Number(loadedYears[0]) : null}
           branches={loadedBranches}
           sources={loadedSources}
+          lente={lente}
           onClose={() => setPanel(null)}
         />
     </div>

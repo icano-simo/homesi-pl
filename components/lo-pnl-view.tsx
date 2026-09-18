@@ -5,12 +5,14 @@ import { ChevronDown, ChevronRight, AlertTriangle, Info, HelpCircle, X } from "l
 import { closePeriod, MONTH_NAMES_IN_ORDER } from "@/lib/close-period";
 import { LoanPnlCard, usdEntero } from "@/components/loan-pnl-card";
 import { PRODUCTION_PAY_GL_CODES, PRODUCTION_PAY_ACCOUNT_NAMES } from "@/lib/loan-detail-accounts";
+import type { AffinityLens } from "@/lib/loan-branch";
 import {
   EN_LA_COMPARACION,
   FUERA_DE_LA_COMPARACION,
   ETIQUETA,
   EXPLICACION,
   totalComparable,
+  veredictoDelBonus,
 } from "@/lib/payroll-categories";
 import type { LoPnlResult, OfficerBlock, OfficerGroup, LoanRow, LoanLine, PayrollRow } from "@/app/api/lo-pnl/route";
 
@@ -220,8 +222,8 @@ const SECCIONES: { key: OfficerGroup; label: string; hint: string; banda: string
     key: "support",
     label: "Support",
     hint: "Assistants, processors and support staff. They have a real cost and close no loans — that is their job, not a finding.",
-    banda: "border-l-4 border-l-violet-400",
-    fondo: "bg-violet-50",
+    banda: "border-l-4 border-l-[#001A40]",
+    fondo: "bg-[#001A40]/5",
   },
   {
     key: "nppm",
@@ -959,9 +961,27 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
 }) {
   const c = o.compensafe;
   const hayDesglose = Object.values(c).some((v) => v !== 0);
-  const dentro = EN_LA_COMPARACION.filter((k) => c[k] !== 0);
-  const fuera = FUERA_DE_LA_COMPARACION.filter((k) => c[k] !== 0);
-  const sumaCompensafe = totalComparable(c);
+
+  /*
+   * ⚠ EL BONO SE DECIDE POR PERSONA, no por la regla global. Medido: de 27
+   * personas con bonus, en 3 el total de sus cuentas de produccion cuadra al
+   * centimo CON el bono y en 2 cuadra SIN el. La regla y la medicion completa,
+   * en lib/payroll-categories.ts.
+   *
+   * Cuando se prueba que esta dentro, entra en la suma y la diferencia de esa
+   * persona se va a cero -- que es lo que era desde el principio.
+   */
+  const bonoDentro =
+    veredictoDelBonus(c, localizada ? pagoPorProducir : null) === "dentro";
+
+  const dentro = [
+    ...EN_LA_COMPARACION.filter((k) => c[k] !== 0),
+    ...(bonoDentro ? (["bonus"] as const) : []),
+  ];
+  const fuera = FUERA_DE_LA_COMPARACION.filter(
+    (k) => c[k] !== 0 && !(k === "bonus" && bonoDentro),
+  );
+  const sumaCompensafe = totalComparable(c) + (bonoDentro ? c.bonus : 0);
 
   /*
    * ⚠ LA ETIQUETA DICE LA CUENTA DE ESTA PERSONA, no "Loan officer payroll"
@@ -998,7 +1018,17 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
       {hayDesglose ? (
         dentro.map((k) => (
           <div key={k} className="flex items-baseline justify-between gap-2">
-            <span className="text-slate-600" title={EXPLICACION[k]}>{ETIQUETA[k]}</span>
+            <span
+              className="text-slate-600"
+              title={
+                k === "bonus"
+                  ? "Counted here for this person: the production accounts reconcile to the cent with the bonus and not without it, so this money is inside that account. The bonus is left out for everyone else, where that is not the case."
+                  : EXPLICACION[k]
+              }
+            >
+              {ETIQUETA[k]}
+              {k === "bonus" && <span className="text-slate-400"> · in the account below</span>}
+            </span>
             <span className="font-mono tabular-nums text-slate-700">{usdEntero(c[k])}</span>
           </div>
         ))
@@ -1007,7 +1037,7 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
            persona en este periodo no significa que no cobrara: significa que no
            lo sabemos por aqui. Un 0 en su sitio seria una afirmacion. */
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-slate-600">Commission on loans</span>
+          <span className="text-slate-600" title="By closing month — Compensafe groups commission by the date the loan closed. The P&L row for the same money goes by pay date, so the two can differ within a month.">Commission on loans <span className="text-slate-400">· by closing month</span></span>
           <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
         </div>
       )}
@@ -1039,9 +1069,16 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
 
       {fuera.length > 0 && (
         <div className="mt-2 border-t border-dashed border-slate-300 pt-1.5">
+          {/*
+            * ⚠ LA ETIQUETA YA NO AFIRMA DONDE NO ESTA ESE DINERO. Decia "Paid,
+            * but not in these accounts", que es una afirmacion sobre CADA caso
+            * y es falsa en algunos: el bono de Matthew Gomez Bruckner esta en
+            * 60105, al centimo. Lo que si es cierto de las tres categorias es
+            * que no entran en la resta, y eso es lo que dice ahora.
+            */}
           <p className="pb-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-400"
-             title="Compensafe paid these, but they are not booked to the production accounts above, so they do not enter the subtraction.">
-            Paid, but not in these accounts
+             title="Compensafe paid these in this period and they do not enter the subtraction above. Where it can be proven that a bonus is inside the production account, it is counted above instead of here.">
+            Paid, not included in this comparison
           </p>
           {fuera.map((k) => (
             <div key={k} className="flex items-baseline justify-between gap-2">
@@ -1414,8 +1451,17 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
  *
  * @param branch  La sucursal del modal. Null en la pantalla propia.
  */
-export function LoPnlView({ branch = null, month: mesInicial = null, year: anioInicial = null }: {
+export function LoPnlView({ branch = null, month: mesInicial = null, year: anioInicial = null, lente = "ambas" }: {
   branch?: string | null;
+  /**
+   * La lente de Affinity, elegida en la pantalla del P&L y NO aqui.
+   *
+   * ⚠ ESTE COMPONENTE NO TIENE SELECTOR PROPIO, Y ES DELIBERADO. Lo tuvo, y el
+   * resultado fue que la rejilla y el loan count enseñaban la 716 entera
+   * mientras este modulo enseñaba una mitad: dos respuestas en la misma
+   * pantalla sin nada que dijera cual era cual. Se elige una vez, arriba.
+   */
+  lente?: AffinityLens;
   /** El mes desde el que se abrio el modal. Null en la pantalla suelta. */
   month?: string | null;
   year?: number | null;
@@ -1520,6 +1566,21 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
     });
 
   const cargar = useCallback(async () => {
+    /*
+     * ⚠ SE BORRA EL DATO ANTERIOR AL EMPEZAR, y sin esto la pantalla MIENTE
+     * durante la peticion.
+     *
+     * `data` se quedaba con la respuesta vieja mientras llegaba la nueva, asi
+     * que al cambiar de mes, de sucursal o de lente esta vista pintaba las
+     * cifras del periodo ANTERIOR --con su rotulo nuevo encima-- y un segundo
+     * despues se corregia sola. Quien mirase en ese segundo leia numeros que
+     * no eran de lo que decia la cabecera.
+     *
+     * Con `null`, el estado intermedio es "cargando", que es lo que de verdad
+     * esta pasando. Una pantalla vacia un instante es peor de ver y mejor de
+     * creer que una llena de datos de otra cosa.
+     */
+    setData(null);
     setLoading(true); setError("");
     try {
       /* Un solo sitio construye el periodo, y cada opcion dice exactamente
@@ -1529,7 +1590,9 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
         : periodo.tipo === "ytd" ? `ytd=1&month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`
         : `month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`;
       // La sucursal acota los CIERRES, no la nomina: ver la nota en la ruta.
-      const q = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
+      const conSucursal = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
+      /* Sin el parametro la ruta se comporta como siempre. */
+      const q = lente === "ambas" ? conSucursal : `${conSucursal}&lens=${lente}`;
       const res = await fetch(`/api/lo-pnl?${q}`);
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? "Failed to load"); return; }
@@ -1539,7 +1602,10 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
     } finally {
       setLoading(false);
     }
-  }, [periodo, mesHeredado, anioHeredado, branch]);
+  /* ⚠ `lente` EN LAS DEPENDENCIAS. Sin ella el control de arriba se marca y
+     este modulo se queda con los datos de la lente anterior -- que es
+     exactamente el fallo que tuvo la primera version. */
+  }, [periodo, mesHeredado, anioHeredado, branch, lente]);
 
   useEffect(() => { cargar(); }, [cargar]);
 

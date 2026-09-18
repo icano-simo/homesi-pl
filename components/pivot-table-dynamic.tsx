@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ArrowUpAZ, ArrowDownAZ, ChevronsUpDown } from "lucide-react";
+import { DESGLOSE_GL_CODE } from "@/lib/payroll-breakdown";
 import {
   ALL_FIELDS,
   FIELD_LABELS,
@@ -105,6 +106,41 @@ const firstColStyle: React.CSSProperties = {
  * accumulate. Only the month columns between the two pinned edges scroll.
  */
 const totalColStyle: React.CSSProperties = { position: "sticky", right: 0 };
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * RESALTAR LA FILA BAJO EL CURSOR, DE UN EXTREMO AL OTRO
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Con doce meses la tabla se recorre hacia la derecha y se pierde la fila. El
+ * resalte la mantiene: los doce meses y el total, mas la columna fija.
+ *
+ * ⚠ ES UN LAVADO POR `background-image`, NO UN `background-color`, y las dos
+ * razones importan:
+ *
+ *   1. EL `hover:bg-...` QUE HABIA ERA CODIGO MUERTO. El `<tr>` y las dos
+ *      celdas fijas llevan su color en `style={{ backgroundColor }}` --tienen
+ *      que ser opacas o los meses se ven por debajo al desplazarse-- y un
+ *      estilo en linea gana a cualquier clase. La tabla no se sombreaba en
+ *      ningun sitio; la clase estaba escrita y no pintaba nada.
+ *
+ *   2. UN COLOR PLANO BORRARIA LO QUE YA HAY ENCIMA. La cebra, la banda de los
+ *      niveles 0 y 1, el fondo de las filas de total de grupo. Un
+ *      `background-image` se compone POR ENCIMA del `background-color` sin
+ *      sustituirlo, asi que cada fila conserva el suyo y ademas se aclara.
+ *
+ * Literales y completos a proposito: Tailwind busca el nombre de clase entero
+ * en el codigo, y `hover:${VARIABLE}` no lo encontraria.
+ *
+ * Solo hover. Ni se fija al pulsar, ni se sombrea la columna: con los dos ejes
+ * a la vez la tabla se vuelve ruidosa.
+ */
+/** Para el `<tr>`: cubre las celdas de mes, que no llevan fondo propio. */
+const ROW_WASH =
+  "hover:[background-image:linear-gradient(rgba(166,222,255,0.28),rgba(166,222,255,0.28))]";
+/** Para las celdas fijas, que si lo llevan y tapan al `<tr>`. */
+const CELL_WASH =
+  "group-hover:[background-image:linear-gradient(rgba(166,222,255,0.28),rgba(166,222,255,0.28))]";
 
 /**
  * Floor for the Total column.
@@ -390,6 +426,8 @@ interface RenderCtx {
    * transaction rows: the breakdown happens in that window instead.
    */
   onDrillCell: ((ref: CellRef) => void) | null;
+  /** El desglose de 60105 segun Compensafe, o null donde no reconcilia. */
+  payrollBreakdown: { account: number; commission: number; hourly: number; recapture: number; unexplained: number } | null;
 }
 
 /**
@@ -642,6 +680,7 @@ export interface PivotTableDynamicProps {
    * instead.
    */
   onDrillCell?: (ref: CellRef) => void;
+  payrollBreakdown?: { account: number; commission: number; hourly: number; recapture: number; unexplained: number } | null;
   /** Opens the notes-only window. Reached from the dot, never from a figure. */
   onOpenNotes?: (ref: CellRef) => void;
   /**
@@ -684,9 +723,9 @@ function renderPivotNodes(
   const stickyCol = homesi
     ? "sticky left-0 z-20 border-r-2 border-slate-200 shadow-xs"
     : "";
-  const rowHover = homesi
-    ? "hover:bg-[#A6DEFF]/25 transition-colors cursor-pointer"
-    : "";
+  const rowHover = homesi ? `${ROW_WASH} cursor-pointer` : "";
+  /** El resalte de las dos celdas fijas, que tapan el del `<tr>`. */
+  const cellHover = homesi ? CELL_WASH : "";
   // Pinned cells must be opaque or the scrolling months show through them.
   // Detail rows are white outside the HOMESÍ theme and zebra-striped within it.
   const rowBgFor = (idx: number) => (homesi ? homesiRowBg(idx) : "#ffffff");
@@ -737,7 +776,7 @@ function renderPivotNodes(
         <td
           onClick={ctx.notesOn ? (e) => { e.stopPropagation(); open(null, t.mvmt); } : undefined}
           style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: rowBgFor(rows.length) }}
-          className={`${numCell} text-[10px] ${homesi ? homesiValueCls(t.mvmt) : mvCls(t.mvmt)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${ctx.notesOn ? "cursor-pointer" : ""}`}
+          className={`${numCell} text-[10px] ${homesi ? homesiValueCls(t.mvmt) : mvCls(t.mvmt)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${cellHover} ${ctx.notesOn ? "cursor-pointer" : ""}`}
         >
           <NoteCellContent
             text={fmtM(t.mvmt)}
@@ -764,7 +803,10 @@ function renderPivotNodes(
     const hasContent = node.children.length > 0 ||
       (node.txLeaves.length > 0 && !ctx.onDrillCell);
     const isDrillable = !!ctx.onDrillCell;
-    const canToggle  = hasContent || isOpNonOp;
+    /* La 60105 se puede abrir aunque no tenga hijos: sus "hijos" son el
+       desglose de Compensafe, que no sale de ninguna transaccion. */
+    const esDesglose = !!ctx.payrollBreakdown && node.field === "gl" && node.key === DESGLOSE_GL_CODE;
+    const canToggle  = hasContent || isOpNonOp || esDesglose;
 
     // Flat (no-level) case: render leaf rows directly without a group header
     if (node.key === "__flat__") {
@@ -785,7 +827,7 @@ function renderPivotNodes(
             <td
               title={t.desc ?? t.vendor ?? undefined}
               style={{ ...firstColStyle, paddingLeft: 8, zIndex: 20, backgroundColor: rowBgFor(rows.length) }}
-              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-500 group-hover:bg-slate-50"}`}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} ${cellHover}` : "text-[10px] text-gray-500 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
@@ -892,7 +934,7 @@ function renderPivotNodes(
         <td
           title={node.label}
           style={{ ...firstColStyle, backgroundColor: effectiveBg, paddingLeft: pl, zIndex: 20, ...firstTdExtra }}
-          className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${textClass} ${fontClass} ${homesi ? `text-xs ${stickyCol}` : "text-[11px]"}`}
+          className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${textClass} ${fontClass} ${homesi ? `text-xs ${stickyCol} ${cellHover}` : "text-[11px]"}`}
         >
           <span className="inline-flex items-center gap-1">
             {canToggle
@@ -932,7 +974,7 @@ function renderPivotNodes(
         <td
           onClick={isDrillable ? (e) => { e.stopPropagation(); openDetail(null, node.total); } : undefined}
           style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: effectiveBg }}
-          className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${isDrillable ? "cursor-pointer" : ""}`}
+          className={`${numCell} ${fontClass} ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l ${homesi ? "border-slate-200" : "border-gray-100"} ${cellHover} ${isDrillable ? "cursor-pointer" : ""}`}
         >
           <NoteCellContent
             text={fmtM(node.total)}
@@ -947,6 +989,63 @@ function renderPivotNodes(
     );
 
     if (!isOpen) continue;
+
+    /*
+     * ⚠ EL DESGLOSE DE 60105: FILAS QUE NO SALEN DE NINGUNA TRANSACCION.
+     *
+     * Son las unicas de toda la tabla que no vienen del libro, y por eso van
+     * DENTRO de la cuenta y no como hermanas suyas: no se añade nada al P&L,
+     * se abre lo que ya hay. Salen en gris y sin celdas por mes -- tres marcas
+     * de que son otra cosa.
+     *
+     * "sin explicar" es la diferencia entre lo que dice el libro y lo que dice
+     * Compensafe, y NO se reparte entre los otros tres: repartirla afirmaria
+     * que las dos fuentes cuadran, y lo que hacen es parecerse. Por eso se
+     * pinta como una linea mas, con su nombre.
+     *
+     * Donde se ofrece y donde no --y sobre todo POR QUE no en las otras once
+     * sucursales-- vive en lib/payroll-breakdown.ts.
+     */
+    if (esDesglose && ctx.payrollBreakdown) {
+      const b = ctx.payrollBreakdown;
+      const items: { label: string; amount: number; hueco?: boolean }[] = [
+        { label: "Commission", amount: b.commission },
+        { label: "Hourly wages", amount: b.hourly },
+        { label: "Earnings recapture", amount: b.recapture },
+        { label: "Unexplained", amount: b.unexplained, hueco: true },
+      ];
+      for (const it of items) {
+        rows.push(
+          <tr
+            key={`${nodeKey}|comp:${it.label}`}
+            /* Sin `cursor-pointer`: estas filas no abren nada. */
+            className={`group border-b ${homesi ? `border-slate-200/50 ${ROW_WASH}` : "border-gray-50"}`}
+            style={homesi ? { backgroundColor: homesiRowBg(rows.length) } : undefined}
+          >
+            <td
+              style={{ ...firstColStyle, paddingLeft: (depth + 1) * 16 + 8, zIndex: 20 }}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1 pr-3 text-[11px] ${
+                it.hueco ? "text-[#FF4040]" : "text-slate-500"
+              } ${homesi ? `${stickyCol} ${cellHover}` : ""}`}
+              title={
+                it.hueco
+                  ? "What the ledger says minus what Compensafe says. Shown as its own line and never spread across the other three — spreading it would claim the two sources agree."
+                  : "From Compensafe, not from the ledger. This account is being opened, not added to."
+              }
+            >
+              {it.label}
+              {!it.hueco && <span className="ml-1 text-slate-300">· Compensafe</span>}
+            </td>
+            {months.map((m) => <td key={m} />)}
+            <td className={`px-2 py-1 text-right font-mono text-[11px] tabular-nums ${
+              it.hueco ? "text-[#FF4040]" : "text-slate-500"
+            }`}>
+              {fmtM(it.amount)}
+            </td>
+          </tr>,
+        );
+      }
+    }
 
     // Recurse into children
     if (node.children.length > 0) {
@@ -974,7 +1073,7 @@ function renderPivotNodes(
             <td
               title={t.desc ?? t.vendor ?? undefined}
               style={{ ...firstColStyle, paddingLeft: leafPl, zIndex: 20, backgroundColor: rowBgFor(rows.length) }}
-              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} group-hover:bg-[#A6DEFF]/25` : "text-[10px] text-gray-400 group-hover:bg-slate-50"}`}
+              className={`overflow-hidden text-ellipsis whitespace-nowrap py-1.5 pr-3 ${homesi ? `text-xs font-normal text-slate-600 ${stickyCol} ${cellHover}` : "text-[10px] text-gray-400 group-hover:bg-slate-50"}`}
             >
               {t.desc ?? t.vendor ?? "—"}
             </td>
@@ -1014,11 +1113,13 @@ function renderPivotNodes(
       const footerText  = homesi ? "text-[#001A40]" : isOp ? "text-emerald-900" : "text-slate-800";
       const footerLabel = isOp ? "Net Income (Operational)" : "Net Income (Non-Operational)";
       rows.push(
-        <tr key={`${nodeKey}|net`} style={{ backgroundColor: footerBg }} className="border-b border-gray-200">
+        // El lavado se compone sobre `footerBg`, asi que la banda de cierre
+        // sigue siendo suya: se aclara, no se sustituye.
+        <tr key={`${nodeKey}|net`} style={{ backgroundColor: footerBg }} className={`group border-b border-gray-200 ${ROW_WASH}`}>
           <td
             title={footerLabel}
             style={{ ...firstColStyle, backgroundColor: footerBg, borderLeft: `3px solid ${footerAcc}`, paddingLeft: pl + 16, zIndex: 20 }}
-            className={`pr-3 py-1.5 text-[11px] font-extrabold ${footerText} whitespace-nowrap truncate`}
+            className={`pr-3 py-1.5 text-[11px] font-extrabold ${footerText} whitespace-nowrap truncate ${CELL_WASH}`}
           >
             {footerLabel}
           </td>
@@ -1035,7 +1136,7 @@ function renderPivotNodes(
           ))}
           <td
             style={{ ...totalColStyle, ...totalColSize, zIndex: 9, backgroundColor: footerBg }}
-            className={`${numCell} font-extrabold ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l border-gray-100`}
+            className={`${numCell} font-extrabold ${homesi ? homesiValueCls(node.total) : mvCls(node.total)} border-l border-gray-100 ${CELL_WASH}`}
           >
             <NoteCellContent
               text={fmtM(node.total)}
@@ -1094,6 +1195,7 @@ export function PivotTableDynamic({
   bpsBaseLabel,
   costCenterFilter,
   onDrillCell,
+  payrollBreakdown,
   onOpenNotes,
 }: PivotTableDynamicProps) {
   /**
@@ -1422,6 +1524,7 @@ export function PivotTableDynamic({
     exp,
     toggle,
     descSort,
+    payrollBreakdown: payrollBreakdown ?? null,
     notesOn: enableNotes,
     noteAny: noteIndex.any,
     noteDirect: noteIndex.direct,

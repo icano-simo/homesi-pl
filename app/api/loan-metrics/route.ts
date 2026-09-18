@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import {
   normalizeLoanBranch,
+  prestamoEntraEnLente,
+  type AffinityLens,
   resolveBaseBranches,
   baseIsDivisionWide,
 } from "@/lib/loan-branch";
 import { getClosedLoans } from "@/lib/loan-source";
+import { categoriaDe } from "@/lib/payroll-categories";
+import { tieneDesgloseDeNomina, DESGLOSE_GL_CODE } from "@/lib/payroll-breakdown";
 
 export const dynamic = "force-dynamic";
 
@@ -128,6 +132,16 @@ function accumulate(m: MonthMetrics, o: OfficialRow) {
 async function fetchOfficials(
   years: number[],
   loanNumbers: string[] | null,
+  /*
+   * ⚠ LA LENTE SE APLICA AQUI, SOBRE LOS CIERRES, y no sobre el resultado ya
+   * agregado: el loan count, el volumen y los bps salen todos de esta lista, y
+   * filtrar despues obligaria a filtrar tres veces y a acertar las tres.
+   *
+   * `prestamoEntraEnLente` lleva dentro la guarda de sucursal: un cierre de la
+   * 747 pasa en las tres lentes, porque la lente parte la 716 en dos y no
+   * reclasifica la division entera.
+   */
+  lente: AffinityLens = "ambas",
 ): Promise<OfficialRow[]> {
   if (loanNumbers !== null && loanNumbers.length === 0) return [];
 
@@ -139,6 +153,7 @@ async function fetchOfficials(
 
   return todos
     .filter((l) => (pedidos ? pedidos.has(l.loanNumber) : true))
+    .filter((l) => prestamoEntraEnLente(l.branch, l.isAffinity, lente))
     .map((l) => {
       // `closing_month` es un date; abajo se agrupa por nombre de mes y año.
       const [y, m] = (l.closingMonth ?? "").split("-");
@@ -162,6 +177,235 @@ async function fetchOfficials(
       } satisfies OfficialRow;
     })
     .filter((o) => (years.length ? o.year !== null && years.includes(o.year) : true));
+}
+
+/**
+ * Lo que se le pago al loan officer por estos prestamos, de comp.loan_commission.
+ *
+ * ⚠ NO ES UNA CUENTA DEL P&L, Y ESO GOBIERNA COMO SE ENSEÑA. Viene de
+ * Compensafe, no tiene gl_code y no cuadra contra el libro mayor: en la rejilla
+ * de cuentas no puede salir como una fila mas, porque la rejilla ES el libro.
+ * Va como linea aparte, diciendo de donde sale -- igual que en las tarjetas del
+ * modulo por Loan Officer.
+ *
+ * ⚠ Y `sin_comision` NO ES UN DETALLE. De los 62 cierres de "716 puro", SEIS no
+ * tienen fila en Compensafe: su comision no es cero, es desconocida. Enseñar
+ * -220.461,55 a secas afirmaria que esos seis no costaron nada. El contador
+ * viaja para que la pantalla pueda decirlo.
+ *
+ * ⚠ QUE ESTO NO SE CUENTA DOS VECES CON EL MODULO POR LOAN OFFICER: las dos
+ * cifras existen, pero contestan a poblaciones distintas --una linea de negocio
+ * contra una persona-- y NINGUNA suma en la otra. Ademas la rejilla del P&L no
+ * la contiene en absoluto: la comision no esta en `pl_transactions`, asi que el
+ * total de la rejilla y el de la linea de negocio son dos numeros distintos a
+ * proposito, y el bloque lo dice.
+ */
+async function comisionDe(loanNumbers: string[]) {
+  if (loanNumbers.length === 0)
+    return { total: 0, loans: 0, sin_comision: 0, porPrestamo: new Map<string, number>() };
+  const comp = createServerClient("comp");
+  const encontradas = new Map<string, number>();
+  for (let i = 0; i < loanNumbers.length; i += IN_CHUNK) {
+    const trozo = loanNumbers.slice(i, i + IN_CHUNK);
+    const { data, error } = await comp
+      .from("loan_commission")
+      .select("loan_number,lo_pay")
+      .in("loan_number", trozo);
+    // Que Compensafe falle no puede tumbar el panel: sin ella la comision es
+    // desconocida para TODOS, que es lo que la pantalla ya sabe decir.
+    if (error) return { total: 0, loans: 0, sin_comision: loanNumbers.length, porPrestamo: new Map<string, number>() };
+    for (const r of data ?? []) {
+      if (r.lo_pay != null) encontradas.set(String(r.loan_number), Number(r.lo_pay));
+    }
+  }
+  let total = 0;
+  for (const v of encontradas.values()) total += v;
+  return {
+    total,
+    loans: encontradas.size,
+    sin_comision: loanNumbers.length - encontradas.size,
+    porPrestamo: encontradas,
+  };
+}
+
+/**
+ * Cuanto de la cuenta 60105 DE ESTA SUCURSAL es comision de prestamos Affinity.
+ *
+ * ⚠ ES LA VIA QUE HACE POSIBLE RESTARLA, y no la que parecia. Las 130 filas de
+ * 60105 en el P&L no tienen `loan_number` --verificado, ninguna-- asi que desde
+ * el libro no hay forma de saber cuales son de Affinity. Pero
+ * `comp.payroll_transaction` SI lo trae en sus lineas de comision, y esa tabla
+ * es de donde sale el desglose de la cuenta. O sea que el reparto no se
+ * inventa: se lee de la fuente que ya explica esa cuenta.
+ *
+ * ⚠ SE FILTRA POR `branch_code`, Y ESO NO ES UN DETALLE -- son 500 euros de
+ * diferencia y solo una de las dos cifras es la correcta:
+ *
+ *     payroll_transaction · branch_code = 716   20.363,79   35 lineas
+ *     payroll_transaction · cualquier branch    20.863,79   36
+ *     comp.loan_commission · los 39 cierres     20.863,79   39
+ *
+ * La linea que sobra es de GIAN LAINO, sucursal 747, 500,00 en un prestamo de
+ * Affinity. Su comision NO esta en el 60105 de la 716 -- esta en el de la 747,
+ * porque el libro contabiliza donde esta la persona. Restar 20.863,79 quitaria
+ * de la 716 quinientos euros que nunca estuvieron ahi.
+ *
+ * Lo que se resta es lo que la cuenta LLEVA DENTRO, no lo que la linea de
+ * negocio COSTO. Son dos preguntas, y esta funcion contesta la primera.
+ */
+/*
+ * ⚠ SE REPARTE POR `pay_date`, Y NO POR EL MES DE CIERRE COMO LA OTRA FILA.
+ * Parece una incoherencia y no lo es: las dos filas ajustan cosas distintas.
+ *
+ *   LA FILA DE AFFINITY enseña lo que COSTARON esos prestamos, y va por mes de
+ *   CIERRE para quedar al lado del revenue de los mismos prestamos. No es una
+ *   cuenta del libro, asi que no tiene que respetar el calendario del libro.
+ *
+ *   ESTA saca de la cuenta 60105 lo que la cuenta LLEVA DENTRO, y 60105 la
+ *   contabiliza el libro POR FECHA DE PAGO. Restarla por mes de cierre quitaria
+ *   de julio dinero que en el 60105 de julio no estaba.
+ *
+ * Verificado sobre julio de 2026: la cuenta trae 28.896,38 y la comision de
+ * Affinity PAGADA en julio son 1.000,00 -- neto 27.896,38. Por mes de cierre
+ * habrian sido 500,00, que es otra cosa.
+ *
+ * ⚠ LA CONSECUENCIA, Y HAY QUE SABERLA: las dos filas NO se compensan mes a
+ * mes, solo sobre un periodo entero. Es el mismo desfase de los dos calendarios
+ * que este modulo documenta en PRODUCTION_PAY_GL_CODES -- Compensafe agrupa por
+ * cierre y el P&L por pago -- con otra cara.
+ */
+async function comisionAffinityEnLaCuenta(
+  branch: string,
+): Promise<{ total: number; lines: number; by_month: Record<string, number> }> {
+  const comp = createServerClient("comp");
+  const ar = createServerClient("activity_report");
+
+  const afectados = new Set<string>();
+  for (let i = 0; ; i += PAGE) {
+    const { data, error } = await ar
+      .from("loan_records_v2")
+      .select("loan_number")
+      .eq("is_affinity", true)
+      .range(i, i + PAGE - 1);
+    if (error) return { total: 0, lines: 0, by_month: {} };
+    for (const r of data ?? []) {
+      const ln = (r.loan_number as string | null)?.trim();
+      if (ln) afectados.add(ln);
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  if (afectados.size === 0) return { total: 0, lines: 0, by_month: {} };
+
+  let total = 0;
+  let lines = 0;
+  const by_month: Record<string, number> = {};
+  for (let i = 0; ; i += PAGE) {
+    const { data, error } = await comp
+      .from("payroll_transaction")
+      .select("loan_number,amount,pay_date")
+      .eq("branch_code", branch)
+      .eq("pay_type", "Commission")
+      .range(i, i + PAGE - 1);
+    if (error) return { total: 0, lines: 0, by_month: {} };
+    for (const r of data ?? []) {
+      const ln = (r.loan_number as string | null)?.trim();
+      if (!ln || !afectados.has(ln)) continue;
+      const v = Number(r.amount ?? 0);
+      total += v;
+      lines++;
+      /*
+       * `pay_date` es un date "YYYY-MM-DD". Se parte por texto y no con Date:
+       * `new Date("2026-07-31")` es UTC y en un huso al oeste se va al 30 de
+       * junio, que movería el ajuste de mes en la frontera -- y las fechas de
+       * pago caen justo ahi, a fin de quincena.
+       */
+      const mes = MONTH_NAMES[Number(String(r.pay_date ?? "").slice(5, 7)) - 1];
+      if (mes) by_month[mes] = (by_month[mes] ?? 0) + v;
+    }
+    if (!data || data.length < PAGE) break;
+  }
+  return { total, lines, by_month };
+}
+
+/**
+ * Lo que el LIBRO dice de la cuenta, para poder enfrentarlo a Compensafe.
+ *
+ * ⚠ `loan_number is null`, igual que el resto de la nomina del modulo: las
+ * lineas de 60105 no cuelgan de ningun prestamo, y pedir las que si colgaran
+ * traeria otra cosa.
+ */
+async function cuenta60105De(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  branch: string,
+  years: number[],
+): Promise<number> {
+  let q = supabase
+    .from("pl_transactions")
+    .select("movement")
+    .eq("gl_code", DESGLOSE_GL_CODE)
+    .eq("branch", branch)
+    .is("loan_number", null);
+  if (years.length) q = q.in("year", years);
+  const { data, error } = await q;
+  if (error || !data) return 0;
+  return (data as { movement: number | null }[]).reduce((s, r) => s + Number(r.movement ?? 0), 0);
+}
+
+/**
+ * Los componentes de `60105 Loan Officer Payroll` segun Compensafe.
+ *
+ * ⚠ SE CLASIFICA CON EL MISMO `categoriaDe` QUE EL MODULO POR LOAN OFFICER, y
+ * eso incluye su orden: `is_recapture` va ANTES que `is_hourly`, porque las
+ * lineas de recuperacion de horas llevan las DOS banderas y al reves contarian
+ * como horas cobradas. Dos clasificadores darian dos desgloses de la misma
+ * cuenta en la misma app.
+ *
+ * ⚠ Y EL HUECO SE DEVUELVE, NO SE REPARTE. `unexplained` es la diferencia entre
+ * lo que dice el libro y lo que dice Compensafe; repartirla entre los tres
+ * componentes afirmaria que las dos fuentes cuadran.
+ */
+async function desgloseDeNomina(branch: string, cuentaDelLibro: number) {
+  const comp = createServerClient("comp");
+  const filas = await (async () => {
+    const out: Record<string, unknown>[] = [];
+    for (let i = 0; ; i += PAGE) {
+      const { data, error } = await comp
+        .from("payroll_transaction")
+        .select("pay_type,is_hourly,is_recapture,amount")
+        .eq("branch_code", branch)
+        .range(i, i + PAGE - 1);
+      if (error) return null;
+      out.push(...((data ?? []) as Record<string, unknown>[]));
+      if (!data || data.length < PAGE) break;
+    }
+    return out;
+  })();
+  // Que Compensafe falle no puede tumbar el panel: sin ella no hay desglose,
+  // que es lo que la pantalla ya sabe enseñar.
+  if (!filas) return null;
+
+  const suma = { commission: 0, hourly: 0, recapture: 0 };
+  for (const r of filas) {
+    const cat = categoriaDe({
+      pay_type: r.pay_type as string | null,
+      is_hourly: r.is_hourly as boolean | null,
+      is_recapture: r.is_recapture as boolean | null,
+    });
+    // Solo las tres que se contabilizan en esta cuenta. Bonus y sueldo van por
+    // 60303 y 60125, asi que entran en el desglose de las suyas, no en este.
+    if (cat === "commission") suma.commission += Number(r.amount ?? 0);
+    else if (cat === "hourly") suma.hourly += Number(r.amount ?? 0);
+    else if (cat === "recapture") suma.recapture += Number(r.amount ?? 0);
+  }
+  const total = suma.commission + suma.hourly + suma.recapture;
+  return {
+    account: cuentaDelLibro,
+    commission: suma.commission,
+    hourly: suma.hourly,
+    recapture: suma.recapture,
+    unexplained: -cuentaDelLibro - total,
+  };
 }
 
 /** Paged read of the loan numbers a P&L filter selects. */
@@ -195,6 +439,9 @@ async function fetchLoanNumbers(
 export async function GET(req: NextRequest) {
   const supabase = createServerClient();
   const sp = new URL(req.url).searchParams;
+  const lenteParam = sp.get("lens");
+  const lente: AffinityLens =
+    lenteParam === "affinity" || lenteParam === "716" ? lenteParam : "ambas";
 
   const years    = sp.getAll("year").map(Number).filter(Boolean);
   const branches = sp.getAll("branch");
@@ -214,7 +461,7 @@ export async function GET(req: NextRequest) {
         ? await fetchLoanNumbers(supabase, years, branches, sources, ccIds)
         : null;
 
-      const raw = await fetchOfficials(years, loanNumbers);
+      const raw = await fetchOfficials(years, loanNumbers, lente);
 
       // ONE row set. Everything below is an aggregate of `rows` — the count and
       // the amount for a month are accumulated from the same record in the same
@@ -281,6 +528,69 @@ export async function GET(req: NextRequest) {
         unmatched_branches,
         excluded_loans: excluded,
         bucket_drift_months: drift,
+        /*
+         * ⚠ `inScope`, NO `rows` A SECAS. `fetchOfficials` NO aplica el filtro
+         * de sucursal --lo dice su propia nota-- asi que `rows` son los cierres
+         * de toda la division. Sin este filtro la comision salia 952.168,48 en
+         * 399 prestamos donde tenian que ser 20.863,79 en 39: el numero de la
+         * division entera bajo el rotulo de Affinity.
+         *
+         * Se usa el MISMO predicado que las tarjetas y la base de bps, por lo
+         * mismo que dice la nota de arriba: tres filtros escritos aparte son
+         * tres sitios donde pueden dejar de coincidir.
+         */
+        commission: await (async () => {
+          const enAlcance = rows.filter((o) => inScope(o.branch!));
+          const c = await comisionDe(enAlcance.map((o) => o.loan_number));
+          /*
+           * ⚠ POR MES DE CIERRE DEL PRESTAMO, no de pago. Compensafe agrupa por
+           * fecha de cierre --esta medido en PRODUCTION_PAY_GL_CODES-- y la
+           * rejilla enseña meses: poner la comision en el mes de pago la
+           * separaria del revenue del mismo prestamo, que es lo unico contra lo
+           * que tiene sentido leerla.
+           */
+          const by_month: Record<string, number> = {};
+          for (const o of enAlcance) {
+            const v = c.porPrestamo.get(o.loan_number);
+            if (v == null || !o.month) continue;
+            by_month[o.month] = (by_month[o.month] ?? 0) + v;
+          }
+          return {
+            total: c.total,
+            loans: c.loans,
+            sin_comision: c.sin_comision,
+            by_month,
+          };
+        })(),
+        /*
+         * El desglose de 60105, solo donde reconcilia. La lista de sucursales y
+         * el porque --y sobre todo el porque NO en las otras once-- viven en
+         * lib/payroll-breakdown.ts, no aqui.
+         */
+        /*
+         * ⚠ NULL CON LA LENTE DE AFFINITY, y no es un caso raro: con esa lente
+         * NO HAY NI UNA fila de 60105 en la rejilla --verificado ejecutando:
+         * 130 filas con "716 + Affinity", 130 con "716 only", CERO con
+         * "Affinity"-- porque la nomina no cuelga de ningun prestamo y solo las
+         * filas AE se identifican como de Affinity. Devolver el desglose ahi
+         * pintaria el detalle de una fila que no esta en la tabla.
+         */
+        payroll_breakdown:
+          tieneDesgloseDeNomina(branches) && lente !== "affinity"
+            ? await desgloseDeNomina(branches[0], await cuenta60105De(supabase, branches[0], years))
+            : null,
+        /*
+         * Cuanto de la cuenta 60105 es comision de prestamos Affinity, para
+         * poder sacarlo de la lente de "716 puro".
+         *
+         * ⚠ SOLO EN ESA LENTE. En "ambas" la cuenta tiene que quedarse entera
+         * --es el libro de la 716 completo-- y en "Affinity" no hay cuenta de
+         * la que sacar nada.
+         */
+        affinity_in_account:
+          tieneDesgloseDeNomina(branches) && lente === "716"
+            ? await comisionAffinityEnLaCuenta(branches[0])
+            : null,
       });
     }
 
@@ -288,7 +598,7 @@ export async function GET(req: NextRequest) {
     const loanNumbers = await fetchLoanNumbers(supabase, years, branches, sources, ccIds);
     if (loanNumbers.length === 0) return NextResponse.json(emptyMetrics());
 
-    const raw = await fetchOfficials([], loanNumbers);
+    const raw = await fetchOfficials([], loanNumbers, lente);
     const totals = emptyMetrics();
     for (const o of raw) {
       if (normalizeLoanBranch(o.branch) === null) continue;

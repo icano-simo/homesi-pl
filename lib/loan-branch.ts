@@ -170,6 +170,296 @@ const BRANCH_ALIASES: Record<string, string> = {
  * asi: ver la nota de memoria del success fee antes de proponer tocar gl 70100.
  */
 
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * AFFINITY DENTRO DE LA 716: LA BANDERA MANDA, Y ES UNA DECISION
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * El P&L por Loan Officer separa los prestamos de Affinity de los puros de la
+ * 716. Quien decide cual es cual es `is_affinity`, NO `branch`.
+ *
+ * ⚠ ESO NO SE SIGUE DE LOS DATOS. SE MIDIO Y APUNTABA AL CONTRARIO. El
+ * 2026-09-17, sobre los 101 cierres que hoy cuentan como 716:
+ *
+ *     branch = 'Affinity'  ·  is_affinity = true    39 cierres
+ *     branch = 'Affinity'  ·  is_affinity = false    1 cierre    <- 700002021363
+ *     branch = '716'       ·  is_affinity = false   61 cierres
+ *
+ * Y las tres cosas que se miraron sobre ese unico prestamo discrepante
+ * --700002021363, de Nathan Martinez, 441.849-- decian que era de Affinity:
+ *
+ *   · NINGUN prestamo tiene is_affinity = true fuera de branch = 'Affinity',
+ *     asi que la bandera no añadia ninguna distincion que `branch` no diera.
+ *   · Su dinero se reparte entre la 716 y la 700 EXACTAMENTE como los otros 32:
+ *     la contabilidad no lo distingue de ninguna forma.
+ *   · Cerro en enero de 2026, en pleno rango de Affinity (dic-25 a jul-26), o
+ *     sea que tampoco es un corte temporal.
+ *
+ * ⚠ AUN ASI SE QUEDA EN LA 716, PORQUE EL USUARIO LO DECIDIO. Sabe algo del
+ * negocio que el dato no dice. Queda escrito para que nadie "arregle" la
+ * discrepancia mirando solo estas tres medidas -- que es exactamente lo que
+ * recomendaba quien escribio esto antes de preguntar.
+ *
+ * ⚠ Y ES SOLO PARA ESTA PANTALLA. `BRANCH_ALIASES` sigue mapeando "Affinity" a
+ * 716 para TODO lo demas de la app: en Loan Count, en el P&L por sucursal y en
+ * las bps, Affinity ES la 716 y no hay nada que separar. Lo que cambia aqui es
+ * que el P&L por Loan Officer puede MIRAR las dos mitades por separado.
+ */
+
+/** La sucursal que se parte en dos. Solo esta. */
+export const AFFINITY_HOST_BRANCH = "716";
+
+/**
+ * Las tres lentes del selector cuando la sucursal es la 716.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ⚠ SI AÑADES UN CONSUMIDOR: LA LENTE TIENE QUE ENTRAR EN SU CLAVE O EN SU
+ *   DEPENDENCIA, O EL SELECTOR SE MARCARA Y NO PASARA NADA
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * No es una recomendacion. Es el fallo que ya se pago una vez entero: en el
+ * primer intento de esta funcionalidad los tres botones se pintaban, se
+ * marcaban al pulsarlos y los datos NO CAMBIABAN, porque `lente` no estaba en
+ * las dependencias del fetch. El sintoma es especialmente malo porque la
+ * interfaz responde: parece que funciona y enseña las cifras de la lente
+ * anterior.
+ *
+ * Y NO HAY UNA SOLA FORMA DE MANDARLA. Al aplicarla a toda la pantalla, el
+ * mismo olvido aparecio CUATRO VECES con CUATRO FORMAS DISTINTAS. Se
+ * comprobaron una a una cambiando de lente y viendo que las cuatro peticiones
+ * se rehacen:
+ *
+ *   1. DEPENDENCIA DE UN useCallback
+ *      components/lo-pnl-view.tsx -> `}, [periodo, mes, anio, branch, lente])`
+ *
+ *   2. CLAVE DE UN HOOK, que es lo que dispara su useEffect
+ *      lib/use-loan-metrics.ts -> `const key = [..., [lente]].map(...)`
+ *
+ *   3. CLAVE DE UN COMPONENTE, la misma idea con otra forma
+ *      components/loan-detail-drawer.tsx -> `const key = \`...|${lente}\``
+ *
+ *   4. EFECTO DE RECARGA EXPLICITO, cuando la peticion no cuelga de un hook
+ *      app/pl/page.tsx -> el useEffect que llama a `fetchData` al cambiar
+ *
+ * La regla, para no tener que reconocer cual de las cuatro es la tuya: SI EL
+ * DATO SE PIDE FUERA DEL RENDER, la lente va donde esta lo que decide cuando
+ * se vuelve a pedir. Y se comprueba cambiando de lente, no leyendo el codigo
+ * -- las cuatro veces el codigo parecia correcto.
+ *
+ * ⚠ Y HAY UNA QUINTA FORMA, LA UNICA QUE EL TIPO NO PROTEGE: OLVIDARSE DE
+ * PASAR EL PROP.
+ *
+ *   5. UN PROP QUE NO SE PASA, en una cadena de componentes
+ *      app/pl/page.tsx -> LoanDetailDrawer -> LoPnlView -> /api/lo-pnl
+ *
+ * Paso: el drawer recibia `lente` y no se la pasaba a `LoPnlView`, asi que la
+ * pestaña de P&L by Loan Officer enseñaba los 15 officers de la 716 con la
+ * lente de Affinity puesta, mientras la ruta devolvia 1.
+ *
+ * ⚠ EL COMPILADOR NO LO CAZA, Y ES POR UNA DECISION DELIBERADA: el prop es
+ * OPCIONAL con defecto "ambas", para que las pantallas que no conocen la lente
+ * no cambien de comportamiento por existir esta. Ese mismo defecto convierte
+ * olvidarlo en algo que compila, que se lee razonable, y que enseña datos de
+ * otra lente sin una sola señal.
+ *
+ * O sea que la seguridad que hace opcional el parametro es la que impide que
+ * el tipo avise. No se cambia --hacerlo obligatorio obligaria a tocar cada
+ * consumidor presente y futuro-- pero por eso la comprobacion tiene que ser
+ * SIEMPRE la misma: cambiar de lente y mirar que la zona cambia. En una cadena
+ * de props, mirarlo en la zona MAS PROFUNDA, que es la que se queda atras.
+ *
+ * ⚠ Y MANDA `lens` SOLO CUANDO NO ES "ambas". Sin el parametro las rutas se
+ * comportan como siempre, asi que una pantalla que no conozca la lente no
+ * cambia de comportamiento por existir esta.
+ */
+export type AffinityLens = "716" | "affinity" | "ambas";
+
+/**
+ * Si un cierre cuenta como Affinity.
+ *
+ * ⚠ SOLO `true` ES AFFINITY. `false` y `null` son 716 puro, y eso incluye el
+ * caso de `branch = 'Affinity'` con la bandera en false. No se mira `branch`
+ * aqui A PROPOSITO: mirarlo reintroduciria la discrepancia que la decision
+ * resuelve.
+ */
+export function esDeAffinity(isAffinity: boolean | null | undefined): boolean {
+  return isAffinity === true;
+}
+
+/*
+ * ⚠ LA BANDERA MANDA TAMBIEN SOBRE EL ESTADO DE CIERRE. Un prestamo con
+ * `is_affinity` es de Affinity este cerrado o no.
+ *
+ * Suena obvio y no lo es, porque la rejilla del P&L clasifica sus filas
+ * buscando el prestamo en la lista de CIERRES, y de ~190 prestamos Affinity
+ * abiertos hay CUATRO con filas ya contabilizadas en la 716:
+ *
+ *     -910,00  -200,00  -155,88  -77,94   =  -1.343,82
+ *
+ * Son costes cargados ANTES del cierre, que es justo lo que se espera de un
+ * prestamo en vuelo. Buscarlos solo entre los cerrados los dejaria en 716 puro
+ * y APARECERIAN EN AFFINITY EL DIA QUE CIERREN, sin que nada avise: alguien
+ * veria moverse 1.344 dolares de una lente a otra sin causa visible.
+ *
+ * Por eso quien clasifique filas del P&L tiene que mirar `is_affinity` en
+ * `loan_records_v2` SIN filtrar por `is_closed`. El filtro de cierres sirve
+ * para contar cierres, no para decidir de quien es una fila.
+ *
+ * ⚠ Y HAY UN TERCER GRUPO QUE NO SE PUEDE CLASIFICAR: 15 prestamos con filas en
+ * la 716 que NO ESTAN en `loan_records_v2` -- 32 filas, unos -2.896. No es que
+ * sean de la 716: es que no se sabe. Se quedan en 716 puro porque es donde ya
+ * estaban, y la pantalla LO DICE en vez de dejarlos pasar como propios.
+ */
+
+/**
+ * Si un PRESTAMO entra en la lente elegida.
+ *
+ * ⚠ LA GUARDA DE SUCURSAL NO ES OPCIONAL, y sin ella la funcion es un cepo.
+ * Un prestamo de la 747 no es de Affinity ni de "716 puro": no es de esta
+ * particion en absoluto. Sin la guarda, elegir "Affinity" lo dejaria fuera --y
+ * con el, a toda la division-- porque su bandera es false y false != affinity.
+ *
+ * La lente parte UNA sucursal en dos. Todo lo demas pasa en las tres.
+ */
+export function prestamoEntraEnLente(
+  branch: string | null | undefined,
+  isAffinity: boolean | null | undefined,
+  lente: AffinityLens,
+): boolean {
+  if (lente === "ambas") return true;
+  if (resolveLoanBranchAlias(branch) !== AFFINITY_HOST_BRANCH) return true;
+  return esDeAffinity(isAffinity) === (lente === "affinity");
+}
+
+/**
+ * Lo mismo, pero SIN la guarda de sucursal — para conjuntos que ya estan
+ * acotados a una PERSONA y no a una sucursal.
+ *
+ * ⚠ LAS DOS SON NECESARIAS Y ELEGIR LA OTRA PRODUCE UN DOBLE CONTEO SILENCIOSO.
+ * Se comprobo ejecutando, y por eso existe esta:
+ *
+ *   EN LA REJILLA, el conjunto son las filas de la 716. Una fila de la 747 no
+ *   es de Affinity ni de "716 puro": no es de esta particion, asi que pasa en
+ *   las tres lentes. Ahi va `prestamoEntraEnLente`.
+ *
+ *   EN EL P&L POR LOAN OFFICER, el conjunto son los cierres de UNA PERSONA, y
+ *   esa persona cierra donde cierra: el modulo enseña sus prestamos "cierren
+ *   donde cierren", a proposito. Con la guarda, sus cierres de la 741 pasaban
+ *   en las DOS lentes y las dos mitades dejaban de sumar: 65 + 55 = 120 sobre
+ *   un total de 103. Sin ella, 65 + 38 = 103.
+ *
+ * La diferencia no es de criterio sino de QUE es cada fila del conjunto. Una
+ * particion solo suma si cada elemento cae en exactamente un lado.
+ */
+export function cierreEntraEnLente(
+  isAffinity: boolean | null | undefined,
+  lente: AffinityLens,
+): boolean {
+  if (lente === "ambas") return true;
+  return esDeAffinity(isAffinity) === (lente === "affinity");
+}
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * EL COSTE "AE" DE AFFINITY: UNA REGLA POR PATRON, NO UNA LISTA DE NOMBRES
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Los account executives de Affinity se cargan en la 716 y se abonan en la
+ * 700, asi que a nivel division se anulan pero la 716 carga el coste. Medido el
+ * 2026-09-17:
+ *
+ *     en la 716    27 filas   -59.349,28
+ *     en la 700    27 filas   +59.349,28     <- el traslado a corporativo
+ *     de diciembre 2025 a agosto 2026
+ *
+ * Solo se mueve LA PATA DE LA 716. La de la 700 es el traslado y se queda donde
+ * esta: moverla tambien borraria el traslado en vez de reubicar el coste.
+ *
+ * ⚠ ES UN PATRON Y NO UNA LISTA DE SEIS NOMBRES, por decision del usuario y con
+ * razon: una lista se queda vieja en cuanto entra alguien y nadie se entera.
+ * Cualquier descripcion que empiece por "AE " en la 60125 entra sola.
+ *
+ * ⚠ VERIFICADO QUE NO PILLA DE MAS: no hay NI UNA fila que empiece por "AE "
+ * fuera de la 60125, y dentro de la 60125 son 27 de las 77 filas de la 716 --
+ * las otras 50 son nomina de operaciones normal y no se tocan.
+ *
+ * ⚠ Y SON SEIS PERSONAS, NO DIECINUEVE. El texto lleva el mes dentro
+ * --"AE SERVICES MAY - ..." contra "AE Services July - ..."--, viene TRUNCADO a
+ * 35 caracteres y cambia de mayusculas, asi que son 28 descripciones y 17
+ * grafias para seis personas. Contar descripciones da 19 y es la trampa:
+ *
+ *     SHIRLEY MELISSA C...   5 grafias   -22.659,24
+ *     ALFREDO ALBERTO P...   4           -18.405,12
+ *     DAVID JOSE ALVARE...   4           -15.300,42
+ *     YELITZA ZULE...        1            -1.756,03
+ *     MAYRA ALEJAND...       2            -1.228,47
+ *     JOSE ALEJAND...        1                 0,00   <- se anula solo
+ */
+export const AE_GL_CODE = "60125";
+
+/** Si una linea de nomina es coste de un account executive de Affinity. */
+export function esCosteAE(
+  glCode: string | null | undefined,
+  descripcion: string | null | undefined,
+): boolean {
+  return glCode === AE_GL_CODE && /^AE\s/i.test((descripcion ?? "").trim());
+}
+
+/** Lo minimo de una fila del P&L para saber de que lado cae. */
+export interface FilaClasificable {
+  branch: string | null;
+  loan_number: string | null;
+  gl_code: string | null;
+  check_description: string | null;
+}
+
+/**
+ * De que lado de la particion cae una fila del P&L.
+ *
+ * ⚠ SON DOS POBLACIONES CON DOS REGLAS, Y CONFUNDIRLAS ES EL ERROR FACIL:
+ *
+ *   POR PRESTAMO   la fila cuelga de un loan_number que lleva la bandera. Aqui
+ *                  entra el revenue y los costes directos de esos prestamos.
+ *   POR PATRON     la fila NO cuelga de ningun prestamo, pero se identifica por
+ *                  su descripcion: la nomina de los account executives.
+ *
+ * Todo lo demas se queda en la 716, ENTERO. Nada se prorratea: Affinity es una
+ * LINEA DE NEGOCIO, no una sucursal con estructura propia, asi que el alquiler,
+ * el marketing y la nomina que no sea AE no se reparten -- se quedan donde
+ * estan. Quien lea el resultado como "la rentabilidad de Affinity" tiene que
+ * saber que no incluye lo que cuesta sostenerla, y por eso el rotulo lo dice.
+ *
+ * ⚠ FUERA DE LA 716 NO HAY PARTICION. Una fila de otra sucursal nunca es de
+ * Affinity, aunque su prestamo lleve la bandera: la lente parte UNA sucursal en
+ * dos, no reclasifica la division entera.
+ */
+export function filaEsDeAffinity(
+  fila: FilaClasificable,
+  esPrestamoAffinity: (loanNumber: string) => boolean,
+): boolean {
+  if (fila.branch !== AFFINITY_HOST_BRANCH) return false;
+  if (esCosteAE(fila.gl_code, fila.check_description)) return true;
+  const ln = fila.loan_number?.trim();
+  return ln ? esPrestamoAffinity(ln) : false;
+}
+
+/**
+ * Si una fila del P&L entra en la lente elegida.
+ *
+ * ⚠ LAS FILAS DE OTRAS SUCURSALES ENTRAN SIEMPRE, en las tres lentes. La lente
+ * dice como partir la 716, no que esconder del resto: con un filtro de varias
+ * sucursales, elegir "Affinity" no puede vaciar la 747.
+ */
+export function filaEntraEnLente(
+  fila: FilaClasificable,
+  lente: AffinityLens,
+  esPrestamoAffinity: (loanNumber: string) => boolean,
+): boolean {
+  if (lente === "ambas") return true;
+  if (fila.branch !== AFFINITY_HOST_BRANCH) return true;
+  return filaEsDeAffinity(fila, esPrestamoAffinity) === (lente === "affinity");
+}
+
 /** The corporate branch: centralized costs, division-wide loan volume. */
 export const CORPORATE_BRANCH = "700";
 
