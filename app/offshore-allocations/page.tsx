@@ -41,7 +41,7 @@ function rowVisible(
       row.category,
       row.position,
       row.vendor,
-      row.branch_allocation,
+      ...row.branch_allocations,
       ...row.branches,
       ...(row.raw_cd2s ?? []),
     ].some((v) => v?.toLowerCase().includes(q));
@@ -54,6 +54,32 @@ function BranchCell({ branches }: { branches: string[] }) {
   if (branches.length === 0) return <span className="text-gray-300">—</span>;
   if (branches.length === 1) return <span>{branches[0]}</span>;
   return <span title={branches.join(", ")}>{branches[0]} +{branches.length - 1}</span>;
+}
+
+/**
+ * La sucursal que dice el ARCHIVO. Se enseña y no reasigna nada.
+ *
+ * ⚠ VACIA ES VACIA, NI GUION NI 700. Son 310 de las 981 filas --los vendors y
+ * las 15 de "Homesi ... payroll"-- y simplemente no traen sucursal en el
+ * archivo. Un guion se lee como un dato que existe y vale algo; un 700 seria
+ * directamente falso, porque afirmaria que el archivo dice lo mismo que la
+ * contabilidad cuando no dice nada.
+ *
+ * ⚠ Y SE ENSEÑAN TODAS. De las 70 personas del roster offshore, 23 sirven a
+ * varias sucursales, asi que una sola por fila seria un dato correcto y
+ * incompleto.
+ */
+function BranchFileCell({ branches }: { branches: string[] }) {
+  if (branches.length === 0) return null;
+  return (
+    <span className="flex flex-wrap gap-1">
+      {branches.map((b) => (
+        <span key={b} className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-600">
+          {b}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function normGroupKey(assignType: string | null, groupKey: string): string {
@@ -668,11 +694,17 @@ function BlockTable({
               </th>
               {isOther && <th className="px-3 py-2 font-medium whitespace-nowrap">Check Desc 2 (raw)</th>}
               <th className="px-3 py-2 font-medium whitespace-nowrap">Description 3</th>
-              <th className="px-3 py-2 font-medium whitespace-nowrap">Branch</th>
+              <th className="px-3 py-2 font-medium whitespace-nowrap"
+                  title="The accounting branch: where the entry is booked in the P&L. Every offshore row is booked to 700.">
+                Branch
+              </th>
+              <th className="px-3 py-2 font-medium whitespace-nowrap"
+                  title="What the offshore file says the person or cost belongs to. Shown only — nothing is reassigned, and the accounting branch above is unchanged.">
+                Branch (file)
+              </th>
               <th className="px-3 py-2 font-medium whitespace-nowrap">Category</th>
               <th className="px-3 py-2 font-medium whitespace-nowrap">Position</th>
               <th className="px-3 py-2 font-medium whitespace-nowrap">Vendor</th>
-              <th className="px-3 py-2 font-medium whitespace-nowrap">Branch Allocation</th>
               {showFeeColumns && (
                 <>
                   <th className="px-3 py-2 font-medium whitespace-nowrap text-orange-700">
@@ -721,6 +753,9 @@ function BlockTable({
                     <BranchCell branches={row.branches} />
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+                    <BranchFileCell branches={row.branch_allocations} />
+                  </td>
+                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
                     {row.category ?? <span className="text-gray-300">—</span>}
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap max-w-[140px] truncate">
@@ -728,9 +763,6 @@ function BlockTable({
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap max-w-[140px] truncate">
                     {row.vendor ?? <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                    {row.branch_allocation ?? <span className="text-gray-300">—</span>}
                   </td>
                   {showFeeColumns && (
                     row.check_description_3
@@ -1242,7 +1274,7 @@ export default function OffshoreAllocationsPage() {
           category:            r.category ?? "",
           position:            r.position ?? "",
           vendor:              r.vendor ?? "",
-          branch_allocation:   r.branch_allocation ?? "",
+          branch_allocation:   r.branch_allocations.join(", "),
           cc_labels:           r.cc_labels.join(", "),
           tx_count:            r.tx_count,
           tx_count_unassigned: r.tx_count_unassigned,
@@ -1257,7 +1289,7 @@ export default function OffshoreAllocationsPage() {
       { key: "category",            label: "Category" },
       { key: "position",            label: "Position" },
       { key: "vendor",              label: "Vendor" },
-      { key: "branch_allocation",   label: "Branch Allocation" },
+      { key: "branch_allocation",   label: "Branch (file)" },
       { key: "cc_labels",           label: "Cost Centers" },
       { key: "tx_count",            label: "Total Tx" },
       { key: "tx_count_unassigned", label: "Unassigned Tx" },
