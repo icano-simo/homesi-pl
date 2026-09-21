@@ -33,13 +33,27 @@
 -- `equals` para lo mismo y dos reglas hermanas que comparan distinto son una
 -- diferencia que alguien acabara tomando por intencional.
 --
--- ⚠ EL ORDEN DE LAS CONDICIONES ES LA SEMANTICA. El evaluador pliega de
--- IZQUIERDA A DERECHA sin precedencia --ver `evaluateConditions` en
--- lib/evaluate-cost-center-rules.ts-- asi que
--- `41309 OR 41307 AND b2b=yes` se agrupa como `(41309 OR 41307) AND b2b=yes`,
--- que es lo que se quiere y es como ya funciona la regla de CC01. Invertir el
--- orden daria `41309 OR (41307 AND b2b=yes)` y mandaria a CC03 todo el 41309
--- de la division.
+-- ═════════════════════════════════════════════════════════════════════════════
+-- ⚠ EL PARENTESIS SE ESCRIBE, NO SE DEDUCE DEL ORDEN
+-- ═════════════════════════════════════════════════════════════════════════════
+--
+-- La primera version de este archivo NO ponia `opens_group` / `closes_group`.
+-- Se apoyaba en que `evaluateConditions` pliega de izquierda a derecha, asi
+-- que `41309 OR 41307 AND b2b=yes` saldria como `(41309 OR 41307) AND b2b=yes`.
+--
+-- Eso es cierto HOY y es la forma equivocada de escribirlo. La tabla tiene dos
+-- columnas para el parentesis y la regla hermana --"Income: Override margin"--
+-- las usa: abre en el 41309 y cierra en el 41307. Dejar el agrupamiento a
+-- merced de como pliegue el evaluador es exactamente el riesgo que la propia
+-- nota advertia, con la solucion delante y sin usarla.
+--
+-- Sin el parentesis explicito, el dia que alguien reordene las condiciones o
+-- cambie el plegado, esto pasa a ser `41309 OR (41307 AND b2b=yes)` y manda a
+-- CC03 TODO el 41309 de la division. Con las dos columnas puestas, no.
+--
+-- ⚠ LAS DOS REGLAS TIENEN QUE MANTENER LA MISMA FORMA. Si una cambia de
+-- cuentas, la otra tambien -- son las dos caras de la misma particion:
+-- b2b=yes va a CC03 y b2b=no va a CC01, sobre el MISMO par de cuentas.
 
 DO $$
 DECLARE
@@ -62,15 +76,17 @@ BEGIN
      SET sequence = 3, logic_connector = 'AND'
    WHERE split_rule_id = v_rule AND field = 'b2b';
 
-  -- 3. La primera condicion compara igual que la de CC01.
+  -- 3. La primera ABRE el parentesis.
   UPDATE finance_division.split_rule_conditions
-     SET operator = 'equals', sequence = 1, logic_connector = NULL
+     SET sequence = 1, logic_connector = NULL,
+         opens_group = true, closes_group = false
    WHERE split_rule_id = v_rule AND field = 'gl_code' AND value = '41309';
 
-  -- 4. La cuenta que faltaba, en medio y con OR.
+  -- 4. La cuenta que faltaba, en medio, con OR, y CIERRA el parentesis.
   INSERT INTO finance_division.split_rule_conditions
-    (split_rule_id, sequence, logic_connector, field, operator, value, group_number)
-  SELECT v_rule, 2, 'OR', 'gl_code', 'equals', '41307', 0
+    (split_rule_id, sequence, logic_connector, field, operator, value,
+     group_number, opens_group, closes_group)
+  SELECT v_rule, 2, 'OR', 'gl_code', 'equals', '41307', 0, false, true
    WHERE NOT EXISTS (
      SELECT 1 FROM finance_division.split_rule_conditions
       WHERE split_rule_id = v_rule AND field = 'gl_code' AND value = '41307');
@@ -78,10 +94,14 @@ END $$;
 
 -- ── Comprobacion: deberia dar exactamente estas tres filas ──────────────────
 --
---     sequence  connector  field    operator  value
---     1         (null)     gl_code  equals    41309
---     2         OR         gl_code  equals    41307
---     3         AND        b2b      equals    yes
+--     seq  connector  field    operator  value   opens  closes
+--     1    (null)     gl_code  contains  41309   true   false
+--     2    OR         gl_code  equals    41307   false  true
+--     3    AND        b2b      equals    yes     false  false
+--
+-- (el `contains` del 41309 se conserva como estaba; la regla de CC01 usa
+--  `equals` para lo mismo y esa asimetria sigue ahi, sin consecuencia hoy
+--  porque no existe ningun gl_code que contenga 41309 sin serlo)
 --
 -- select c.sequence, c.logic_connector, c.field, c.operator, c.value
 --   from finance_division.split_rule_conditions c
