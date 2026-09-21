@@ -6,6 +6,7 @@ import {
   type AffinityLens,
   resolveBaseBranches,
   baseIsDivisionWide,
+  hayCierresPropios,
 } from "@/lib/loan-branch";
 import { getClosedLoans } from "@/lib/loan-source";
 import { categoriaDe } from "@/lib/payroll-categories";
@@ -539,8 +540,34 @@ export async function GET(req: NextRequest) {
          * mismo que dice la nota de arriba: tres filtros escritos aparte son
          * tres sitios donde pueden dejar de coincidir.
          */
+        /*
+         * ⚠ SOLO SI ALGUNO DE ESTOS PRESTAMOS CERRO EN LAS SUCURSALES PEDIDAS.
+         *
+         * Es el mismo fallo que la nota de abajo dice arreglado, por otra
+         * puerta. Alli entraba porque `fetchOfficials` no filtraba por
+         * sucursal; aqui entra por la REGLA CORPORATIVA: al pedir la 700,
+         * `resolveBaseBranches` devuelve `null` --la 700 es la division, y eso
+         * es correcto para el bps-- asi que `inScope` acepta todo.
+         *
+         * Medido el 2026-09-21, año 2026:
+         *
+         *     branch=700                    978.843,38 en 371 prestamos
+         *     branch=700 + lente Affinity   795.350,78 en 323
+         *     branch=716 + lente Affinity    13.800,00 en 32   <- lo real
+         *
+         * Los 795.350,78 se habrian pintado como una fila de la rejilla
+         * rotulada "LO commission · Compensafe" dentro de la 716, que es
+         * exactamente "el numero de la division entera bajo el rotulo de
+         * Affinity" otra vez.
+         *
+         * NI UN PRESTAMO CIERRA EN LA 700: es corporativa. La comision la paga
+         * la sucursal del cierre, asi que aqui no hay ninguna que enseñar.
+         */
         commission: await (async () => {
           const enAlcance = rows.filter((o) => inScope(o.branch!));
+          if (!hayCierresPropios(branches, enAlcance.map((o) => o.branch))) {
+            return { total: 0, loans: 0, sin_comision: 0, by_month: {} };
+          }
           const c = await comisionDe(enAlcance.map((o) => o.loan_number));
           /*
            * ⚠ POR MES DE CIERRE DEL PRESTAMO, no de pago. Compensafe agrupa por
