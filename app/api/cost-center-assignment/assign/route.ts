@@ -32,6 +32,17 @@ export async function POST(req: NextRequest) {
       cost_center_conflicts: null,
       assignment_origin: "manual",
       operational_pct,
+      /*
+       * ⚠ DE LA SESION, NUNCA DEL CUERPO. Mismo criterio que
+       * `pl_notes.author`: un autor que llega en el body es un autor que
+       * elige el cliente, y entonces el rastro no prueba nada.
+       *
+       * La FECHA no se escribe aqui: el trigger
+       * `trg_pl_transactions_cc_updated_at` ya mueve `updated_at` cuando
+       * cambia la asignacion, y dos columnas para el mismo hecho acaban
+       * discrepando.
+       */
+      assigned_by: guard.user.email ?? null,
     })
     .in("id", transaction_ids);
 
@@ -54,6 +65,13 @@ export async function POST(req: NextRequest) {
         cost_center_id,
         percentage: 100,
         is_operational,
+        /*
+         * ⚠ ESTE SPLIT ES EL QUE MANDA EN LA PANTALLA. La rejilla sigue al
+         * split y no a `cost_center_id`, asi que esta fila es la que decide
+         * donde se ve el apunte. Su autor es el mismo que el de la
+         * asignacion, y por eso se escribe aqui tambien.
+         */
+        created_by: guard.user.email ?? null,
       }))
     );
     if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
