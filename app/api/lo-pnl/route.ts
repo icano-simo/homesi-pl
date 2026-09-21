@@ -1036,6 +1036,30 @@ export interface LoPnlResult {
    * esas personas salen mejores que la realidad.
    */
   commissionOutsidePayrollTotal: number;
+  /**
+   * ─────────────────────────────────────────────────────────────────────────
+   * ¿HAY COMISION EN LO QUE SE ESTA MIRANDO?
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Falso para la 700, que es corporativa: nadie cierra prestamos ahi, asi que
+   * no hay comision que enseñar. Medido el 2026-09-21 con la 700 puesta: 37
+   * personas, CERO cierres, cero comision por las dos vias --el espejo de
+   * cierres y comp.payroll_transaction-- y cero filas en las cuentas de
+   * produccion. Lo que SI tiene son 238.520,40 de salario y horas en 6
+   * personas, que es su coste real y se queda.
+   *
+   * ⚠ SE DERIVA DEL DATO, NO DE "si branch = 700". Un `if` con el numero
+   * dentro seria falso dos veces: escondería la comision el dia que la 700
+   * tuviera una, y no la esconderia en cualquier otra sucursal corporativa que
+   * aparezca mañana. Preguntar por el dato acierta en los dos casos sin que
+   * nadie tenga que acordarse.
+   *
+   * ⚠ Y PREGUNTA POR LAS DOS FUENTES. La comision llega por el espejo de
+   * cierres (`block1Commission`) y por Compensafe (`compensafe.commission`), y
+   * no siempre coinciden: en la 716 son 196.364,98 contra 221.198,11. Mirar
+   * solo una escondería la parte que la otra ve.
+   */
+  hasCommission: boolean;
 }
 
 // ─── Paginacion ───────────────────────────────────────────────────────────────
@@ -2238,6 +2262,9 @@ export async function GET(req: NextRequest) {
     nameKeyAvailable: censo.hasNameKey,
     nameKeyNote: censo.nameKeyNote,
     commissionOutsidePayrollTotal,
+    hasCommission: officers.some(
+      (o) => o.block1Commission !== 0 || o.commission !== 0 || o.compensafe.commission !== 0,
+    ),
   };
 
   return NextResponse.json(result);
