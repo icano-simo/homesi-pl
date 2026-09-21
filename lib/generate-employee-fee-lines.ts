@@ -1,6 +1,6 @@
 import { createServerClient } from "@/lib/supabase-server";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials, fetchUploadTxsForRules } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassifications, fetchUploadTxsForRules } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { applyEmployeeFeeCostSplits } from "@/lib/apply-employee-fee-cost-splits";
 import { buildVersionedSplitsMap, type SplitVersionRow } from "@/lib/split-version-utils";
@@ -227,7 +227,7 @@ export async function generateEmployeeFeeLines(
     // ── 7. Apply cost center assignments ─────────────────────────────────────
     const [splitRules, loMap] = await Promise.all([
       loadAllSplitRules(supabase),
-      loadLoanOfficialFields(supabase),
+      loadLoanClassifications(supabase),
     ]);
 
     // Paged: an unbounded select stops at 1000 rows. This runs automatically
@@ -246,7 +246,7 @@ export async function generateEmployeeFeeLines(
         const ruleSplitEntries: RuleSplitEntry[] = [];
         const ccUpdates = incomeTxs.map((tx) => {
           const txId     = tx.id;
-          const enriched = enrichTxWithLoanOfficials(tx as unknown as Record<string, unknown>, loMap);
+          const enriched = enrichTxWithLoanClassifications(tx as unknown as Record<string, unknown>, loMap);
           const r        = evaluateCostCenterRules(enriched as unknown as PLTransaction, splitRules as SplitRuleWithDetails[]);
           const origin   = r.cost_center_status !== "assigned" ? null : r.rule_splits ? "rule_split" : "rule";
           if (r.rule_splits) ruleSplitEntries.push({ transaction_id: txId, splits: r.rule_splits });
