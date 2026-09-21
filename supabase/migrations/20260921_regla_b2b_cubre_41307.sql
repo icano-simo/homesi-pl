@@ -28,10 +28,12 @@
 -- rondas encontrar esta semana. La regla de CC01 nunca tuvo condicion de
 -- sucursal.
 --
--- ⚠ Y `contains` PASA A `equals`. `gl_code contains '41309'` casaria tambien
--- con '413090' o 'X41309'. Hoy no hay ninguna, pero la regla de CC01 usa
--- `equals` para lo mismo y dos reglas hermanas que comparan distinto son una
--- diferencia que alguien acabara tomando por intencional.
+-- ⚠ EL `contains` DEL 41309 SE CONSERVA, y es lo unico que sigue asimetrico:
+-- la regla de CC01 usa `equals` para la misma cuenta. `contains '41309'`
+-- casaria tambien con '413090' o 'X41309', y hoy no existe ninguno -- por eso
+-- no se toca en la misma operacion que cambia el alcance de la regla. Queda
+-- anotado como lo que es: una diferencia sin consecuencia que alguien acabara
+-- tomando por intencional si nadie la escribe.
 --
 -- ═════════════════════════════════════════════════════════════════════════════
 -- ⚠ EL PARENTESIS SE ESCRIBE, NO SE DEDUCE DEL ORDEN
