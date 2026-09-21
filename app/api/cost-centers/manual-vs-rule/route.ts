@@ -79,6 +79,25 @@ export interface ManualVsRuleFamily {
   items: ManualVsRuleRow[];
 }
 
+/**
+ * Una fila cuyo split de transaccion apunta a OTRO centro de coste que la
+ * propia fila. La pantalla sigue al split, asi que lo que se ve no es lo que
+ * dice `cost_center_id`.
+ */
+export interface DesyncRow {
+  id: string;
+  branch: string | null;
+  gl_code: string | null;
+  month: string | null;
+  year: number | null;
+  movement: number;
+  loan_number: string | null;
+  /** Lo que dice la columna de la fila. */
+  rowCc: string;
+  /** Lo que dice su split, que es lo que se pinta. */
+  splitCc: string;
+}
+
 export interface ManualVsRuleResult {
   families: ManualVsRuleFamily[];
   totals: { rows: number; amount: number };
@@ -87,6 +106,31 @@ export interface ManualVsRuleResult {
   manualTotal: number;
   /** Cuantas de las listadas tienen autor y fecha. Hoy, casi ninguna. */
   withTrail: number;
+  /**
+   * ─────────────────────────────────────────────────────────────────────────
+   * LA FILA DICE UN CECO Y SU SPLIT DICE OTRO
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Es la misma pregunta que el resto de la pestaña --"esto esta en un centro
+   * distinto del que deberia"-- vista desde el otro lado: aqui no discrepan el
+   * humano y la regla, discrepan la fila y su propio split.
+   *
+   * ⚠ LA REJILLA SIGUE AL SPLIT. Con filtro de centro de coste, el pivot llama
+   * a `fanOutBySplits`, que SOBRESCRIBE `cost_center_id` con el del split. Un
+   * `assign_type='transaction'` apunta a una fila concreta por su id, asi que
+   * un UPDATE directo a `cost_center_id` NO MUEVE NADA en pantalla.
+   *
+   * ⚠ Y NADA LO AVISA: ni un error, ni un cero raro. El 2026-09-21 se movieron
+   * 24 filas de CC01 a CC03 con un UPDATE directo; en la base quedaron en
+   * CC03 y en la pantalla en CC01, y el sintoma fueron DOS MESES VACIOS que
+   * costaron tres rondas encontrar. Esta seccion existe para que la proxima se
+   * vea sola.
+   *
+   * ⚠ SOLO LOS SPLITS DE UNA LINEA AL 100%. En un reparto 60/40 la fila solo
+   * puede coincidir con uno de los dos lados, asi que contarlos daria 1.394
+   * falsos positivos donde las desincronizadas de verdad eran 24.
+   */
+  desync: DesyncRow[];
 }
 
 export async function GET() {
@@ -162,6 +206,60 @@ export async function GET() {
     fams.set(key, f);
   }
 
+  /*
+   * Las desincronizadas. Se piden aparte porque la pregunta es otra: no "que
+   * diria la regla" sino "coincide la fila con su propio split".
+   */
+  const desync: DesyncRow[] = [];
+  {
+    type S = { assign_value: string; cost_center_id: string; percentage: number };
+    const porTx = new Map<string, S[]>();
+    for (let off = 0; ; off += 1000) {
+      const { data } = await sb
+        .from("cc_allocation_splits")
+        .select("assign_value,cost_center_id,percentage")
+        .eq("assign_type", "transaction")
+        .order("assign_value", { ascending: true })
+        .range(off, off + 999);
+      if (!data?.length) break;
+      for (const r of data as unknown as S[]) {
+        const a = porTx.get(r.assign_value) ?? [];
+        a.push(r);
+        porTx.set(r.assign_value, a);
+      }
+      if (data.length < 1000) break;
+    }
+    /* Destino unico: ver la nota del tipo. */
+    const unicos = [...porTx.entries()]
+      .filter(([, a]) => a.length === 1 && Number(a[0].percentage) === 100)
+      .map(([txId, a]) => [txId, a[0].cost_center_id] as const);
+
+    for (let i = 0; i < unicos.length; i += 200) {
+      const trozo = unicos.slice(i, i + 200);
+      const { data } = await sb
+        .from("pl_transactions")
+        .select("id,branch,gl_code,month,year,movement,loan_number,cost_center_id")
+        .in("id", trozo.map(([id]) => id));
+      const cecoDelSplit = new Map(trozo);
+      for (const t of (data ?? []) as unknown as Record<string, unknown>[]) {
+        const suyo = t.cost_center_id as string | null;
+        const delSplit = cecoDelSplit.get(t.id as string);
+        if (!suyo || !delSplit || suyo === delSplit) continue;
+        desync.push({
+          id: t.id as string,
+          branch: (t.branch as string) ?? null,
+          gl_code: (t.gl_code as string) ?? null,
+          month: (t.month as string) ?? null,
+          year: (t.year as number) ?? null,
+          movement: Number(t.movement ?? 0),
+          loan_number: (t.loan_number as string) ?? null,
+          rowCc: nombre(suyo),
+          splitCc: nombre(delSplit),
+        });
+      }
+    }
+  }
+
   const families = [...fams.values()].sort((a, b) => b.rows - a.rows);
   for (const f of families) { f.accounts.sort(); f.branches.sort(); }
 
@@ -174,6 +272,7 @@ export async function GET() {
     ruleSilent: { rows: silentRows, amount: silentAmount },
     manualTotal: filas.length,
     withTrail,
+    desync,
   };
   return NextResponse.json(res);
 }

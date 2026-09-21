@@ -1645,6 +1645,77 @@ function ManualVsRuleTab() {
           </div>
         </>
       )}
+
+      {/*
+        * ⚠ LA MISMA PREGUNTA DESDE EL OTRO LADO. Arriba discrepan el humano y
+        * la regla; aqui discrepan la fila y su propio split. Va en la misma
+        * pestaña a proposito: dos pantallas para "esto esta en un centro
+        * distinto del que deberia" se separan.
+        */}
+      <div className="pt-2">
+        <h3 className="px-1 pb-1.5 text-[11px] font-bold uppercase tracking-wide text-[#001A40]">
+          Row says one centre, its split says another
+        </h3>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-relaxed text-slate-600">
+          <p>
+            With a cost-centre filter on, the grid follows the{" "}
+            <span className="font-medium">split</span>, not the column: the pivot overwrites each
+            row&apos;s centre with the one its split names. So a direct{" "}
+            <code className="rounded bg-slate-200/70 px-1">UPDATE</code> to{" "}
+            <code className="rounded bg-slate-200/70 px-1">cost_center_id</code> moves nothing on
+            screen while a line-level split still points elsewhere.
+          </p>
+          {/*
+            * El coste de no tener esto: dos meses vacios y tres rondas. Se dice
+            * aqui porque el sintoma no se parece a la causa.
+            */}
+          <p className="mt-1 text-slate-500">
+            Nothing warns about it &mdash; no error, no odd zero. On 2026-09-21 twenty-four rows
+            were moved this way and the only symptom was two empty months.
+          </p>
+        </div>
+
+        {data.desync.length === 0 ? (
+          <p className="px-1 py-4 text-xs text-slate-400">
+            None &mdash; every row agrees with its own split.
+          </p>
+        ) : (
+          <div className="mt-2 overflow-hidden rounded-xl border border-[#FF4040]/30 bg-white">
+            <table className="w-full text-xs">
+              <thead className="bg-[#FF4040]/5 text-left text-[10px] uppercase tracking-wide text-[#FF4040]">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Loan / row</th>
+                  <th className="px-3 py-2 font-medium">Account</th>
+                  <th className="px-3 py-2 font-medium">Branch</th>
+                  <th className="px-3 py-2 font-medium">Period</th>
+                  <th className="px-3 py-2 font-medium">The row says</th>
+                  <th className="px-3 py-2 font-medium">The screen shows</th>
+                  <th className="px-3 py-2 text-right font-medium">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.desync.map((d) => (
+                  <tr key={d.id} className="border-b border-gray-100 hover:bg-[#A6DEFF]/20">
+                    <td className="px-3 py-1.5 font-mono text-[11px] text-gray-600">
+                      {d.loan_number ?? d.id.slice(0, 8)}
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-[11px] text-gray-500">{d.gl_code}</td>
+                    <td className="px-3 py-1.5 font-mono text-[11px] text-gray-500">{d.branch}</td>
+                    <td className="px-3 py-1.5 text-gray-500">
+                      {d.month?.slice(0, 3)} {d.year}
+                    </td>
+                    <td className="px-3 py-1.5 text-gray-700">{d.rowCc}</td>
+                    <td className="px-3 py-1.5 font-medium text-[#FF4040]">{d.splitCc}</td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums text-gray-700">
+                      {fmt(d.movement)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
