@@ -57,6 +57,39 @@ cubría la segunda entrada, que nadie había abierto todavía cuando se escribi�
 
 ---
 
+## La versión más simple: reglas hermanas
+
+No hace falta que el segundo camino sea exótico. El **2026-09-21**, tres reglas
+partían el mismo margen en tres destinos:
+
+```
+Income: Override margin     (41309 OR 41307) AND recruitment=no AND b2b=no  -> CC01
+B2B income                   41309           AND b2b=yes AND branch=700     -> CC03
+Recruitment income           41309           AND recruitment=yes            -> CC04
+```
+
+Alguien vio que faltaba margen en CC03, se midió, y se arregló **la de B2B**.
+Las otras dos quedaron con la forma vieja. La de Recruitment **no se vio hasta
+que el usuario preguntó expresamente por ella** — y tenía el mismo hueco: 2
+filas, 2.130,70.
+
+> ⚠ **Cuando algo tiene hermanas, el arreglo no es de una: es de la familia.**
+> Reglas que parten el mismo dato, rutas que leen la misma tabla, pantallas que
+> hacen la misma pregunta. Arreglar la que se ve fallar deja a las demás
+> esperando a que alguien las mire.
+
+**Lo que cierra el caso es el barrido, y hay que dejarlo medido.** Aquí:
+ninguna otra regla de `cost_center_rules` ni de `split_rule_conditions` usa
+`b2b`, `recruitment`, `processing`, `support_on_demand`, `affinity`,
+`lead_source_lo` ni `bd_owner`. Son exactamente esas tres — por eso se puede
+decir que está completo en vez de esperar a la siguiente.
+
+*(Y el barrido hay que hacerlo en **las dos** tablas. La primera medición miró
+sólo `cost_center_rules`, dio cero, y concluyó que ninguna regla usaba esos
+campos. Las cuatro que sí los usaban estaban en `split_rule_conditions`.)*
+
+---
+
 ## Qué hacer
 
 1. **Un comentario que dice «arreglado» es una lista de sospechosos, no un
@@ -68,7 +101,9 @@ cubría la segunda entrada, que nadie había abierto todavía cuando se escribi�
 3. **Al arreglar algo con alcance, barrer la pantalla entera con ese alcance
    puesto.** El barrido de la 700 encontró tres superficies más y una cuarta que
    nadie había pedido — la peor de las cuatro.
-4. **Escribir la puerta, no solo el arreglo.** «Entraba por `fetchOfficials`» y
+4. **Si tiene hermanas, arreglar la familia** — y decir cuántas son y cómo se
+   contaron, para poder dar el barrido por cerrado.
+5. **Escribir la puerta, no solo el arreglo.** «Entraba por `fetchOfficials`» y
    «entraba por la regla corporativa» son dos hechos distintos, y el segundo no
    se deduce del primero.
 
