@@ -62,6 +62,9 @@ type SupabaseClient = ReturnType<typeof createServerClient>;
  *     "strategy = 'B2B'         AS is_b2b",
  *     "strategy = 'Recruitment' AS is_recruitment",
  *
+ * El registro de los huecos de fuente que se han encontrado --este incluido--
+ * vive en docs/huecos-en-las-fuentes.md.
+ *
  * ⚠ AQUI SE LEE `strategy`, NO LA COLUMNA `is_recruitment`, Y ES DELIBERADO.
  * Son el mismo predicado --la columna ES `strategy = 'Recruitment'` calculada
  * en el sync-- pero leer la columna ata este archivo a un orden de despliegue:
@@ -151,6 +154,26 @@ export async function loadLoanClassifications(
       processing: f?.processing === true,
       support_on_demand: f?.support_on_demand === true,
       affinity: espejoRow?.is_affinity === true,
+      /*
+       * ⚠ UN VALOR, NO DOS CASILLAS -- Y ESO ES UN CAMBIO DE MODELO.
+       *
+       * `strategy` es UNO solo, con precedencia resuelta aguas arriba:
+       *
+       *     Affinity > NPPM > Recruitment > B2B > Own Production
+       *
+       * `loan_officials` tenia `b2b` y `recruitment` como banderas
+       * INDEPENDIENTES, y un prestamo podia llevar las dos. Aqui no puede: si
+       * la precedencia dice B2B, no es Recruitment.
+       *
+       * No es un detalle de implementacion. Resolvio solo el unico conflicto
+       * vivo que quedaba --747002052489, marcado recruitment a mano y `B2B` en
+       * el espejo, que casaba con la regla de B2B y la de Recruitment a la
+       * vez-- y de las 18 marcadas recruitment, 17 casan por strategy y esa no.
+       *
+       * ⚠ SI ALGUIEN VUELVE A PONER CASILLAS INDEPENDIENTES, que sepa que eso
+       * reabre la posibilidad de que un prestamo case con dos reglas hermanas
+       * y vuelvan los conflictos. Es una decision de modelo, no un campo mas.
+       */
       recruitment: espejoRow?.strategy === "Recruitment",
       lead_source_lo: (espejoRow?.lead_source as string) ?? null,
       bd_owner: (espejoRow?.bd as string) ?? null,
