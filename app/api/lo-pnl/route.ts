@@ -1036,6 +1036,62 @@ export interface LoPnlResult {
    * esas personas salen mejores que la realidad.
    */
   commissionOutsidePayrollTotal: number;
+  /**
+   * ─────────────────────────────────────────────────────────────────────────
+   * ¿HAY COMISION EN LO QUE SE ESTA MIRANDO?
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Falso para la 700, que es corporativa: nadie cierra prestamos ahi, asi que
+   * no hay comision que enseñar. Medido el 2026-09-21 con la 700 puesta: 37
+   * personas, CERO cierres, cero comision por las dos vias --el espejo de
+   * cierres y comp.payroll_transaction-- y cero filas en las cuentas de
+   * produccion. Lo que SI tiene son 238.520,40 de salario y horas en 6
+   * personas, que es su coste real y se queda.
+   *
+   * ⚠ SE DERIVA DEL DATO, NO DE "si branch = 700". Un `if` con el numero
+   * dentro seria falso dos veces: escondería la comision el dia que la 700
+   * tuviera una, y no la esconderia en cualquier otra sucursal corporativa que
+   * aparezca mañana. Preguntar por el dato acierta en los dos casos sin que
+   * nadie tenga que acordarse.
+   *
+   * ⚠ Y PREGUNTA POR LAS DOS FUENTES. La comision llega por el espejo de
+   * cierres (`block1Commission`) y por Compensafe (`compensafe.commission`), y
+   * no siempre coinciden: en la 716 son 196.364,98 contra 221.198,11. Mirar
+   * solo una escondería la parte que la otra ve.
+   *
+   * ───────────────────────────────────────────────────────────────────────
+   * ⚠ LA SUCURSAL DE LA FILA NO ES LA SUCURSAL DE LA GENTE
+   * ───────────────────────────────────────────────────────────────────────
+   *
+   * Esta es la leccion de metodo del cambio, y por poco la fallo. Al verificar
+   * que la 700 no tiene nada de produccion, la consulta obvia es:
+   *
+   *     select ... from pl_transactions
+   *     where branch = '700' and gl_code in ('60105','60115','60117')
+   *
+   * y devuelve CUATRO filas. Leidas asi dicen "la 700 si tiene cuentas de
+   * produccion" y tumban toda la premisa. Son falsas para esta pregunta:
+   *
+   *     THERIANOS, MARK A              60105   -2.522,00
+   *     Lopez-Boggio, Jose A           60117     -740,66
+   *     LOPEZ-BOGGIO, JOSE A           60117     -510,80  ┐ reclass
+   *     LOPEZ-BOGGIO, JOSE A-RECLASS   60117     +510,80  ┘ se anulan
+   *
+   * Ninguno de los dos esta en la 700. `branch` es donde se CONTABILIZA el
+   * apunte; la gente que este modulo enseña sale de `roster_current.
+   * branch_code`, que es otra cosa. Son dos poblaciones distintas que se
+   * llaman igual, y la consulta no avisa de cual esta contestando.
+   *
+   * ⚠ LA VERIFICACION BUENA FUE EJECUTAR LA RUTA, NO EL SQL. Pidiendo
+   * `?year=2026&branch=700` salen 37 personas, cero cierres, cero comision y
+   * cero filas en esas cuentas -- que es la pregunta que la pantalla hace. El
+   * SQL contestaba una pregunta parecida y distinta, con un numero plausible.
+   *
+   * La regla, para la proxima: cuando la pantalla filtra por PERSONAS, hay que
+   * medir sobre las personas. Una consulta que filtra por la sucursal de la
+   * fila esta midiendo otro conjunto, y lo peor es que devuelve algo.
+   */
+  hasCommission: boolean;
 }
 
 // ─── Paginacion ───────────────────────────────────────────────────────────────
@@ -2238,6 +2294,9 @@ export async function GET(req: NextRequest) {
     nameKeyAvailable: censo.hasNameKey,
     nameKeyNote: censo.nameKeyNote,
     commissionOutsidePayrollTotal,
+    hasCommission: officers.some(
+      (o) => o.block1Commission !== 0 || o.commission !== 0 || o.compensafe.commission !== 0,
+    ),
   };
 
   return NextResponse.json(result);

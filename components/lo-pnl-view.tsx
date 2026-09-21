@@ -954,10 +954,17 @@ function TarjetaPrestamo({ l, abierta, onToggle }: {
  * en total que alguien cobro: esconderlas para que la resta quede limpia seria
  * cambiar una pregunta sin respuesta por una respuesta falsa.
  */
-function ComparacionNomina({ o, pagoPorProducir, localizada }: {
+function ComparacionNomina({ o, pagoPorProducir, localizada, hayComision }: {
   o: OfficerBlock;
   pagoPorProducir: number;
   localizada: boolean;
+  /**
+   * ⚠ DEL ALCANCE, NO DE ESTA PERSONA. Si en lo que se esta mirando no hay ni
+   * una linea de comision --la 700, que es corporativa-- la fila no se pinta
+   * para nadie. Por persona seria otra cosa: un loan officer que no cerro este
+   * mes SI debe ver su comision a cero, porque ahi el cero es el dato.
+   */
+  hayComision: boolean;
 }) {
   const c = o.compensafe;
   const hayDesglose = Object.values(c).some((v) => v !== 0);
@@ -975,7 +982,7 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
     veredictoDelBonus(c, localizada ? pagoPorProducir : null) === "dentro";
 
   const dentro = [
-    ...EN_LA_COMPARACION.filter((k) => c[k] !== 0),
+    ...EN_LA_COMPARACION.filter((k) => c[k] !== 0 && !(k === "commission" && !hayComision)),
     ...(bonoDentro ? (["bonus"] as const) : []),
   ];
   const fuera = FUERA_DE_LA_COMPARACION.filter(
@@ -1036,10 +1043,12 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
         /* ⚠ AUSENCIA, NO CERO. Que Compensafe no tenga ni una linea de esta
            persona en este periodo no significa que no cobrara: significa que no
            lo sabemos por aqui. Un 0 en su sitio seria una afirmacion. */
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-slate-600" title="By closing month — Compensafe groups commission by the date the loan closed. The P&L row for the same money goes by pay date, so the two can differ within a month.">Commission on loans <span className="text-slate-400">· by closing month</span></span>
-          <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
-        </div>
+        hayComision ? (
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-slate-600" title="By closing month — Compensafe groups commission by the date the loan closed. The P&L row for the same money goes by pay date, so the two can differ within a month.">Commission on loans <span className="text-slate-400">· by closing month</span></span>
+            <span className="font-mono tabular-nums text-slate-700">{usdEntero(o.commission)}</span>
+          </div>
+        ) : null
       )}
 
       <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-slate-200 pt-1">
@@ -1092,7 +1101,7 @@ function ComparacionNomina({ o, pagoPorProducir, localizada }: {
   );
 }
 
-function TarjetaTotales({ o }: { o: OfficerBlock }) {
+function TarjetaTotales({ o, hayComision }: { o: OfficerBlock; hayComision: boolean }) {
   /*
    * ─────────────────────────────────────────────────────────────────────────
    * ⚠ AQUI SE AGRUPA Y EN LA TARJETA DE UN PRESTAMO NO. PARECE UNA
@@ -1270,7 +1279,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
             * que --dos calendarios, y que la comision se paga POR la nomina--
             * vive en el boton de ayuda, que para eso esta.
             */}
-          <ComparacionNomina o={o} pagoPorProducir={pagoPorProducir} localizada={localizada} />
+          <ComparacionNomina o={o} pagoPorProducir={pagoPorProducir} localizada={localizada} hayComision={hayComision} />
         </>
       }
     />
@@ -1295,7 +1304,7 @@ function TarjetaTotales({ o }: { o: OfficerBlock }) {
  * panel se abriria DEBAJO del modal que lo contiene -- invisible, y sin que
  * nada pareciera roto.
  */
-function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) {
+function PanelDetalle({ o, onClose, hayComision }: { o: OfficerBlock; onClose: () => void; hayComision: boolean }) {
   const [ayuda, setAyuda] = useState(false);
 
   /*
@@ -1420,7 +1429,7 @@ function PanelDetalle({ o, onClose }: { o: OfficerBlock; onClose: () => void }) 
             * esto, asi que queda dicho.
             */}
           <div className="scrollbar-thin-slate -mx-1 flex max-w-full flex-row items-stretch gap-4 overflow-x-auto px-1 pb-4">
-            <TarjetaTotales o={o} />
+            <TarjetaTotales o={o} hayComision={hayComision} />
             {o.loans.map((l) => (
               <TarjetaPrestamo
                 key={l.loan_number}
@@ -1610,6 +1619,27 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
   useEffect(() => { cargar(); }, [cargar]);
 
   const officers = data?.officers ?? [];
+
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * ¿HAY COMISION EN LO QUE SE ESTA MIRANDO?
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Si no la hay, la columna y las lineas de comision no se pintan. La 700 es
+   * corporativa --nadie cierra prestamos ahi-- y enseñaba una columna entera
+   * de guiones y una comparacion contra cero.
+   *
+   * ⚠ LO DECIDE EL DATO, NO UN `if (branch === "700")`. Un numero escrito aqui
+   * fallaria en las dos direcciones: seguiria escondiendo la comision el dia
+   * que la 700 tuviera una, y no la escondería en la siguiente sucursal
+   * corporativa. Se calcula en la ruta, que es quien sabe el alcance; ver
+   * `hasCommission` en app/api/lo-pnl/route.ts.
+   *
+   * ⚠ MIENTRAS CARGA VALE `true`. Con `false` la tabla perdería la columna y
+   * la recuperaria al llegar el dato, que es un salto de layout por algo que
+   * todavia no se sabe.
+   */
+  const hayComision = data?.hasCommission ?? true;
   const totales = useMemo(() => ({
     prestamos: officers.reduce((s, o) => s + o.loanCount, 0),
     volumen: officers.reduce((s, o) => s + o.volume, 0),
@@ -1764,11 +1794,24 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
 
       {avisosAbiertos && (
         <div className="-mt-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[11px] leading-relaxed text-gray-600 space-y-2">
+          {/* ⚠ SIN COLUMNA DE COMISION, ESTA NOTA EXPLICARIA ALGO QUE NO SE VE.
+              La segunda mitad --que no se resta-- solo tiene sentido si la
+              cifra esta en pantalla. */}
           <p>
-            <span className="font-semibold text-gray-700">Net is produced minus payroll.</span>{" "}
-            The commission column is shown because it is the business question — what this person
-            earned on their closings — but it is <span className="font-medium">not</span> subtracted:
-            that money is paid through payroll, and subtracting both would count it twice.
+            <span className="font-semibold text-gray-700">Net is produced minus payroll.</span>
+            {hayComision ? (
+              <>
+                {" "}The commission column is shown because it is the business question — what this
+                person earned on their closings — but it is <span className="font-medium">not</span>{" "}
+                subtracted: that money is paid through payroll, and subtracting both would count it
+                twice.
+              </>
+            ) : (
+              <>
+                {" "}Nobody in this scope has a single line of commission, so the commission column is
+                not shown. What is here is salary and hours — the real cost of this staff.
+              </>
+            )}
           </p>
           {/*
             * ⚠ ESTA SALVEDAD ES NUEVA Y CAMBIA LO QUE SIGNIFICA CADA CIFRA DE
@@ -1825,13 +1868,16 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
               should guess.
             </p>
           )}
-          <p>
-            <span className="font-semibold text-gray-700">
-              Commission and payroll are two calendars.
-            </span>{" "}
-            Compensafe groups by closing date and the P&amp;L by payment date, so a loan closed at
-            the end of a month is paid in the next period. The two columns are not meant to match.
-          </p>
+          {/* Solo tiene sentido si las dos columnas estan a la vista. */}
+          {hayComision && (
+            <p>
+              <span className="font-semibold text-gray-700">
+                Commission and payroll are two calendars.
+              </span>{" "}
+              Compensafe groups by closing date and the P&amp;L by payment date, so a loan closed at
+              the end of a month is paid in the next period. The two columns are not meant to match.
+            </p>
+          )}
           {branch && (
             <>
               {/*
@@ -1938,9 +1984,11 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                   <th className="px-3 py-2 font-medium text-right" title="Appraisal, credit report, verification — and branch-to-branch transfers (55601), which is why this line can be unusually large on a single loan. Shown with its own sign: these usually ADD, because they are charged to the borrower and come back to the branch.">
                     Direct costs
                   </th>
-                  <th className="px-3 py-2 font-medium text-right" title="What Compensafe paid them for those loans.">
-                    LO commission
-                  </th>
+                  {hayComision && (
+                    <th className="px-3 py-2 font-medium text-right" title="What Compensafe paid them for those loans.">
+                      LO commission
+                    </th>
+                  )}
                   <th className="px-3 py-2 font-medium text-right border-r border-gray-300" title="Gross revenue plus direct costs, minus the commission. What their loans left the branch after paying them.">
                     Contribution
                   </th>
@@ -2031,9 +2079,11 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                         <td className="px-3 py-2 text-right font-semibold text-gray-700">
                           {costesSeccion ? usd(costesSeccion) : "—"}
                         </td>
-                        <td className="px-3 py-2 text-right font-semibold text-gray-500">
-                          {comisionSeccion ? usd(-comisionSeccion) : "—"}
-                        </td>
+                        {hayComision && (
+                          <td className="px-3 py-2 text-right font-semibold text-gray-500">
+                            {comisionSeccion ? usd(-comisionSeccion) : "—"}
+                          </td>
+                        )}
                         {/*
                           * La cabecera plegada lleva los DOS finales, no solo
                           * el neto. Con uno solo, plegar la seccion escondia
@@ -2149,9 +2199,11 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                             </span>
                           )}
                         </td>
-                        <td className="px-3 py-1.5 text-right text-gray-500">
-                          {o.commission ? usd(-o.commission) : "—"}
-                        </td>
+                        {hayComision && (
+                          <td className="px-3 py-1.5 text-right text-gray-500">
+                            {o.commission ? usd(-o.commission) : "—"}
+                          </td>
+                        )}
                         <td className={`px-3 py-1.5 text-right border-r border-gray-200 font-mono tabular-nums ${colorNeto(o.contribution)}`}>
                           {o.loanCount ? usd(o.contribution) : "—"}
                         </td>
@@ -2230,7 +2282,7 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                     * contribucion-- y callar su total dejaria el unico escalon
                     * sin cerrar.
                     */}
-                  <td className="px-3 py-2 text-right">{usd(-totales.comision)}</td>
+                  {hayComision && <td className="px-3 py-2 text-right">{usd(-totales.comision)}</td>}
                   <td className={`px-3 py-2 text-right border-r border-gray-300 font-mono tabular-nums ${colorNeto(totales.contribucion)}`}>
                     {usd(totales.contribucion)}
                   </td>
@@ -2397,7 +2449,7 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
         * el periodo anterior con los controles diciendo otra cosa.
         */}
       {personaAbierta && (
-        <PanelDetalle o={personaAbierta} onClose={() => setAbierto(null)} />
+        <PanelDetalle o={personaAbierta} onClose={() => setAbierto(null)} hayComision={hayComision} />
       )}
     </div>
   );
