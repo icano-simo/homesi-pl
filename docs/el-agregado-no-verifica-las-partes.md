@@ -1,6 +1,7 @@
 # Comprobar un total no comprueba sus partes
 
-Compañero de [`notas-que-dependen-del-alcance.md`](./notas-que-dependen-del-alcance.md).
+Compañero de [`notas-que-dependen-del-alcance.md`](./notas-que-dependen-del-alcance.md)
+y de [`un-fallo-arreglado-vuelve-por-el-siguiente-camino.md`](./un-fallo-arreglado-vuelve-por-el-siguiente-camino.md).
 Aquella trata de mediciones que **caducan** al cambiar el alcance; ésta, de
 mediciones que **nunca fueron suficientes**, aunque el número saliera bien.
 

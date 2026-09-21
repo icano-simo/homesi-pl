@@ -544,7 +544,9 @@ export async function GET(req: NextRequest) {
          * ⚠ SOLO SI ALGUNO DE ESTOS PRESTAMOS CERRO EN LAS SUCURSALES PEDIDAS.
          *
          * Es el mismo fallo que la nota de abajo dice arreglado, por otra
-         * puerta. Alli entraba porque `fetchOfficials` no filtraba por
+         * puerta -- el patron esta en
+         * docs/un-fallo-arreglado-vuelve-por-el-siguiente-camino.md, porque en
+         * este repo ya ha pasado tres veces. Alli entraba porque `fetchOfficials` no filtraba por
          * sucursal; aqui entra por la REGLA CORPORATIVA: al pedir la 700,
          * `resolveBaseBranches` devuelve `null` --la 700 es la division, y eso
          * es correcto para el bps-- asi que `inScope` acepta todo.

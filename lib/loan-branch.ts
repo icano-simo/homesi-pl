@@ -554,6 +554,11 @@ export function baseIsDivisionWide(filterBranches: readonly string[]): boolean {
  * otro cruce: alli se pregunta si hay lineas de comision para esas PERSONAS,
  * aqui si hay CIERRES en esas sucursales.
  *
+ * ⚠ Y VIVE AQUI, NO DENTRO DE UNA RUTA, A PROPOSITO. Este fallo ya se arreglo
+ * una vez en el modulo por loan officer y volvio por el drawer; el mismo
+ * patron, en docs/un-fallo-arreglado-vuelve-por-el-siguiente-camino.md. Una
+ * funcion compartida cierra la siguiente puerta sin que nadie se acuerde.
+ *
  * @param filterBranches El filtro CRUDO, no `resolveBaseBranches`. Son dos
  *   preguntas distintas: aquella dice contra que volumen se calcula el bps,
  *   esta de quien es la comision. Pasar el resuelto haria que la 700 --que
