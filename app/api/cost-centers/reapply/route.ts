@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassifications } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
 import { requireSession } from "@/lib/auth";
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
   ] = await Promise.all([
     supabase.from("conflict_snapshots").select("*").eq("is_resolved", true),
     loadAllSplitRules(supabase),
-    loadLoanOfficialFields(supabase),
+    loadLoanClassifications(supabase),
   ]);
 
   if (snapErr) console.warn("[reapply] Could not load snapshots:", snapErr.message);
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
 
       const resolved = resolvedByTx.get(tx.id);
 
-      const enriched = enrichTxWithLoanOfficials(tx as unknown as Record<string, unknown>, loMap);
+      const enriched = enrichTxWithLoanClassifications(tx as unknown as Record<string, unknown>, loMap);
       const r = evaluateCostCenterRules(enriched as unknown as PLTransaction, splitRules as SplitRuleWithDetails[]);
 
       // Protect resolved conflicts: only re-open if at least one of the currently-

@@ -3,8 +3,8 @@ import { createServerClient } from "@/lib/supabase-server";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
 import {
   loadAllSplitRules,
-  loadLoanOfficialFields,
-  enrichTxWithLoanOfficials,
+  loadLoanClassifications,
+  enrichTxWithLoanClassifications,
 } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
@@ -42,7 +42,7 @@ export async function POST() {
   // Load rules and loan officials in parallel
   const [splitRules, loMap] = await Promise.all([
     loadAllSplitRules(supabase),
-    loadLoanOfficialFields(supabase),
+    loadLoanClassifications(supabase),
   ]);
 
   // Fetch all OA transactions with assignment_origin = 'manual' (the ones normally skipped)
@@ -70,7 +70,7 @@ export async function POST() {
     return NextResponse.json({ processed: 0, assigned: 0, conflicts: 0, unassigned: 0 });
   }
 
-  const txs = all.map((tx) => enrichTxWithLoanOfficials(tx, loMap) as TxRow);
+  const txs = all.map((tx) => enrichTxWithLoanClassifications(tx, loMap) as TxRow);
 
   // Evaluate each transaction — manual protection intentionally bypassed for this specific flow
   const toUpdate: {

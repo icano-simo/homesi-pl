@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassifications } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations } from "@/lib/sync-rule-split-allocations";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
 import { requireSession } from "@/lib/auth";
@@ -68,10 +68,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // Re-run CC rules on the updated row
     const [splitRules, loMap] = await Promise.all([
       loadAllSplitRules(supabase),
-      loadLoanOfficialFields(supabase),
+      loadLoanClassifications(supabase),
     ]);
 
-    const enriched = enrichTxWithLoanOfficials(updateFields, loMap);
+    const enriched = enrichTxWithLoanClassifications(updateFields, loMap);
     const r = evaluateCostCenterRules(enriched as unknown as PLTransaction, splitRules as SplitRuleWithDetails[]);
     const origin = r.cost_center_status !== "assigned" ? null : r.rule_splits ? "rule_split" : "rule";
 

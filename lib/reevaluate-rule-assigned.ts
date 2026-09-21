@@ -20,9 +20,47 @@ import type {
 
 type SupabaseClient = ReturnType<typeof createServerClient>;
 
-// ─── Loan Officials enrichment ────────────────────────────────────────────────
+// ─── Clasificacion del prestamo, para las reglas de centro de coste ──────────
 
-type LoanOfficialFields = {
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LAS CLASIFICACIONES SALEN DEL ESPEJO, NO DE `loan_officials`
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Esto leia `finance_division.loan_officials`, que es el archivo que se sube a
+ * mano y que el resto de la app abandono: **436 filas y la ultima del
+ * 2026-08-20**, contra 800 prestamos con `is_b2b` en el espejo. Es la misma
+ * tabla, y el mismo motivo, por el que se migraron las rutas del modulo por
+ * loan officer.
+ *
+ * Ahora cada campo viene de donde vive de verdad:
+ *
+ *     b2b                loan_manual_flags.b2b  O  loan_records_v2.is_b2b
+ *     processing         loan_manual_flags.processing
+ *     support_on_demand  loan_manual_flags.support_on_demand
+ *     affinity           loan_records_v2.is_affinity
+ *     lead_source_lo     loan_records_v2.lead_source
+ *     bd_owner           loan_records_v2.bd
+ *     recruitment        loan_officials  <-- SIGUE AHI, ver abajo
+ *
+ * ⚠ `b2b` ES LA UNION DE LAS DOS, no una con la otra de respaldo. Es la misma
+ * definicion con la que se miden los prestamos B2B en el resto del proyecto:
+ * la marca manual y la de Salesforce son dos maneras de decirlo y ninguna
+ * manda sobre la otra.
+ *
+ * ⚠ NO SE FILTRA POR `is_closed`. `getClosedLoans` si lo hace, porque contesta
+ * "que cerro este mes"; aqui la pregunta es "de que prestamo es este apunte",
+ * y el P&L tiene lineas de prestamos que aun no han cerrado. Filtrar dejaria
+ * sus clasificaciones en blanco y el evaluador las leeria como un no.
+ *
+ * ⚠ `recruitment` NO TIENE DONDE IR, y por eso es lo unico que sigue saliendo
+ * de `loan_officials`. Ni `loan_records_v2` ni `loan_manual_flags` tienen ese
+ * campo -- lo mas parecido es `nppm_recruited_by`, que es un NOMBRE y no una
+ * bandera, y traducir uno en la otra seria inventarse la regla. Queda dicho
+ * aqui en vez de resolverlo a ojo: mientras no haya fuente, una regla sobre
+ * Recruitment se evalua contra una tabla congelada el 2026-08-20.
+ */
+type LoanClassification = {
   loan_number: string;
   b2b: boolean;
   processing: boolean;
@@ -33,33 +71,97 @@ type LoanOfficialFields = {
   bd_owner: string | null;
 };
 
-/**
- * Loads all loan official boolean/text fields keyed by loan_number.
- * Used to enrich transactions before cost-center rule evaluation.
- */
-export async function loadLoanOfficialFields(
-  supabase: SupabaseClient
-): Promise<Map<string, LoanOfficialFields>> {
-  const { data } = await supabase
-    .from("loan_officials")
-    .select("loan_number,b2b,processing,support_on_demand,affinity,recruitment,lead_source_lo,bd_owner")
-    .not("loan_number", "is", null);
+/** Paginado: un select sin rango se corta en 1000 filas en este proyecto. */
+async function todas<T>(
+  /* PromiseLike y no Promise: el builder de supabase-js es "thenable" pero no
+     es una Promise, asi que tiparlo como tal no compila. */
+  page: (desde: number, hasta: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; ; i += 1000) {
+    const { data, error } = await page(i, i + 999);
+    if (error) throw new Error(error.message);
+    if (!data?.length) break;
+    out.push(...(data as T[]));
+    if (data.length < 1000) break;
+  }
+  return out;
+}
 
-  const map = new Map<string, LoanOfficialFields>();
-  for (const row of (data ?? []) as LoanOfficialFields[]) {
-    map.set(row.loan_number, row);
+/**
+ * Las clasificaciones de cada prestamo, por `loan_number`, para enriquecer las
+ * transacciones antes de evaluar las reglas de centro de coste.
+ */
+export async function loadLoanClassifications(
+  supabase: SupabaseClient
+): Promise<Map<string, LoanClassification>> {
+  const ar = createServerClient("activity_report");
+
+  const [espejo, manuales, reclutamiento] = await Promise.all([
+    todas<Record<string, unknown>>((d, h) =>
+      ar.from("loan_records_v2")
+        .select("loan_number,is_b2b,is_affinity,lead_source,bd")
+        .not("loan_number", "is", null)
+        .order("loan_number", { ascending: true })
+        .range(d, h)),
+    todas<Record<string, unknown>>((d, h) =>
+      supabase.from("loan_manual_flags")
+        .select("loan_number,b2b,support_on_demand,processing")
+        .order("loan_number", { ascending: true })
+        .range(d, h)),
+    /* Solo por `recruitment`, que no existe en las fuentes nuevas. */
+    todas<Record<string, unknown>>((d, h) =>
+      supabase.from("loan_officials")
+        .select("loan_number,recruitment")
+        .not("loan_number", "is", null)
+        .order("loan_number", { ascending: true })
+        .range(d, h)),
+  ]);
+
+  const flags = new Map<string, Record<string, unknown>>();
+  for (const r of manuales) flags.set(String(r.loan_number), r);
+  const recl = new Map<string, boolean>();
+  for (const r of reclutamiento) recl.set(String(r.loan_number), r.recruitment === true);
+
+  const map = new Map<string, LoanClassification>();
+  const poner = (loan: string, espejoRow: Record<string, unknown> | null) => {
+    const f = flags.get(loan);
+    map.set(loan, {
+      loan_number: loan,
+      b2b: f?.b2b === true || espejoRow?.is_b2b === true,
+      processing: f?.processing === true,
+      support_on_demand: f?.support_on_demand === true,
+      affinity: espejoRow?.is_affinity === true,
+      recruitment: recl.get(loan) === true,
+      lead_source_lo: (espejoRow?.lead_source as string) ?? null,
+      bd_owner: (espejoRow?.bd as string) ?? null,
+    });
+  };
+
+  for (const r of espejo) poner(String(r.loan_number), r);
+  /*
+   * ⚠ Y LOS QUE SOLO ESTAN EN LAS OTRAS DOS TAMBIEN. Un prestamo con marca
+   * manual pero sin fila en el espejo existe --las marcas se ponen a mano y no
+   * esperan a que Salesforce lo tenga-- y dejarlo fuera seria perder justo la
+   * clasificacion que alguien puso a proposito.
+   */
+  for (const loan of [...flags.keys(), ...recl.keys()]) {
+    if (!map.has(loan)) poner(loan, null);
   }
   return map;
 }
 
 /**
- * Merges loan official fields onto a transaction object.
- * If loan_number is null or loan_number_incomplete=true, returns the tx unchanged
- * (loan official fields will be undefined → evaluator treats as no-match).
+ * Pega las clasificaciones del prestamo sobre una transaccion.
+ *
+ * Si no hay `loan_number`, o viene incompleto, la transaccion pasa intacta y el
+ * evaluador trata esos campos como ausentes -- que NO es lo mismo que false: un
+ * `null` en un campo de prestamo hace que la condicion no case, en vez de casar
+ * con "no". Ver `evaluate-cost-center-rules.ts`.
  */
-export function enrichTxWithLoanOfficials(
+export function enrichTxWithLoanClassifications(
   tx: Record<string, unknown>,
-  loMap: Map<string, LoanOfficialFields>
+  loMap: Map<string, LoanClassification>
 ): Record<string, unknown> {
   const loanNum = tx.loan_number as string | null | undefined;
   const incomplete = tx.loan_number_incomplete as boolean | null | undefined;
@@ -213,9 +315,9 @@ export async function reevaluateRuleAssigned(
       }
       return result;
     })(),
-    loadLoanOfficialFields(supabase),
+    loadLoanClassifications(supabase),
   ]);
-  const txs = txsRaw.map((tx) => enrichTxWithLoanOfficials(tx, loMap) as TxRow);
+  const txs = txsRaw.map((tx) => enrichTxWithLoanClassifications(tx, loMap) as TxRow);
 
   const toUpdate: {
     id: string;

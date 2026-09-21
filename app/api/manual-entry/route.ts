@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassifications } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
 import type { PLTransaction, SplitRuleWithDetails } from "@/types";
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
     // 5. Apply cost center rules
     const [splitRules, loMap] = await Promise.all([
       loadAllSplitRules(supabase),
-      loadLoanOfficialFields(supabase),
+      loadLoanClassifications(supabase),
     ]);
 
     const { data: newTxs } = await supabase
@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
       const ruleSplitEntries: RuleSplitEntry[] = [];
       const ccUpdates = newTxs.map((tx) => {
         const txId = (tx as unknown as { id: string }).id;
-        const enriched = enrichTxWithLoanOfficials(tx as unknown as Record<string, unknown>, loMap);
+        const enriched = enrichTxWithLoanClassifications(tx as unknown as Record<string, unknown>, loMap);
         const r = evaluateCostCenterRules(enriched as unknown as PLTransaction, splitRules as SplitRuleWithDetails[]);
         const origin = r.cost_center_status !== "assigned" ? null : r.rule_splits ? "rule_split" : "rule";
         if (r.rule_splits) ruleSplitEntries.push({ transaction_id: txId, splits: r.rule_splits });

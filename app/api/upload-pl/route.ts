@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizePL } from "@/lib/normalize-pl";
 import { enrichTransactions } from "@/lib/enrich-transactions";
 import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
-import { loadAllSplitRules, loadLoanOfficialFields, enrichTxWithLoanOfficials, fetchUploadTxsForRules } from "@/lib/reevaluate-rule-assigned";
+import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassifications, fetchUploadTxsForRules } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
     // ── 7. Apply cost center rules to the newly inserted transactions ─────
     const [splitRules, loMap] = await Promise.all([
       loadAllSplitRules(supabase),
-      loadLoanOfficialFields(supabase),
+      loadLoanClassifications(supabase),
     ]);
 
     // Paged: an unbounded select stops at 1000 rows, which would leave every
@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
       const ruleSplitEntries: RuleSplitEntry[] = [];
       const ccUpdates = newTxs.map((tx) => {
         const txId = (tx as unknown as { id: string }).id;
-        const enriched = enrichTxWithLoanOfficials(tx as unknown as Record<string, unknown>, loMap);
+        const enriched = enrichTxWithLoanClassifications(tx as unknown as Record<string, unknown>, loMap);
         const r = evaluateCostCenterRules(enriched as unknown as PLTransaction, splitRules as SplitRuleWithDetails[]);
         const origin = r.cost_center_status !== "assigned" ? null : r.rule_splits ? "rule_split" : "rule";
         if (r.rule_splits) ruleSplitEntries.push({ transaction_id: txId, splits: r.rule_splits });
