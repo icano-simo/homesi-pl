@@ -1,11 +1,35 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
+import { sucursalDelArchivo } from "@/lib/roster-file";
 
 export const dynamic = "force-dynamic";
 
-// Exact CD2 values that form their own named blocks.
-// Anything else routes to "Other / Unclassified".
-const EXPECTED_BLOCKS = new Set(["Roster Offshore", "Vendors COL", "Vendors US"]);
+/*
+ * Los valores EXACTOS de check_description_2 que forman bloque propio. Todo lo
+ * demas cae en "Other / Unclassified".
+ *
+ * ⚠ DECIAN "Vendors COL" Y "Vendors US" Y EL DATO DICE "Vendors Offshore COL"
+ * Y "Vendors Offshore US". Por dos palabras, los 295 registros de proveedores
+ * --230 de Colombia por -215.437,38 y 65 de EE.UU. por -81.888,99, en total
+ * -297.326,37-- caian en el cubo de lo no clasificado, mezclados con los
+ * asientos sueltos de nomina. El modulo no fallaba: enseñaba el bloque vacio y
+ * el otro lleno.
+ *
+ * La comparacion es EXACTA a proposito --nada de `includes`-- porque es lo que
+ * hace que un cambio en el archivo se note aqui en vez de colarse: si mañana
+ * llega "Vendors Offshore MEX", queremos verlo en Other y decidir, no que entre
+ * solo en un bloque que ya existe.
+ *
+ * ⚠ LAS 15 SUELTAS SE QUEDAN EN OTHER, y es lo correcto: no son ni roster ni
+ * proveedores. Son "Homesi ... payroll" mas seis con el campo vacio, 15 filas
+ * por +1.496.741,35, y NO todas positivas -- hay dos ajustes negativos en
+ * 61200 Office Expense, de -41.717,69 y -509,18.
+ */
+const EXPECTED_BLOCKS = new Set([
+  "Roster Offshore",
+  "Vendors Offshore COL",
+  "Vendors Offshore US",
+]);
 const OTHER_BLOCK_KEY = "Other / Unclassified";
 
 export type OAGroupRow = {
@@ -21,7 +45,28 @@ export type OAGroupRow = {
   months: string[];
   category: string | null;
   position: string | null;
-  branch_allocation: string | null;
+  /**
+   * La sucursal que dice el ARCHIVO de offshore, no donde esta el apunte.
+   *
+   * ⚠ ES UNA LISTA Y ANTES ERA UN SOLO VALOR, "gana el primero". De las 70
+   * personas del roster offshore, 23 sirven a MAS DE UNA sucursal --Igleth
+   * Mercado a 700, 707 y 716--, asi que quedarse con la primera escondia las
+   * demas sin que nada fallara: la celda enseñaba un dato correcto y
+   * incompleto, que es peor que no enseñar nada.
+   *
+   * Normalizada: "Hired by Jim" y "Hired by for Jim" son Affinity, igual que en
+   * el modulo Roster. La regla vive en lib/roster-file.ts y es la misma.
+   *
+   * Vacia en 310 de las 981 filas --los vendors y las 15 de "Homesi ...
+   * payroll"--, que simplemente no la traen.
+   *
+   * ⚠ SE ENSEÑA Y NO REASIGNA NADA. Las 981 filas estan contabilizadas en la
+   * 700 y el archivo dice otra cosa en 204, por -317.770,35 en nueve
+   * sucursales. Que no se corrija es una DECISION, no un pendiente: el reparto
+   * medido y por que se dejo asi estan en
+   * docs/la-sucursal-del-archivo-no-reasigna.md.
+   */
+  branch_allocations: string[];
   cc_labels: string[];
   tx_count: number;
   tx_count_unassigned: number;
@@ -78,7 +123,7 @@ export async function GET(req: NextRequest) {
     months: Set<string>;
     category: string | null;
     position: string | null;
-    branch_allocation: string | null;
+    branch_allocations: Set<string>;
     cc_labels: Set<string>;
     tx_count: number;
     tx_count_unassigned: number;
@@ -147,7 +192,7 @@ export async function GET(req: NextRequest) {
         months: new Set(),
         category: null,
         position: null,
-        branch_allocation: null,
+        branch_allocations: new Set(),
         cc_labels: new Set(),
         tx_count: 0,
         tx_count_unassigned: 0,
@@ -158,9 +203,28 @@ export async function GET(req: NextRequest) {
     if (tx.branch) row.branches.add(tx.branch);
     if (tx.year != null) row.years.add(tx.year);
     if (tx.month) row.months.add(tx.month);
+    /*
+     * ⚠ "GANA EL PRIMERO", Y AQUI TODAVIA ESTA. `branch_allocation` se agregaba
+     * asi y escondia sucursales: Igleth Mercado enseñaba 700 teniendo 700, 707
+     * y 716. No fallaba nada -- pintaba un dato correcto e incompleto, que es
+     * la clase de error que nunca avisa. Por eso abajo es un Set.
+     *
+     * ESTAS DOS SIGUEN CON EL MISMO RIESGO Y LA MISMA FORMA. Medido sobre el
+     * roster offshore: 53 de las 70 personas tienen DOS O MAS valores de
+     * `position`, porque la columna mezcla el cargo real con un cubo de coste
+     * --"Production Support Specialist" y "Admin Staff CO" en la misma persona--
+     * asi que la celda enseña uno de los dos a suerte de que fila llego antes.
+     * `category` tiene menos casos pero la misma mecanica.
+     *
+     * No se convierten en listas aqui porque este cambio era la sucursal y nada
+     * mas; queda medido para quien lo haga. Y si alguien anota un valor de estos
+     * como si fuera EL cargo de la persona, se estara fiando del orden de las
+     * filas.
+     */
     if (!row.category && tx.category) row.category = tx.category;
     if (!row.position && tx.position) row.position = tx.position;
-    if (!row.branch_allocation && tx.branch_allocation) row.branch_allocation = tx.branch_allocation;
+    const sucursalArchivo = sucursalDelArchivo(tx.branch_allocation);
+    if (sucursalArchivo) row.branch_allocations.add(sucursalArchivo);
     if (tx.cost_centers?.name) row.cc_labels.add(tx.cost_centers.name);
     if (blockType === "other" && row.raw_cd2s) {
       const label = cd2Raw || "(empty)";
@@ -183,7 +247,7 @@ export async function GET(req: NextRequest) {
         months:             MONTH_ORDER.filter((m) => r.months.has(m)),
         category:           r.category,
         position:           r.position,
-        branch_allocation:  r.branch_allocation,
+        branch_allocations: [...r.branch_allocations].sort(),
         cc_labels:          [...r.cc_labels].sort(),
         tx_count:           r.tx_count,
         tx_count_unassigned: r.tx_count_unassigned,

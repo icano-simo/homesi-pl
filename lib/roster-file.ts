@@ -33,12 +33,17 @@
  *     Roster Offshore          671 filas   71 nombres   -1.199.529,52
  *     Vendors Offshore COL     230          55            -215.437,38
  *     Vendors Offshore US       65          19             -81.888,99
- *     Homesi ... payroll        15           1           +776.741,35
+ *     Homesi ... payroll        15           1         +1.496.741,35
  *
  * Los vendors NO se copian aqui: sus 295 filas ya llevan la columna `vendor`
  * poblada --46 proveedores distintos-- y el modulo de Vendors lee toda fila con
  * vendor sin mirar el `source`, asi que ya estan ahi. Y las 15 sueltas de
  * "Homesi ... payroll" son asientos de nomina agregada, no personas.
+ *
+ * ⚠ LAS 15 NO SON TODAS POSITIVAS. Trece lo son; dos son ajustes negativos en
+ * 61200 Office Expense, de -41.717,69 y -509,18. Se anota porque el signo
+ * invita a resumirlas como "las positivas" y entonces esos dos ajustes
+ * desaparecen de la cuenta sin que nadie lo note.
  */
 export const GRUPO_ROSTER_EN_EL_ARCHIVO = "Roster Offshore";
 
