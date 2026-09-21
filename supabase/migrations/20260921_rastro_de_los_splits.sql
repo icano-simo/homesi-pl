@@ -59,6 +59,11 @@ COMMENT ON COLUMN finance_division.cc_allocation_splits.updated_at IS
   'resolved_at que ya hace split_rules.updated_at.';
 
 -- La funcion ya existe en el esquema; aqui solo se engancha.
+--
+-- ⚠ CUALIFICADA CON EL ESQUEMA, Y HACE FALTA. `update_updated_at()` a secas
+-- falla con "function does not exist": la funcion vive en `finance_division`
+-- y ese esquema NO esta en el search_path por defecto de este proyecto. Vale
+-- para cualquier otra migracion que enganche un trigger aqui.
 DROP TRIGGER IF EXISTS cc_allocation_splits_updated_at
   ON finance_division.cc_allocation_splits;
 
