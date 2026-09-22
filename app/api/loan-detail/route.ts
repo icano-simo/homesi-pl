@@ -224,16 +224,43 @@ export async function GET(req: NextRequest) {
       year,
     }));
 
-    // Banked only. Brokered loans earn through a different mechanism and
-    // mixing them dilutes every bps in the window against volume this margin
-    // was never going to be earned on. Measured: 336 of the 375 loans in
-    // scope, $120,424,191 of $131,911,354.
-    //
-    // The test itself lives in isBankedChannel, shared with loan validation,
-    // which used to spell the same rule a different way.
+    /*
+     * ─────────────────────────────────────────────────────────────────────
+     * LOS BROKERED TAMBIEN, Y SEPARADOS PARA LOS bps
+     * ─────────────────────────────────────────────────────────────────────
+     *
+     * Antes esta linea filtraba `isBankedChannel` y el modal decia "Banked
+     * loans only". La razon era buena --el brokered gana por 41870 Brokered
+     * Origination Income y no por margen, asi que sus bps son otra escala--
+     * pero la solucion era esconderlos, y son 60 cierres y 18.583.579.
+     *
+     * ⚠ Y YA NO SON UN RESIDUO. Medido el 2026-09-22, sobre los cierres que
+     * cuentan para la division:
+     *
+     *     2025-09    0 %     de los cierres
+     *     2025-12   14,3 %
+     *     2026-03   17,9 %
+     *     2026-07   15,8 %
+     *     2026-09   24,0 %    <- uno de cada cuatro
+     *
+     * El 12 % del total esconde la forma: esto empieza en cero y llega a un
+     * cuarto de los cierres, y el mes que mas se mueve es el mas reciente.
+     * Excluirlos ya no es una simplificacion, es no enseñar el negocio.
+     *
+     * ⚠ LO QUE NO SE MEZCLA SON LOS bps. Las dos distribuciones NI SE TOCAN:
+     *
+     *              p25      mediana    p75
+     *     banked    253,3    384,9     457,9
+     *     brokered  184,9    222,2     246,2
+     *
+     * El p75 del brokered esta POR DEBAJO del p25 del banked. Una mediana
+     * conjunta seria un numero que no describe a nadie, asi que el resumen
+     * devuelve los bps por canal y `isBankedChannel` sigue existiendo para
+     * eso -- ya no para excluir.
+     */
     const loans = rawLoans
       .map((l) => ({ ...l, branch: normalizeLoanBranch(l.branch) }))
-      .filter((l) => l.branch !== null && inScope(l.branch) && isBankedChannel(l.loan_info_channel));
+      .filter((l) => l.branch !== null && inScope(l.branch));
 
     const loanNumbers = loans.map((l) => l.loan_number as string);
 
@@ -565,9 +592,23 @@ export async function GET(req: NextRequest) {
 
     const summary = {
       loan_count: rows.length,
-      /** Banked only. Stated in the payload so the header can say so rather
-       *  than letting the figure be read as the month's whole volume. */
-      banked_only: true,
+      /**
+       * ⚠ LOS bps, POR CANAL Y NUNCA JUNTOS. Las dos distribuciones no se
+       * solapan --p75 brokered 246,2 contra p25 banked 253,3-- asi que una
+       * mediana conjunta no describe a nadie. La cabecera enseña las dos.
+       */
+      by_channel: (() => {
+        const de = (filtro: (r: { loan_info_channel: string | null }) => boolean) => {
+          const g = rows.filter((r) => filtro(r as { loan_info_channel: string | null }));
+          const vol = g.reduce((s, r) => s + (r.loan_amount ?? 0), 0);
+          const net = g.reduce((s, r) => s + r.net, 0);
+          return { loans: g.length, volume: vol, net, net_bps: bps(net, vol) };
+        };
+        return {
+          banked: de((r) => isBankedChannel(r.loan_info_channel)),
+          brokered: de((r) => !isBankedChannel(r.loan_info_channel)),
+        };
+      })(),
       volume: summaryVolume,
       /** Originated volume that received no margin at all. */
       without_margin: rows.filter((r) => r.no_margin).length,
