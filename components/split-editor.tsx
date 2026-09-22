@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { X, Plus, Trash2, AlertTriangle, Calendar } from "lucide-react";
 import type { CostCenter } from "@/types";
+import type { SplitImpact } from "@/app/api/cc-allocation-splits/impact/route";
 
 const MONTH_OPTIONS = [
   { value: 1, label: "January"  }, { value: 2,  label: "February" },
@@ -74,6 +75,17 @@ export function SplitEditor({
   const [isAddingVersion, setIsAddingVersion] = useState(false);
   const [newYear,  setNewYear]  = useState(String(new Date().getFullYear()));
   const [newMonth, setNewMonth] = useState("1");
+
+  /*
+   * ⚠ A CUANTO ALCANZA ESTA REGLA. Un split se llavea por un TEXTO, y si ese
+   * texto es comun la regla se vuelve un comodin: "Default" no es un proveedor
+   * sino el relleno mas comun del archivo, y una regla sobre el movio
+   * 1.212.355,83 en 740 filas a un ceco. La medicion y el umbral, en
+   * app/api/cc-allocation-splits/impact/route.ts.
+   *
+   * Avisa, no bloquea: una regla amplia puede ser justo lo que se quiere.
+   */
+  const [impact, setImpact] = useState<SplitImpact | null>(null);
 
   // Delete confirm
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
@@ -207,6 +219,17 @@ export function SplitEditor({
   const sumColor  = sum === 0 ? "text-gray-400" : sumOk ? "text-green-700" : sum > 100 ? "text-red-600" : "text-gray-600";
   const sumBorder = sumOk ? "border-green-200 bg-green-50" : sum > 100 ? "border-red-200 bg-red-50" : "border-gray-200 bg-gray-50";
 
+  useEffect(() => {
+    let cancelado = false;
+    const p = new URLSearchParams({ assign_type: assignType, assign_value: assignValue });
+    fetch(`/api/cc-allocation-splits/impact?${p}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelado) setImpact(d); })
+      /* Que el aviso no cargue no puede impedir guardar: es una ayuda. */
+      .catch(() => { if (!cancelado) setImpact(null); });
+    return () => { cancelado = true; };
+  }, [assignType, assignValue]);
+
   const ccIds = rows.map((r) => r.cost_center_id).filter(Boolean);
   const hasDuplicateCCs = ccIds.length !== new Set(ccIds).size;
   const activeVersion = versions[activeIdx];
@@ -228,6 +251,31 @@ export function SplitEditor({
             <X size={18} />
           </button>
         </div>
+
+        {/* ⚠ EL ALCANCE, ANTES DE GUARDAR. Se enseña siempre que se sepa, y se
+            resalta solo cuando conviene mirarlo dos veces. Un aviso que sale
+            siempre en rojo deja de leerse. */}
+        {impact && impact.rows > 0 && (
+          <div className={`border-b px-5 py-2.5 text-xs ${
+            impact.broad ? "border-amber-200 bg-amber-50 text-amber-900" : "border-gray-100 bg-gray-50 text-gray-600"
+          }`}>
+            <p>
+              <span className="font-semibold">
+                {impact.rows.toLocaleString()} row{impact.rows === 1 ? "" : "s"}
+              </span>{" "}
+              match this value, across {impact.accounts} account{impact.accounts === 1 ? "" : "s"}.
+              {impact.broad && <> <span className="font-semibold">Worth a second look:</span> {impact.reasons.join(", ")}.</>}
+            </p>
+            {/* De donde saldrian. Es la parte que dice si la regla remueve algo
+                que alguien ya habia decidido. */}
+            {impact.costCenters.length > 1 && (
+              <p className="mt-1 text-[11px] opacity-80">
+                Today they sit in: {impact.costCenters.slice(0, 4).map((c) => `${c.name} (${c.rows})`).join(" · ")}
+                {impact.costCenters.length > 4 && ` · +${impact.costCenters.length - 4} more`}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Version tab bar — shown when multiple versions exist or while adding */}
         {!loading && (versions.length > 0 || isAddingVersion) && (

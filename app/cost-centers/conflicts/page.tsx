@@ -1,15 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronRight,
-  RotateCcw, UserCheck, Layers, ClipboardList, Percent, Search, X,
+  RotateCcw, UserCheck, Layers, ClipboardList, Percent, Search, X, Scale,
 } from "lucide-react";
 import { ReportFilter } from "@/components/report-filter";
 import { SplitEditor } from "@/components/split-editor";
 import { buildSplitsMap } from "@/lib/apply-splits";
 import { useActiveBranches, mergeWithGlobal } from "@/components/branch-filter-provider";
 import { SplitDisplay } from "@/components/split-display";
+import type { ManualVsRuleResult } from "@/app/api/cost-centers/manual-vs-rule/route";
 import type { SplitEntry } from "@/lib/apply-splits";
 import type { CostCenter, ConflictGroup, ResolvedConflictGroup, AssignmentGroup, AssignmentTx, ConflictTx, MatchedRuleProposal } from "@/types";
 
@@ -1503,12 +1504,229 @@ function ConflictResolvedTab({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-type Tab = "unassigned" | "assigned-by-rule" | "manual" | "conflict" | "conflict-resolved";
+
+// ─── Manual vs rule ───────────────────────────────────────────────────────────
+
+/**
+ * ⚠ NO ES UNA COLA DE ERRORES: ES DONDE LAS REGLAS SE QUEDARON CORTAS.
+ *
+ * Al mirar las 21 primeras, en TODAS el humano habia elegido un cubo mas
+ * especifico que el de la regla -- "Excluded Employees" en vez de "Excluded
+ * Transactions", "One timers" en vez de "Excluded Transactions", o B2B en
+ * cuatro filas de 41307 que la regla no puede clasificar porque solo mira
+ * 41309 y la sucursal 700. La lista no dice quien se equivoco: dice donde la
+ * regla no llega.
+ *
+ * Por eso no hay boton de "corregir": una asignacion manual gana a la regla a
+ * proposito, y para eso existe la guarda del Reapply.
+ */
+function ManualVsRuleTab() {
+  const [data, setData] = useState<ManualVsRuleResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [abierta, setAbierta] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelado = false;
+    setLoading(true);
+    fetch("/api/cost-centers/manual-vs-rule")
+      .then(async (r) => {
+        const j = await r.json();
+        if (cancelado) return;
+        if (!r.ok) setError(j.error ?? "No se pudo cargar");
+        else setData(j as ManualVsRuleResult);
+      })
+      .catch((e) => { if (!cancelado) setError(String(e)); })
+      .finally(() => { if (!cancelado) setLoading(false); });
+    return () => { cancelado = true; };
+  }, []);
+
+  if (loading) return <p className="px-1 py-8 text-center text-sm text-gray-400">Loading&hellip;</p>;
+  if (error) return <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>;
+  if (!data) return null;
+
+  const fmt = (n: number) =>
+    n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-relaxed text-slate-600">
+        <p>
+          <span className="font-semibold text-[#001A40]">Where the rules fell short.</span>{" "}
+          A manual assignment beats every rule, on purpose &mdash; that is what the guard is for.
+          These are the ones where a rule would now say something else, so a person can decide
+          whether the manual call still holds or the rule needs widening.
+        </p>
+        {/*
+          * ⚠ EL IMPORTE NO CAMBIA, CAMBIA EL DESTINO. Llamarlo "diferencia"
+          * haria pensar que hay dinero en juego, y no lo hay: hay dinero en un
+          * centro de coste distinto del que dirian las reglas.
+          */}
+        <p className="mt-1 text-slate-500">
+          The amount is what sits in the manual centre &mdash; <span className="font-medium">not</span>{" "}
+          a difference. No money changes; the destination would.
+        </p>
+        {/*
+          * Se dice el numero de las que NO se listan, para que no parezca que
+          * se esconden: son la mayoria, y no son un desacuerdo.
+          */}
+        <p className="mt-1.5 text-slate-500">
+          {data.ruleSilent.rows.toLocaleString()} of the {data.manualTotal.toLocaleString()} manual
+          rows are not listed: no rule has an opinion on them. Someone assigned those by hand
+          precisely because nothing covered them &mdash; that is the guard working, not a
+          disagreement.
+        </p>
+      </div>
+
+      {data.families.length === 0 ? (
+        <p className="px-1 py-8 text-center text-sm text-gray-400">
+          Nothing to review &mdash; no manual assignment disagrees with a rule.
+        </p>
+      ) : (
+        <>
+          <p className="px-1 text-xs text-slate-500">
+            <span className="font-semibold text-slate-700">{data.totals.rows}</span> row
+            {data.totals.rows === 1 ? "" : "s"} in{" "}
+            <span className="font-semibold text-slate-700">{data.families.length}</span>{" "}
+            group{data.families.length === 1 ? "" : "s"} &middot; {fmt(data.totals.amount)}
+            {/* Sin rastro no se puede distinguir un olvido de una decision. */}
+            {data.withTrail === 0 && (
+              <span className="ml-1 text-slate-400">
+                &middot; none of them records who assigned it or when &mdash; the trail starts now
+              </span>
+            )}
+          </p>
+
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-left text-[10px] uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Assigned by hand to</th>
+                  <th className="px-3 py-2 font-medium">A rule would say</th>
+                  <th className="px-3 py-2 font-medium">Accounts</th>
+                  <th className="px-3 py-2 font-medium">Branches</th>
+                  <th className="px-3 py-2 text-right font-medium">Rows</th>
+                  <th className="px-3 py-2 text-right font-medium">Amount there</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.families.map((f) => (
+                  <Fragment key={f.key}>
+                    <tr
+                      className="cursor-pointer border-b border-gray-100 hover:bg-[#A6DEFF]/20"
+                      onClick={() => setAbierta(abierta === f.key ? null : f.key)}
+                    >
+                      <td className="px-3 py-2 font-medium text-gray-800">{f.manualCc}</td>
+                      <td className="px-3 py-2 text-gray-600">{f.ruleCc}</td>
+                      <td className="px-3 py-2 font-mono text-[11px] text-gray-500">{f.accounts.join(", ")}</td>
+                      <td className="px-3 py-2 font-mono text-[11px] text-gray-500">{f.branches.join(", ")}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-700">{f.rows}</td>
+                      <td className="px-3 py-2 text-right font-mono tabular-nums text-gray-700">{fmt(f.amount)}</td>
+                    </tr>
+                    {abierta === f.key && f.items.map((it) => (
+                      <tr key={it.id} className="border-b border-gray-50 bg-slate-50/60 text-[11px]">
+                        <td className="px-3 py-1 pl-6 text-gray-500" colSpan={2}>
+                          {it.loan_number ?? (it.description ?? "—")}
+                        </td>
+                        <td className="px-3 py-1 font-mono text-gray-500">{it.gl_code}</td>
+                        <td className="px-3 py-1 font-mono text-gray-500">{it.branch}</td>
+                        <td className="px-3 py-1 text-right text-gray-500">
+                          {it.month?.slice(0, 3)} {it.year}
+                        </td>
+                        <td className="px-3 py-1 text-right font-mono tabular-nums text-gray-600">
+                          {fmt(it.movement)}
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {/*
+        * ⚠ LA MISMA PREGUNTA DESDE EL OTRO LADO. Arriba discrepan el humano y
+        * la regla; aqui discrepan la fila y su propio split. Va en la misma
+        * pestaña a proposito: dos pantallas para "esto esta en un centro
+        * distinto del que deberia" se separan.
+        */}
+      <div className="pt-2">
+        <h3 className="px-1 pb-1.5 text-[11px] font-bold uppercase tracking-wide text-[#001A40]">
+          Row says one centre, its split says another
+        </h3>
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-relaxed text-slate-600">
+          <p>
+            With a cost-centre filter on, the grid follows the{" "}
+            <span className="font-medium">split</span>, not the column: the pivot overwrites each
+            row&apos;s centre with the one its split names. So a direct{" "}
+            <code className="rounded bg-slate-200/70 px-1">UPDATE</code> to{" "}
+            <code className="rounded bg-slate-200/70 px-1">cost_center_id</code> moves nothing on
+            screen while a line-level split still points elsewhere.
+          </p>
+          {/*
+            * El coste de no tener esto: dos meses vacios y tres rondas. Se dice
+            * aqui porque el sintoma no se parece a la causa.
+            */}
+          <p className="mt-1 text-slate-500">
+            Nothing warns about it &mdash; no error, no odd zero. On 2026-09-21 twenty-four rows
+            were moved this way and the only symptom was two empty months.
+          </p>
+        </div>
+
+        {data.desync.length === 0 ? (
+          <p className="px-1 py-4 text-xs text-slate-400">
+            None &mdash; every row agrees with its own split.
+          </p>
+        ) : (
+          <div className="mt-2 overflow-hidden rounded-xl border border-[#FF4040]/30 bg-white">
+            <table className="w-full text-xs">
+              <thead className="bg-[#FF4040]/5 text-left text-[10px] uppercase tracking-wide text-[#FF4040]">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Loan / row</th>
+                  <th className="px-3 py-2 font-medium">Account</th>
+                  <th className="px-3 py-2 font-medium">Branch</th>
+                  <th className="px-3 py-2 font-medium">Period</th>
+                  <th className="px-3 py-2 font-medium">The row says</th>
+                  <th className="px-3 py-2 font-medium">The screen shows</th>
+                  <th className="px-3 py-2 text-right font-medium">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.desync.map((d) => (
+                  <tr key={d.id} className="border-b border-gray-100 hover:bg-[#A6DEFF]/20">
+                    <td className="px-3 py-1.5 font-mono text-[11px] text-gray-600">
+                      {d.loan_number ?? d.id.slice(0, 8)}
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-[11px] text-gray-500">{d.gl_code}</td>
+                    <td className="px-3 py-1.5 font-mono text-[11px] text-gray-500">{d.branch}</td>
+                    <td className="px-3 py-1.5 text-gray-500">
+                      {d.month?.slice(0, 3)} {d.year}
+                    </td>
+                    <td className="px-3 py-1.5 text-gray-700">{d.rowCc}</td>
+                    <td className="px-3 py-1.5 font-medium text-[#FF4040]">{d.splitCc}</td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums text-gray-700">
+                      {fmt(d.movement)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type Tab = "unassigned" | "assigned-by-rule" | "manual" | "manual-vs-rule" | "conflict" | "conflict-resolved";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "unassigned",        label: "Unassigned",        icon: AlertTriangle },
   { id: "assigned-by-rule",  label: "Assigned by Rule",  icon: Layers },
   { id: "manual",            label: "Manual Assigned",   icon: UserCheck },
+  { id: "manual-vs-rule",    label: "Manual vs rule",    icon: Scale },
   { id: "conflict",          label: "Conflict",          icon: AlertTriangle },
   { id: "conflict-resolved", label: "Conflict Resolved", icon: ClipboardList },
 ];
@@ -1611,6 +1829,7 @@ export default function CCAssignmentPage() {
       {tab === "unassigned"        && <UnassignedTab costCenters={costCenters} branches={effectiveBranches} glFilter={glFilter} txSearch={txSearch} />}
       {tab === "assigned-by-rule"  && <AssignedByRuleTab costCenters={costCenters} branches={effectiveBranches} glFilter={glFilter} txSearch={txSearch} ccFilter={ccFilter} />}
       {tab === "manual"            && <ManualTab branches={effectiveBranches} costCenters={costCenters} glFilter={glFilter} txSearch={txSearch} ccFilter={ccFilter} />}
+      {tab === "manual-vs-rule"    && <ManualVsRuleTab />}
       {tab === "conflict"          && <ConflictTab costCenters={costCenters} branches={effectiveBranches} glFilter={glFilter} txSearch={txSearch} />}
       {tab === "conflict-resolved" && <ConflictResolvedTab costCenters={costCenters} branches={effectiveBranches} glFilter={glFilter} txSearch={txSearch} ccFilter={ccFilter} />}
     </div>

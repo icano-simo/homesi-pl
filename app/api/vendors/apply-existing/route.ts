@@ -156,6 +156,8 @@ export async function POST() {
           cost_center_status:    "assigned",
           cost_center_conflicts: null,
           assignment_origin:     "manual",
+          /* De la sesion, nunca del cuerpo. Ver assign/route.ts. */
+          assigned_by:           guard.user.email ?? null,
           operational_pct:       operationalPct,
         })
         .in("id", txIds.slice(i, i + CHUNK));

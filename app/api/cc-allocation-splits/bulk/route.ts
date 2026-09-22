@@ -76,6 +76,8 @@ export async function POST(req: NextRequest) {
         cost_center_id:  s.cost_center_id,
         percentage:      s.percentage,
         is_operational:  s.is_operational ?? true,
+        /* De la sesion, nunca del cuerpo. */
+        created_by:      guard.user.email ?? null,
       }))
     );
     if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
@@ -107,6 +109,8 @@ export async function POST(req: NextRequest) {
           cost_center_status:    "assigned",
           cost_center_conflicts: null,
           assignment_origin:     "manual",
+          /* De la sesion, nunca del cuerpo. Ver assign/route.ts. */
+          assigned_by:           guard.user.email ?? null,
           operational_pct:       operationalPct,
         })
         .in("id", txIds.slice(i, i + CHUNK));

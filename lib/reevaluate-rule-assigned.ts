@@ -41,7 +41,7 @@ type SupabaseClient = ReturnType<typeof createServerClient>;
  *     affinity           loan_records_v2.is_affinity
  *     lead_source_lo     loan_records_v2.lead_source
  *     bd_owner           loan_records_v2.bd
- *     recruitment        loan_officials  <-- SIGUE AHI, ver abajo
+ *     recruitment        loan_records_v2.strategy = 'Recruitment'
  *
  * ⚠ `b2b` ES LA UNION DE LAS DOS, no una con la otra de respaldo. Es la misma
  * definicion con la que se miden los prestamos B2B en el resto del proyecto:
@@ -53,12 +53,44 @@ type SupabaseClient = ReturnType<typeof createServerClient>;
  * y el P&L tiene lineas de prestamos que aun no han cerrado. Filtrar dejaria
  * sus clasificaciones en blanco y el evaluador las leeria como un no.
  *
- * ⚠ `recruitment` NO TIENE DONDE IR, y por eso es lo unico que sigue saliendo
- * de `loan_officials`. Ni `loan_records_v2` ni `loan_manual_flags` tienen ese
- * campo -- lo mas parecido es `nppm_recruited_by`, que es un NOMBRE y no una
- * bandera, y traducir uno en la otra seria inventarse la regla. Queda dicho
- * aqui en vez de resolverlo a ojo: mientras no haya fuente, una regla sobre
- * Recruitment se evalua contra una tabla congelada el 2026-08-20.
+ * ⚠ `recruitment` FUE EL ULTIMO EN SALIR DE `loan_officials`, y hubo que
+ * abrirle la puerta. El espejo no tenia `is_recruitment` --solo `is_affinity`,
+ * `is_b2b`, `is_closed` y `is_second_lien_heloc`-- y BigQuery tampoco la
+ * expone. Pero tampoco expone `is_b2b`: el sync la DERIVA de `strategy`, y la
+ * misma puerta servia. Ahora simo-sync hace las dos, pegadas:
+ *
+ *     "strategy = 'B2B'         AS is_b2b",
+ *     "strategy = 'Recruitment' AS is_recruitment",
+ *
+ * El registro de los huecos de fuente que se han encontrado --este incluido--
+ * vive en docs/huecos-en-las-fuentes.md.
+ *
+ * ⚠ AQUI SE LEE `strategy`, NO LA COLUMNA `is_recruitment`, Y ES DELIBERADO.
+ * Son el mismo predicado --la columna ES `strategy = 'Recruitment'` calculada
+ * en el sync-- pero leer la columna ata este archivo a un orden de despliegue:
+ *
+ *   1. un `select` de una columna que aun no existe NO devuelve null, devuelve
+ *      un error de PostgREST, y se lleva por delante TODA la clasificacion.
+ *      Comprobado: "column loan_records_v2.is_recruitment does not exist"
+ *      rompe el upload del P&L, el Reapply y la entrada manual a la vez.
+ *   2. y entre aplicar la columna y el primer sync estaria a NULL en las 5.114
+ *      filas, asi que un Reapply en esa ventana desasignaria CC04-Recruitment
+ *      entero sin que nada fallara.
+ *
+ * Leyendo `strategy` no hay ventana ni orden: la columna del espejo ya esta
+ * llena hoy, y da la misma respuesta. `is_recruitment` se añade igualmente,
+ * para que el espejo tenga la pareja completa y para quien la consuma desde
+ * fuera; este archivo puede pasar a leerla cuando el sync haya corrido, y sera
+ * un cambio de una linea sin consecuencia.
+ *
+ * ⚠ Y CAMBIA UNA SEMANTICA. `strategy` es un valor UNICO con precedencia
+ * --Affinity > NPPM > Recruitment > B2B > Own Production-- mientras
+ * `loan_officials` tenia `b2b` y `recruitment` como casillas independientes.
+ * Un prestamo ya no puede ser las dos cosas. Medido: de las 18 marcadas
+ * recruitment a mano, 17 casan por strategy y UNA no --747002052489, que el
+ * espejo llama `B2B`--. No es una perdida: es que el espejo tiene una regla
+ * escrita y la otra fuente son dos casillas, y ademas resuelve el unico
+ * conflicto que quedaba vivo.
  */
 type LoanClassification = {
   loan_number: string;
@@ -97,10 +129,10 @@ export async function loadLoanClassifications(
 ): Promise<Map<string, LoanClassification>> {
   const ar = createServerClient("activity_report");
 
-  const [espejo, manuales, reclutamiento] = await Promise.all([
+  const [espejo, manuales] = await Promise.all([
     todas<Record<string, unknown>>((d, h) =>
       ar.from("loan_records_v2")
-        .select("loan_number,is_b2b,is_affinity,lead_source,bd")
+        .select("loan_number,is_b2b,strategy,is_affinity,lead_source,bd")
         .not("loan_number", "is", null)
         .order("loan_number", { ascending: true })
         .range(d, h)),
@@ -109,20 +141,10 @@ export async function loadLoanClassifications(
         .select("loan_number,b2b,support_on_demand,processing")
         .order("loan_number", { ascending: true })
         .range(d, h)),
-    /* Solo por `recruitment`, que no existe en las fuentes nuevas. */
-    todas<Record<string, unknown>>((d, h) =>
-      supabase.from("loan_officials")
-        .select("loan_number,recruitment")
-        .not("loan_number", "is", null)
-        .order("loan_number", { ascending: true })
-        .range(d, h)),
   ]);
 
   const flags = new Map<string, Record<string, unknown>>();
   for (const r of manuales) flags.set(String(r.loan_number), r);
-  const recl = new Map<string, boolean>();
-  for (const r of reclutamiento) recl.set(String(r.loan_number), r.recruitment === true);
-
   const map = new Map<string, LoanClassification>();
   const poner = (loan: string, espejoRow: Record<string, unknown> | null) => {
     const f = flags.get(loan);
@@ -132,7 +154,27 @@ export async function loadLoanClassifications(
       processing: f?.processing === true,
       support_on_demand: f?.support_on_demand === true,
       affinity: espejoRow?.is_affinity === true,
-      recruitment: recl.get(loan) === true,
+      /*
+       * ⚠ UN VALOR, NO DOS CASILLAS -- Y ESO ES UN CAMBIO DE MODELO.
+       *
+       * `strategy` es UNO solo, con precedencia resuelta aguas arriba:
+       *
+       *     Affinity > NPPM > Recruitment > B2B > Own Production
+       *
+       * `loan_officials` tenia `b2b` y `recruitment` como banderas
+       * INDEPENDIENTES, y un prestamo podia llevar las dos. Aqui no puede: si
+       * la precedencia dice B2B, no es Recruitment.
+       *
+       * No es un detalle de implementacion. Resolvio solo el unico conflicto
+       * vivo que quedaba --747002052489, marcado recruitment a mano y `B2B` en
+       * el espejo, que casaba con la regla de B2B y la de Recruitment a la
+       * vez-- y de las 18 marcadas recruitment, 17 casan por strategy y esa no.
+       *
+       * ⚠ SI ALGUIEN VUELVE A PONER CASILLAS INDEPENDIENTES, que sepa que eso
+       * reabre la posibilidad de que un prestamo case con dos reglas hermanas
+       * y vuelvan los conflictos. Es una decision de modelo, no un campo mas.
+       */
+      recruitment: espejoRow?.strategy === "Recruitment",
       lead_source_lo: (espejoRow?.lead_source as string) ?? null,
       bd_owner: (espejoRow?.bd as string) ?? null,
     });
@@ -145,7 +187,7 @@ export async function loadLoanClassifications(
    * esperan a que Salesforce lo tenga-- y dejarlo fuera seria perder justo la
    * clasificacion que alguien puso a proposito.
    */
-  for (const loan of [...flags.keys(), ...recl.keys()]) {
+  for (const loan of flags.keys()) {
     if (!map.has(loan)) poner(loan, null);
   }
   return map;

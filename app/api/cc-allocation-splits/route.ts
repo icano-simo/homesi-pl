@@ -226,6 +226,12 @@ export async function PUT(req: NextRequest) {
       is_operational:       s.is_operational ?? true,
       effective_from_year:  effective_from_year,
       effective_from_month: effective_from_month,
+      /*
+       * ⚠ DE LA SESION, NUNCA DEL CUERPO. Una regla de reparto puede mover
+       * mucho dinero sin que nada falle --la de "Default" movio 1.212.355,83
+       * en 740 filas-- asi que tiene que constar quien la creo.
+       */
+      created_by:           guard.user.email ?? null,
     }))
   );
   if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
