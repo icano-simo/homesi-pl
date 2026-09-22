@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { X, MessageSquarePlus, ArrowLeft, ChevronRight, ChevronDown } from "lucide-react";
 import type { AnchorOption, BreakdownMode, BreakdownRow, CellRef } from "@/lib/cell-ref";
-import { canonicalScopeKey, scopeContains, type NoteScope, type PLNote } from "@/lib/note-scope";
+import { canonicalScopeKey, isPivotScope, scopeContains, type NoteScope, type PLNote } from "@/lib/note-scope";
 
 const fmt = (v: number) =>
   v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -137,11 +137,25 @@ export function CellDetailModal({
    * paints twelve marks.
    */
   const noteAt = useMemo(() => {
-    const own = new Set(notes.map((n) => n.scope_key));
+    /*
+     * ⚠ `isPivotScope` AQUI TAMBIEN. Una nota de entidad --el historial de una
+     * persona, anclada por `assign_type`/`assign_value`-- no pertenece a
+     * ninguna celda de la rejilla, y `resolveNotes` ya la salta. Este contador
+     * es OTRO camino hacia la misma pregunta y no tenia la guarda.
+     *
+     * Hoy no colaba ninguna por el sentido del test --`scopeContains(nota,
+     * celda)` exige que la NOTA lleve las restricciones de la celda, y una
+     * nota de persona no lleva sucursal-- pero contra una celda de scope vacio
+     * las satisface TODAS vacuamente, que es exactamente lo que el comentario
+     * de `isPivotScope` describe. Dos caminos a la misma pregunta y solo uno
+     * con guarda es como vuelve un fallo ya arreglado.
+     */
+    const delPivot = notes.filter((n) => isPivotScope(n.scope));
+    const own = new Set(delPivot.map((n) => n.scope_key));
     return (scope: NoteScope): "direct" | "below" | null => {
       const k = canonicalScopeKey(scope);
       if (own.has(k)) return "direct";
-      return notes.some((n) => n.scope_key !== k && scopeContains(n.scope, scope)) ? "below" : null;
+      return delPivot.some((n) => n.scope_key !== k && scopeContains(n.scope, scope)) ? "below" : null;
     };
   }, [notes]);
 
@@ -195,7 +209,8 @@ export function CellDetailModal({
    * what the notes window then lists.
    */
   const notesInScope = useMemo(
-    () => (cell ? notes.filter((n) => scopeContains(n.scope, cell.scope)).length : 0),
+    /* Mismo predicado que resolveNotes: si no es de la rejilla, no cuenta. */
+    () => (cell ? notes.filter((n) => isPivotScope(n.scope) && scopeContains(n.scope, cell.scope)).length : 0),
     [cell, notes],
   );
 
