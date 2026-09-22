@@ -22,16 +22,36 @@ export interface HiddenNote {
  * counter — "0 conflicts" says someone looked — but this is a warning, and a
  * warning that is always on screen stops being read.
  */
+/*
+ * ⚠ LLEVA SU ROTULO DENTRO, Y ANTES ERA SOLO EL NUMERO.
+ *
+ * Vivia en la barra de indicadores, junto a "Note written on this cell" y
+ * "Notes from more detailed levels below" -- dos leyendas sobre notas QUE SE
+ * VEN. Un circulo ambar con un numero al lado se lee como la tercera de la
+ * familia: "hay 14 notas aqui". Y cuenta lo contrario: las que los filtros
+ * estan ESCONDIENDO.
+ *
+ * Reproducido el 2026-09-22, con la 700 y 2026 puestos: el 14 era correcto
+ * --10 notas de la 710, 3 de la 716 y 1 de la 700 sin año-- y aun asi se leyo
+ * como un contador de la vista. El numero no estaba mal; le faltaba decir de
+ * que era.
+ *
+ * El texto va DENTRO y no en un `title`: lo que solo se ve al pasar el raton
+ * no corrige una lectura que ya se hizo.
+ */
 export function HiddenNotesBadge({ count, onOpen }: { count: number; onOpen: () => void }) {
   if (count === 0) return null;
   return (
     <button
       onClick={onOpen}
-      title={`${count} note${count === 1 ? "" : "s"} not shown with the active filters`}
+      title="These notes exist but sit outside the active filters — another branch, another cost centre, or no year of their own. Click to see which."
       aria-label={`${count} notes hidden by the active filters`}
-      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-amber-300 bg-amber-100 text-[11px] font-bold text-amber-800 hover:bg-amber-200"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-800 hover:bg-amber-200"
     >
-      {count}
+      <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-200 px-1 tabular-nums">
+        {count}
+      </span>
+      <span className="font-semibold">hidden by the filters</span>
     </button>
   );
 }
@@ -106,6 +126,18 @@ export function HiddenNotesModal({
                   value={branch}
                   none="no branch"
                   flagged={reasons.includes("branch")}
+                />
+                {/* ⚠ EL TERCER MOTIVO, QUE FALTABA. Una nota de la MISMA
+                    sucursal puede estar fuera por no tener año propio, y
+                    entonces esta lista la enseñaba sin ninguna marca: aparecia
+                    escondida y con las dos etiquetas en gris, sin decir por
+                    que. Es el caso de las dos notas escritas con dos años
+                    cargados. */}
+                <Chip
+                  label="year"
+                  value={note.scope.year != null ? String(note.scope.year) : null}
+                  none="no year"
+                  flagged={reasons.includes("year")}
                 />
               </div>
               <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-snug text-slate-800">
