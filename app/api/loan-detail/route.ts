@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase-server";
-import { normalizeLoanBranch, resolveBaseBranches, prestamoEntraEnLente, type AffinityLens } from "@/lib/loan-branch";
+import { normalizeLoanBranch, resolveBaseBranches, prestamoEntraEnLente, hayCierresPropios, type AffinityLens } from "@/lib/loan-branch";
 import { getClosedLoans, getPlCoverage, plPeriodLoaded } from "@/lib/loan-source";
 import {
   ALL_MARGIN_ACCOUNTS,
@@ -751,6 +751,12 @@ export async function GET(req: NextRequest) {
       unattributed_total: unattributed,
       unattributed_rows: unattributedRows,
       net_groups: NET_GROUPS,
+      /*
+       * ⚠ SOBRE `branches` CRUDO Y SOBRE LA SUCURSAL DE CIERRE. Con el filtro
+       * resuelto la 700 contestaria que si --resuelve a `null`-- que es justo
+       * el caso que esto existe para detectar.
+       */
+      own_closings: hayCierresPropios(branches, loans.map((l) => l.branch)),
     });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });

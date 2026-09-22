@@ -525,3 +525,54 @@ export function resolveBaseBranches(filterBranches: readonly string[]): string[]
 export function baseIsDivisionWide(filterBranches: readonly string[]): boolean {
   return resolveBaseBranches(filterBranches) === null;
 }
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ¿CERRO ALGUN PRESTAMO EN LAS SUCURSALES QUE SE ESTAN MIRANDO?
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * La comision la paga la sucursal DONDE CERRO EL PRESTAMO. Si en el alcance no
+ * cerro ni uno, la comision que aparezca no es suya por mucho que sus
+ * prestamos esten en su libro.
+ *
+ * ⚠ EL CASO QUE LO OBLIGA ES LA 700, Y LLEGA POR LA REGLA CORPORATIVA. Al
+ * seleccionar la 700, `resolveBaseBranches` devuelve `null` --la 700 es la
+ * division entera, y eso esta bien para el bps-- asi que el alcance pasa a ser
+ * TODOS los prestamos. Medido el 2026-09-21: 532 prestamos tienen filas
+ * contabilizadas en la 700 --su parte del margen, DM Margin y demas-- y 438
+ * llevan comision en comp.loan_commission por 1.102.791,29. Ni uno cerro en la
+ * 700: nadie cierra ahi, es corporativa.
+ *
+ * ⚠ NO PREGUNTA QUE SUCURSAL ESTA FILTRADA, PREGUNTA POR LOS CIERRES. Un
+ * `if (branch === "700")` acertaria hoy y fallaria dos veces: el dia que la 700
+ * cerrara un prestamo seguiria escondiendo su comision, y no la escondería en
+ * la siguiente sucursal sin cierres propios. Ademas hay siete sucursales con
+ * prestamos y sin nadie en el roster, y dos --776 y 150-- sin ninguna linea en
+ * el P&L: no es una lista que nadie vaya a mantener a mano.
+ *
+ * Es la misma logica que `hasCommission` en el modulo por loan officer, sobre
+ * otro cruce: alli se pregunta si hay lineas de comision para esas PERSONAS,
+ * aqui si hay CIERRES en esas sucursales.
+ *
+ * ⚠ Y VIVE AQUI, NO DENTRO DE UNA RUTA, A PROPOSITO. Este fallo ya se arreglo
+ * una vez en el modulo por loan officer y volvio por el drawer; el mismo
+ * patron, en docs/un-fallo-arreglado-vuelve-por-el-siguiente-camino.md. Una
+ * funcion compartida cierra la siguiente puerta sin que nadie se acuerde.
+ *
+ * @param filterBranches El filtro CRUDO, no `resolveBaseBranches`. Son dos
+ *   preguntas distintas: aquella dice contra que volumen se calcula el bps,
+ *   esta de quien es la comision. Pasar el resuelto haria que la 700 --que
+ *   resuelve a `null`-- contestara siempre que si, que es justo el fallo.
+ * @param closingBranches La sucursal de CIERRE de cada prestamo del alcance,
+ *   ya normalizada con `normalizeLoanBranch`.
+ */
+export function hayCierresPropios(
+  filterBranches: readonly string[],
+  closingBranches: Iterable<string | null>,
+): boolean {
+  /* Sin filtro se mira la division entera, donde por definicion hay cierres. */
+  if (filterBranches.length === 0) return true;
+  const pedidas = new Set(filterBranches);
+  for (const b of closingBranches) if (b != null && pedidas.has(b)) return true;
+  return false;
+}

@@ -87,6 +87,18 @@ interface DetailData {
   unattributed_total: number;
   unattributed_rows: number;
   net_groups: string[];
+  /**
+   * ¿Cerro algun prestamo del alcance en las sucursales filtradas?
+   *
+   * Falso para la 700, que es corporativa: sus prestamos salen porque la regla
+   * corporativa abre el alcance a toda la division --ver `resolveBaseBranches`--
+   * pero ni uno cerro ahi. La comision la paga la sucursal donde cerro el
+   * prestamo, asi que la que se vea aqui no es suya.
+   *
+   * Lo decide `hayCierresPropios` en lib/loan-branch.ts, POR EL DATO y no por
+   * el numero de la sucursal.
+   */
+  own_closings: boolean;
 }
 
 interface Props {
@@ -253,6 +265,28 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
    * The server's summary describes the unfiltered month, so with a branch filter
    * on it would be answering a different question from the table above it.
    */
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * ¿SE PINTA LA COMISION?
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * Solo si algun prestamo del alcance CERRO en las sucursales filtradas. La
+   * comision la paga la sucursal del cierre, no la que lleva parte del margen
+   * en su libro.
+   *
+   * Medido el 2026-09-21 con la 700 puesta, septiembre 2026: 17 prestamos en
+   * pantalla, cerrados en 703, 710, 716, 760, 770 y 776 -- NI UNO en la 700 --
+   * y aun asi la tarjeta restaba 70.769,10 de comision y daba una contribucion
+   * de -70.769,10. No era un problema de presentacion: era una cifra falsa.
+   *
+   * ⚠ LO DECIDE LA RUTA, POR EL DATO. Ver `hayCierresPropios` en
+   * lib/loan-branch.ts y por que no puede ser `if (branch === "700")`.
+   *
+   * ⚠ MIENTRAS CARGA VALE `true`, igual que en el modulo por loan officer: con
+   * `false` la tabla perderia una columna y la recuperaria al llegar el dato.
+   */
+  const hayComision = data?.own_closings ?? true;
+
   const totals = useMemo(() => {
     const volume = inScope.reduce((s, l) => s + l.loan_amount, 0);
     const concepts: Record<string, number> = {};
@@ -363,10 +397,27 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
               * leerse y ocupa el sitio del dato. Dicha en la definicion del
               * total vale para toda la pantalla, que es su alcance real.
               */}
+            {/*
+              * ⚠ SIN CIERRES PROPIOS NO HAY CONTRIBUCION QUE DEFINIR. La
+              * comision la paga la sucursal donde cerro el prestamo; en la 700
+              * no cerro ninguno, asi que restarsela daba -70.769,10 de dinero
+              * que la 700 no pago. Se dice lo que SI queda: el neto.
+              */}
             <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500"
-                  title="The commission comes from Compensafe, not from the P&L: it has no GL account and cannot be reconciled against the ledger like the rest of the card.">
-              Contribution = {(data?.net_groups ?? NET_GROUPS).join(" + ")} − LO commission
-              <span className="ml-1.5 font-normal text-slate-400">from Compensafe, not a P&amp;L account</span>
+                  title={hayComision
+                    ? "The commission comes from Compensafe, not from the P&L: it has no GL account and cannot be reconciled against the ledger like the rest of the card."
+                    : "No loan in this scope closed in the branches selected, so the commission on these loans was paid by the branch where each one closed — not by this one. Subtracting it here would charge this branch for money it never paid."}>
+              {hayComision ? (
+                <>
+                  Contribution = {(data?.net_groups ?? NET_GROUPS).join(" + ")} − LO commission
+                  <span className="ml-1.5 font-normal text-slate-400">from Compensafe, not a P&amp;L account</span>
+                </>
+              ) : (
+                <>
+                  Net = {(data?.net_groups ?? NET_GROUPS).join(" + ")}
+                  <span className="ml-1.5 font-normal text-slate-400">no closings here, so no commission of its own</span>
+                </>
+              )}
             </span>
             {/* A whole column of dashes reads as a broken column, and that is
                 how this one was reported. It is not broken: July 2026 is the
@@ -398,9 +449,9 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
           {data && !loading && view === "cards" && (
             <div className="scrollbar-thin-slate flex max-w-full flex-row items-stretch gap-4 overflow-x-auto p-4 pb-6">
               {data.summary.loan_count > 0 && (
-                <SummaryCard s={data.summary} month={data.month} />
+                <SummaryCard s={data.summary} month={data.month} hayComision={hayComision} />
               )}
-              {sorted.map((l) => <MiniPL key={l.loan_number} l={l} />)}
+              {sorted.map((l) => <MiniPL key={l.loan_number} l={l} hayComision={hayComision} />)}
             </div>
           )}
 
@@ -486,14 +537,21 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
                       la comision y el de la tabla sin restarla, la misma pantalla
                       daria dos cifras con nombres parecidos en dos pestañas --
                       que es exactamente el fallo que la nota de arriba describe. */}
-                  <Th className="text-right">
-                    LO comm.
-                  </Th>
-                  <Th className="text-right bg-[#001A40]/5">
-                    Contribution
-                    <span className="block font-normal normal-case text-[9px] text-slate-500">after paying the LO</span>
-                  </Th>
-                  <Th className="text-right bg-[#001A40]/5">Contrib. bps</Th>
+                  {/* ⚠ LAS TRES CAEN JUNTAS. Contribution ES neto menos
+                      comision: dejarla sin la comision al lado seguiria
+                      restando lo que acabamos de esconder. */}
+                  {hayComision && (
+                    <>
+                      <Th className="text-right">
+                        LO comm.
+                      </Th>
+                      <Th className="text-right bg-[#001A40]/5">
+                        Contribution
+                        <span className="block font-normal normal-case text-[9px] text-slate-500">after paying the LO</span>
+                      </Th>
+                      <Th className="text-right bg-[#001A40]/5">Contrib. bps</Th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -521,6 +579,8 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
                             title={otherRevenueDetail(l)} />
                     <Amount v={l.net} amount={l.loan_amount} bold />
                     {/* Null no es cero: el prestamo no cruza con Compensafe. */}
+                    {hayComision && (
+                      <>
                     {l.commission == null
                       ? <Td className="text-right font-mono text-slate-300" title="This loan does not cross with Compensafe. Not the same as a zero commission.">—</Td>
                       : <Amount v={-l.commission} amount={l.loan_amount} />}
@@ -530,6 +590,8 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
                     <Td className={`bg-[#001A40]/5 text-right font-mono tabular-nums font-bold ${num(l.contribution ?? 0)}`}>
                       {fmtBps(l.contribution_bps)}
                     </Td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -562,11 +624,15 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
                   <Amount v={totals.net - totals.marginNet} amount={totals.volume} bold
                           title={otherConcepts.length ? `Concepts outside margin: ${otherConcepts.join(", ")}` : undefined} />
                   <Amount v={totals.net} amount={totals.volume} bold />
-                  <Amount v={-totals.commission} amount={totals.volume} bold />
-                  <Amount v={totals.contribution} amount={totals.volume} bold />
-                  <Td className={`bg-[#001A40]/5 text-right font-mono font-bold tabular-nums ${num(totals.contribution)}`}>
-                    {fmtBps(totals.contribution_bps)}
-                  </Td>
+                  {hayComision && (
+                    <>
+                      <Amount v={-totals.commission} amount={totals.volume} bold />
+                      <Amount v={totals.contribution} amount={totals.volume} bold />
+                      <Td className={`bg-[#001A40]/5 text-right font-mono font-bold tabular-nums ${num(totals.contribution)}`}>
+                        {fmtBps(totals.contribution_bps)}
+                      </Td>
+                    </>
+                  )}
                 </tr>
               </tfoot>
             </table>
@@ -692,7 +758,7 @@ function StraySection({ bucket, title, note }: { bucket: StrayBucket | null; tit
  * Unificarlo es una decision de negocio sobre el P&L de sucursal, no un detalle
  * de presentacion.
  */
-function MiniPL({ l }: { l: LoanRow }) {
+function MiniPL({ l, hayComision }: { l: LoanRow; hayComision: boolean }) {
   return (
     <LoanPnlCard
       title={l.loan_number}
@@ -706,8 +772,12 @@ function MiniPL({ l }: { l: LoanRow }) {
       support_on_demand={l.support_on_demand}
       signals={<Signals l={l} />}
       lineas={l.lines}
-      commission={l.commission}
-      total={{ label: "TOTAL CONTRIBUTION", value: l.contribution }}
+      {...(hayComision
+        ? { commission: l.commission, total: { label: "TOTAL CONTRIBUTION", value: l.contribution } }
+        /* Sin cierres propios la comision no es de esta sucursal, asi que no
+           se resta y el banner deja de prometer una contribucion: lo que
+           queda es el neto del prestamo. */
+        : { total: { label: "TOTAL NET", value: l.net } })}
     />
   );
 }
@@ -793,7 +863,7 @@ function Block({ title, total, amount, lines, loan }: {
  * Same concepts and same structure as the individual cards, so the two can be
  * read against each other without translating. Its net is the sum of theirs.
  */
-function SummaryCard({ s, month }: { s: Summary; month: string }) {
+function SummaryCard({ s, month, hayComision }: { s: Summary; month: string; hayComision: boolean }) {
 
   return (
     <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border-2 border-[#001A40]/20 bg-white shadow-xs">
@@ -815,14 +885,18 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
         <div className="px-3 pt-2">
           <Block title="Revenue and direct costs" total={s.revenue} amount={s.volume} lines={s.lines} />
           {/* La comision del mes, con su origen dicho: en esta pantalla nadie
-              espera una cifra que no este en la contabilidad. */}
-          <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
-            {/* El mismo nombre que en las tarjetas de prestamo, y sin repetir
-                el origen: eso se dice una vez, en la definicion del total. */}
-            <span className="uppercase tracking-wide">&minus; Commission on loans</span>
-            <span className="font-mono tabular-nums text-rose-700">{fmt(-s.commission)}</span>
-          </div>
-          {s.loans_without_commission > 0 && (
+              espera una cifra que no este en la contabilidad.
+              ⚠ Y solo si alguno de estos prestamos cerro aqui: si no, la pago
+              otra sucursal y restarla seria cobrarsela a esta. */}
+          {hayComision && (
+            <div className="my-1.5 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
+              {/* El mismo nombre que en las tarjetas de prestamo, y sin repetir
+                  el origen: eso se dice una vez, en la definicion del total. */}
+              <span className="uppercase tracking-wide">&minus; Commission on loans</span>
+              <span className="font-mono tabular-nums text-rose-700">{fmt(-s.commission)}</span>
+            </div>
+          )}
+          {hayComision && s.loans_without_commission > 0 && (
             <p className="px-3 pb-1 text-[10px] text-slate-500">
               {s.loans_without_commission} loan{s.loans_without_commission === 1 ? " does" : "s do"} not cross
               with Compensafe, so no commission is known for {s.loans_without_commission === 1 ? "it" : "them"} —
@@ -831,7 +905,10 @@ function SummaryCard({ s, month }: { s: Summary; month: string }) {
           )}
         </div>
       </div>
-      <NetBanner net={s.contribution} netBps={s.contribution_bps} />
+      {/* Sin comision propia el banner deja de prometer contribucion. */}
+      {hayComision
+        ? <NetBanner net={s.contribution} netBps={s.contribution_bps} />
+        : <NetBanner net={s.net} netBps={s.net_bps} />}
     </div>
   );
 }
