@@ -9,6 +9,15 @@ mediciones que **nunca fueron suficientes**, aunque el número saliera bien.
 > se da por bueno — y el reparto de ese total entre sus filas está mal. El
 > agregado no lo dice, porque sumar los errores los cancela.
 
+El documento empezó con ese caso y ha acabado recogiendo **tres formas de que
+una comprobación no pruebe lo que parece**, cada una encontrada por las bravas:
+
+| | qué pasa | el engaño |
+|---|---|---|
+| el agregado **no basta** | el total cuadra y el reparto está mal | el número exacto |
+| el agregado **impide** | el dato está por encima del grano de la pregunta | «no lo encuentro» |
+| la comprobación **no corre** | un guardia responde antes que el código | un 401 que parece buena señal |
+
 ---
 
 ## La regla
@@ -114,6 +123,51 @@ plausible, alarmante y vacío a la vez.
 
 ---
 
+## La tercera forma: la comprobación que no llegó a ejecutarse
+
+Las dos de arriba son mediciones que **no prueban lo que parecen**. Ésta no es
+una medición: es una que **nunca corrió**, y se leyó como si hubiera pasado.
+
+**El caso, 2026-09-21.** Dos rutas nuevas se verificaron ejecutándolas desde un
+script. Devolvieron esto:
+
+```
+manual-vs-rule -> 401 {"error":"Not authenticated"}
+impact         -> 401 {"error":"Not authenticated"}
+```
+
+Se leyó como *«correcto: van detrás de sesión, como el resto»* — que es cierto —
+y se dio la verificación por hecha. **Pero el 401 sale de `requireSession()`, en
+la primera línea del handler.** La consulta nunca se ejecutó.
+
+Dentro había un `select` de **`assigned_at`, una columna que no existe**: se
+había quitado de la migración al descubrir que `updated_at` ya era esa fecha.
+PostgREST no devuelve null ante una columna que falta — devuelve un error que
+tumba el `select` entero. La pestaña habría caído completa en producción, y el
+único aviso previo había sido un 401 que parecía una buena noticia.
+
+> ⚠ **Un guardia que responde antes que el código no es una comprobación: es
+> una pantalla delante de ella.** 401, 403, un `early return`, un `if` de
+> permisos, un feature flag apagado, un `catch` que traga — todos devuelven algo
+> plausible sin haber tocado lo que se quería probar. Y lo que devuelven se
+> parece más a «bien» que a «no se ha mirado».
+
+**Lo que sí lo encontró:** ejecutar la consulta **suelta contra el esquema
+real**, con el mismo `select` que usa la ruta, sin pasar por el handler.
+
+```
+select de manual-vs-rule: OK, 5 filas
+select de impact:         OK
+```
+
+**La regla:** una comprobación tiene que decir *qué llegó a tocar*. Si el
+resultado es compatible con «no se ejecutó nada», no es un resultado. Y cuando
+el guardia es inevitable —una ruta con sesión, desde un script que no la
+tiene— hay que bajar un nivel y probar la pieza de dentro: la consulta, la
+función, el predicado.
+
+---
+
 ## Qué hacer
 
 1. **Comprobar el total Y su reparto.** Si la cifra se va a pintar por mes, por
@@ -128,6 +182,9 @@ plausible, alarmante y vacío a la vez.
 4. **Que el total siga cuadrando no es evidencia.** Es la condición mínima.
 5. **Antes de un test de ausencia, mirar el grano del dato.** Si está agregado
    por encima de la pregunta, «no lo encuentro» no es un resultado.
+6. **Preguntarse qué llegó a ejecutarse.** Si la respuesta es compatible con
+   «no se tocó nada» —un 401, un flag apagado, una lista vacía porque el filtro
+   no casó— hay que bajar un nivel y probar la pieza de dentro.
 
 ---
 
