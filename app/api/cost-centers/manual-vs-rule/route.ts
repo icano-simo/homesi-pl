@@ -48,7 +48,15 @@ export const dynamic = "force-dynamic";
 const SEL =
   "id,gl_code,gl_name,branch,vendor,check_description,ref_numb,category_5,category_6," +
   "doc_type,month,year,debit,credit,movement,assignment_origin,loan_number," +
-  "loan_number_incomplete,cost_center_id,cost_center_status,assigned_by,assigned_at";
+  /*
+   * ⚠ NO SE PIDE `assigned_at`, Y NO ES UN OLVIDO: ESA COLUMNA NO EXISTE.
+   * Se quito de la migracion al ver que `pl_transactions.updated_at` ya es la
+   * fecha de asignacion -- el trigger `trg_pl_transactions_cc_updated_at` solo
+   * la mueve cuando cambia el ceco. Pedir una columna que no esta no devuelve
+   * null: revienta el select entero con un error de PostgREST y se lleva la
+   * pestaña por delante.
+   */
+  "loan_number_incomplete,cost_center_id,cost_center_status,assigned_by,updated_at";
 
 export interface ManualVsRuleRow {
   id: string;
@@ -60,8 +68,10 @@ export interface ManualVsRuleRow {
   movement: number;
   loan_number: string | null;
   description: string | null;
-  /** Quien y cuando, cuando consta. Null en todo lo anterior al rastro. */
+  /** Quien, cuando consta. Null en todo lo anterior al rastro. */
   assigned_by: string | null;
+  /** Cuando cambio la asignacion. Es `updated_at`, que el trigger mueve solo
+   *  al cambiar el ceco -- no hay una `assigned_at` aparte a proposito. */
   assigned_at: string | null;
 }
 
@@ -201,7 +211,7 @@ export async function GET() {
       loan_number: (tx.loan_number as string) ?? null,
       description: (tx.check_description as string) ?? null,
       assigned_by: (tx.assigned_by as string) ?? null,
-      assigned_at: (tx.assigned_at as string) ?? null,
+      assigned_at: (tx.updated_at as string) ?? null,
     });
     fams.set(key, f);
   }
