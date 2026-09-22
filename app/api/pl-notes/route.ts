@@ -107,6 +107,43 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "scope is required" }, { status: 400 });
   }
 
+  /*
+   * ─────────────────────────────────────────────────────────────────────────
+   * UN MES SIN AÑO NO ANCLA A NINGUNA CELDA: ANCLA A TODAS LAS DE ESE MES
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * El eje de la rejilla son NOMBRES de mes --"August"-- asi que una nota con
+   * `month` y sin `year` sale en agosto de 2025 Y en agosto de 2026.
+   *
+   * ⚠ NO ES UN FALLO DEL NIVEL `description`, Y ASI PARECIA. De las 39 notas,
+   * las 2 sin año son de ese nivel, pero el año NO lo pone cada nivel: lo pone
+   * `reportBaseScope` para todos. Lo que decide es OTRA cosa:
+   *
+   *     const scopeYear = ys.size === 1 ? [...ys][0] : undefined;   // app/pl/page.tsx
+   *
+   * Con DOS años cargados a la vez, `scopeYear` es `undefined` y la nota se
+   * guarda sin año -- en cualquier nivel. Las 2 que existen se escribieron asi,
+   * una de ellas el 2026-09-22.
+   *
+   * ⚠ Y CON DOS AÑOS CARGADOS LA CELDA YA ERA AMBIGUA ANTES DE LA NOTA: la
+   * columna "August" suma los dos agostos. Asi que no se puede "adivinar" el
+   * año de la nota -- no hay uno. Se rechaza y se dice por que, que es lo unico
+   * honesto: la alternativa seria elegir un año a suertes y dejarlo escrito
+   * como si alguien lo hubiera decidido.
+   *
+   * Se comprueba AQUI y no en la pantalla porque este es el unico sitio por el
+   * que pasan todas: una sola ruta crea notas.
+   */
+  const scope = body.scope as Record<string, unknown>;
+  if (scope.month != null && scope.year == null) {
+    return NextResponse.json({
+      error:
+        "This note would attach to that month in every loaded year. The report has " +
+        "more than one year loaded, so the cell has no single year — narrow the " +
+        "Year filter to one and write it again.",
+    }, { status: 400 });
+  }
+
   const supabase = createServerClient();
 
   // Derive the fingerprint server-side from the live row, so the client cannot

@@ -557,9 +557,28 @@ export default function PLPage() {
     [costCenterFilter],
   );
 
+  /**
+   * El año del informe, cuando hay UNO solo.
+   *
+   * ⚠ CON DOS AÑOS CARGADOS ESTO ES `undefined`, Y DE AHI SALIO UN FALLO REAL.
+   * `reportBaseScope` omite entonces el año, y una nota con `month` y sin
+   * `year` sale en ese mes de LOS DOS años -- el eje de la rejilla son nombres
+   * de mes, no fechas. Dos de las 39 notas quedaron asi, una el 2026-09-22.
+   *
+   * No se arregla poniendo un año a la fuerza: con dos años cargados la
+   * columna "August" ya suma los dos agostos, asi que la celda no tiene UN
+   * año. Lo que se hace es rechazar la nota y decirlo, en
+   * app/api/pl-notes/route.ts -- el unico sitio por el que pasan todas.
+   */
   const scopeYear = useMemo(() => {
     const ys = new Set(rawTxs.map(t => t.year).filter((y): y is number => y != null));
     return ys.size === 1 ? [...ys][0] : undefined;
+  }, [rawTxs]);
+
+  /** Mas de un año cargado: las notas no pueden anclarse a un mes. */
+  const variosAnios = useMemo(() => {
+    const ys = new Set(rawTxs.map(t => t.year).filter((y): y is number => y != null));
+    return ys.size > 1;
   }, [rawTxs]);
 
   /**
@@ -897,6 +916,23 @@ export default function PLPage() {
       {!loaded && !loading && (
         <p className="py-10 text-center text-sm text-slate-400">
           Select filters and click Run Report to generate the report.
+        </p>
+      )}
+
+      {/*
+        * ⚠ CON DOS AÑOS, LA COLUMNA DEL MES SUMA LOS DOS. El eje son nombres
+        * de mes, no fechas, asi que "August" con 2025 y 2026 cargados es la
+        * suma de los dos agostos. Se dice antes de que alguien lea una cifra
+        * como si fuera de un año.
+        *
+        * Y por eso una nota no se puede anclar aqui: la celda no tiene UN año.
+        * La ruta la rechaza y lo explica; esta linea evita que se intente.
+        */}
+      {loaded && variosAnios && (
+        <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-900">
+          <span className="font-semibold">Two years are loaded.</span> Each month column adds both
+          years together, and a note cannot be anchored to a cell with no single year — narrow the
+          Year filter to one before writing one.
         </p>
       )}
 
