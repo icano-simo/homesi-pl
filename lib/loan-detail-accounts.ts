@@ -206,6 +206,17 @@ export function conceptLabel(
  *   41305  LO Margin                    308             -2.063.063
  *   41870  Brokered Origination Income   31             + 207.725
  *
+ * ⚠ 41870 SE CONTABILIZA EN NUEVE SUCURSALES Y SUS PRESTAMOS CIERRAN EN OCHO,
+ * y son dos poblaciones distintas con el mismo nombre. Medido el 2026-09-22:
+ * 56 prestamos con 41870 por 387.473,83, repartidos en 9 sucursales segun el
+ * libro; los 60 cierres brokered de la division salen de 8.
+ *
+ * Es la misma trampa que la de las cuatro filas de 60105 en la 700: `branch`
+ * en `pl_transactions` dice DONDE SE CONTABILIZA el apunte, no de quien es el
+ * prestamo. Leer "nueve" como "nueve sucursales tienen brokered" es contestar
+ * otra pregunta -- y la consulta no avisa, porque devuelve un numero. Ver
+ * docs/el-agregado-no-verifica-las-partes.md.
+ *
  * ⚠ 41308 LO Comp - BPS queda fuera: cuatro prestamos, ninguno en solitario,
  * asi que no decide ningun estado. Es la unica razon por la que esta fuera --
  * una decision barata sobre un caso que hoy no existe.

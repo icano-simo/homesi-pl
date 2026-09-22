@@ -6,6 +6,7 @@ import { ReportFilter } from "@/components/report-filter";
 import { LoPnlView } from "@/components/lo-pnl-view";
 import type { AffinityLens } from "@/lib/loan-branch";
 import { LoanPnlCard } from "@/components/loan-pnl-card";
+import { isBankedChannel } from "@/lib/loan-detail-accounts";
 import {
   ALL_MARGIN_ACCOUNTS,
   NET_GROUPS,
@@ -62,7 +63,15 @@ interface Summary {
   loan_count: number;
   volume: number;
   without_margin: number;
-  banked_only: boolean;
+  /**
+   * Los bps de cada canal, por separado. NUNCA una mediana conjunta: las dos
+   * distribuciones no se solapan --p75 brokered 246,2 contra p25 banked
+   * 253,3-- y un numero que las mezcle no describe a nadie.
+   */
+  by_channel: {
+    banked:   { loans: number; volume: number; net: number; net_bps: number | null };
+    brokered: { loans: number; volume: number; net: number; net_bps: number | null };
+  };
   concepts: Record<string, number>;
   lines: LoanLine[];
   revenue: number;
@@ -287,6 +296,25 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
    */
   const hayComision = data?.own_closings ?? true;
 
+  /**
+   * El reparto por canal de LO QUE SE ESTA MIRANDO -- no el del payload, que
+   * ignora el filtro de sucursal.
+   *
+   * ⚠ LOS bps VAN POR CANAL Y NUNCA JUNTOS. Medido el 2026-09-22: las dos
+   * distribuciones no se solapan --p25/p75 banked 253,3-457,9, brokered
+   * 184,9-246,2-- asi que el p75 del brokered queda POR DEBAJO del p25 del
+   * banked. Un solo numero para los dos no describe a nadie.
+   */
+  const porCanal = useMemo(() => {
+    const de = (b: boolean) => {
+      const g = inScope.filter((l) => isBankedChannel(l.loan_info_channel) === b);
+      const vol = g.reduce((s, l) => s + l.loan_amount, 0);
+      const net = g.reduce((s, l) => s + l.net, 0);
+      return { loans: g.length, volume: vol, net, bps: vol ? (net / vol) * 10000 : null };
+    };
+    return { banked: de(true), brokered: de(false) };
+  }, [inScope]);
+
   const totals = useMemo(() => {
     const volume = inScope.reduce((s, l) => s + l.loan_amount, 0);
     const concepts: Record<string, number> = {};
@@ -350,10 +378,41 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
                 {/* Said before any figure. The volume here is not the month's
                     volume, and a reader who assumes it is will draw the wrong
                     conclusion from every bps below. */}
-                <span className="font-semibold text-[#001A40]">Banked loans only.</span>{" "}
                 bps divide by <span className="font-semibold text-[#001A40]">each loan&apos;s own amount</span>,
                 not the monthly loan volume used in the P&amp;L grid.
               </p>
+              {/*
+                * ⚠ LOS DOS CANALES, CON SUS bps SEPARADOS. Antes esta ventana
+                * decia "Banked loans only" y escondia 60 cierres y 18.583.579.
+                * Ahora estan, y lo que NO se junta son los bps: las dos
+                * distribuciones no se solapan.
+                *
+                * Y la proporcion se dice porque es un cambio de negocio, no un
+                * detalle: el brokered paso del 0 % de los cierres en septiembre
+                * de 2025 al 24 % en septiembre de 2026. El 12 % del total
+                * esconde esa forma.
+                */}
+              {porCanal.banked.loans > 0 && porCanal.brokered.loans > 0 && (
+                <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                  <span className="text-slate-600">
+                    <span className="font-semibold text-[#001A40]">{porCanal.banked.loans}</span> banked
+                    <span className="ml-1 font-mono tabular-nums text-slate-500">
+                      {porCanal.banked.bps == null ? "—" : `${porCanal.banked.bps.toFixed(0)} bps`}
+                    </span>
+                  </span>
+                  <span className="text-violet-800">
+                    <span className="font-semibold">{porCanal.brokered.loans}</span> brokered
+                    <span className="ml-1 font-mono tabular-nums text-violet-600">
+                      {porCanal.brokered.bps == null ? "—" : `${porCanal.brokered.bps.toFixed(0)} bps`}
+                    </span>
+                  </span>
+                  <span className="text-slate-400"
+                        title="Measured 2026-09-22 across division closings: brokered went from 0% of closings in September 2025 to 24% in September 2026. The 12% figure for the whole period hides that shape.">
+                    {Math.round((porCanal.brokered.loans / (porCanal.banked.loans + porCanal.brokered.loans)) * 100)}% brokered
+                    · growing since late 2025
+                  </span>
+                </p>
+              )}
             </div>
             <button onClick={onClose} aria-label="Close"
               className="shrink-0 rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
@@ -391,6 +450,28 @@ export function LoanDetailDrawer({ open, month, year, branches, sources, lente =
               <ArrowUpDown size={11} />
               Net bps {sortDesc ? "high → low" : "low → high"}
             </button>
+            {/*
+              * ⚠ EL ORDEN SIGUE AL NUMERO QUE SE VE, Y POR ESO HACE FALTA
+              * DECIR ESTO.
+              *
+              * Con los dos canales mezclados, un orden por bps manda casi
+              * todos los brokered al mismo extremo -- no por rendir peor, sino
+              * porque su escala es otra: p75 brokered 246,2 contra p25 banked
+              * 253,3.
+              *
+              * Se penso ordenar DENTRO de cada canal, o por percentil dentro
+              * de su propia distribucion, y las dos se descartaron por lo
+              * mismo: la columna enseña bps, asi que un orden que no siga esa
+              * columna la contradice, y entonces el numero visible y la
+              * posicion dicen cosas distintas. Se ordena por lo que se ve, y
+              * se avisa de que los dos extremos son dos escalas.
+              */}
+            {porCanal.banked.loans > 0 && porCanal.brokered.loans > 0 && (
+              <span title="Brokered loans earn through 41870 Brokered Origination Income, not through margin, so their bps sit on a different scale. Measured p25-p75: banked 253.3-457.9, brokered 184.9-246.2 — the brokered p75 falls below the banked p25. This sort follows the bps column, so the two channels cluster at opposite ends by construction."
+                    className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-800">
+                two scales in this sort
+              </span>
+            )}
             {/*
               * ⚠ LA NOTA DE COMPENSAFE, UNA SOLA VEZ Y AQUI. Estaba repetida en
               * cada tarjeta del mini P&L: con sesenta y cinco en la fila deja de
@@ -869,9 +950,10 @@ function SummaryCard({ s, month, hayComision }: { s: Summary; month: string; hay
     <div className="flex w-[340px] shrink-0 flex-col justify-between overflow-hidden rounded-2xl border-2 border-[#001A40]/20 bg-white shadow-xs">
       <div>
         <div className="flex flex-col gap-1 border-b border-slate-200 bg-[#001A40]/5 p-3.5 text-xs font-bold text-[#001A40]">
-          <span className="uppercase tracking-wider">{month} · banked loans</span>
+          {/* Ya no son solo banked: el rotulo decia una exclusion que ya no existe. */}
+          <span className="uppercase tracking-wider">{month} · closed loans</span>
           <span className="font-mono tabular-nums text-sm">
-            {s.loan_count} banked loan{s.loan_count === 1 ? "" : "s"} · {money(s.volume)}
+            {s.loan_count} loan{s.loan_count === 1 ? "" : "s"} · {money(s.volume)}
           </span>
           {/* Stated up front, not footnoted. Loans that earned nothing still sit
               in the denominator — hiding them would lift the month's bps by
@@ -969,6 +1051,19 @@ function Signals({ l }: { l: LoanRow }) {
        *
        * Aqui se quedan solo los avisos que la tarjeta no conoce.
        */}
+      {/*
+       * ⚠ SOLO EN LOS BROKERED. Son el 12 % de los cierres; marcar el 88 %
+       * restante seria ruido en cada tarjeta. La etiqueta existe porque un
+       * brokered y un banked NO se comparan igual: el brokered gana por
+       * 41870 Brokered Origination Income y no por margen, y sus bps son otra
+       * escala --p25/p75 184,9-246,2 contra 253,3-457,9--.
+       */}
+      {!isBankedChannel(l.loan_info_channel) && (
+        <span title="Brokered: this loan earns through 41870 Brokered Origination Income, not through margin. Its bps are a different scale from a banked loan's — measured p25-p75 184.9-246.2 against 253.3-457.9."
+              className="ml-1 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[9px] font-bold text-violet-700">
+          brokered
+        </span>
+      )}
       {l.pl_pending && (
         <span title="No P&L is loaded for this month yet, so the commission is subtracted from revenue that has not been booked. Not a loss: a missing period."
               className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
