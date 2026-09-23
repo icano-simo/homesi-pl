@@ -645,6 +645,13 @@ export default function PLPage() {
         const reasons: string[] = [];
         if (scopeCostCenter && String(n.scope.cost_center ?? "") !== scopeCostCenter) reasons.push("cost_center");
         if (scopeBranch && String(n.scope.branch ?? "") !== scopeBranch) reasons.push("branch");
+        /*
+         * ⚠ EL AÑO TAMBIEN ES UN MOTIVO, y faltaba. Una nota de la MISMA
+         * sucursal queda fuera si no lleva año propio --el caso de las dos
+         * escritas con dos años cargados-- y sin esto aparecia en la lista con
+         * las dos etiquetas en gris, sin nada que dijera por que estaba ahi.
+         */
+        if (scopeYear != null && String(n.scope.year ?? "") !== String(scopeYear)) reasons.push("year");
         return {
           note: n,
           costCenter: n.scope.cost_center != null ? ccName(n.scope.cost_center) : null,
