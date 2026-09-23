@@ -67,6 +67,25 @@ export interface PLNote {
   level: NoteLevel;
   scope: NoteScope;
   scope_key: string;
+  /**
+   * ⚠ NULAS EN LAS 39 NOTAS, Y A PROPOSITO: LO QUE FALTA ES LA ENTRADA, NO LA
+   * IMPLEMENTACION.
+   *
+   * Anclan una nota a UNA fila concreta en vez de a una celda, y el camino
+   * entero existe y funciona: `resolveNotes` tiene su rama para
+   * `level === "transaction"`, el endpoint DERIVA el fingerprint en el
+   * servidor desde la fila viva --para que el cliente no pueda declarar uno
+   * que no corresponda--, `orphaned_at` guarda la nota cuando su fila
+   * desaparece en una recarga, y `/api/pl-notes/[id]/relink` la reengancha.
+   *
+   * Lo unico que no existe es el boton: ninguna pantalla crea hoy notas de
+   * nivel `transaction`. Revisado el 2026-09-22 y se decide DEJARLO -- quitarlo
+   * se llevaria por delante el reenganche y el rastro de huerfanas, que es la
+   * parte cara, para ahorrar dos columnas nulas.
+   *
+   * Queda escrito aqui porque una columna vacia sin nota se lee como un resto,
+   * y esta no lo es.
+   */
   transaction_id: string | null;
   tx_fingerprint: string | null;
   /** Set when the note lost its transaction; cleared when it is reattached. */
