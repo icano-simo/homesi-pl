@@ -41,6 +41,37 @@ export type DuplicateCheckResult =
   | { found: true; candidates: DuplicateInfo[] };
 
 /**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠ ESTA COMPROBACION ES DE PERIODOS. NO INTENTES HACERLA FILA A FILA.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Solapar un periodo NO es duplicar. Dos uploads pueden cubrir el mismo mes y
+ * ser correctos: medido el 2026-09-23, el P&L reparte los meses POR SUCURSAL
+ * --un archivo trae 17 sucursales, otro añade la 728 y la 733-- y de once
+ * periodos compartidos solo uno comparte ademas sucursal, con filas distintas.
+ *
+ * ⚠ Y COMPARAR FILAS POR SU CONTENIDO NO PRUEBA DUPLICACION EN `offshore_
+ * allocations`. Sus filas NO LLEVAN FECHA NI DESCRIPCION, asi que (persona,
+ * cuenta, importe) iguales es exactamente lo que produce una NOMINA
+ * QUINCENAL: dos quincenas del mismo sueldo son indistinguibles de una fila
+ * cargada dos veces.
+ *
+ * Esto no es hipotetico. El 2026-09-23 esa firma señalo 16 "duplicados" de
+ * enero --16 personas, -14.586,93-- y eran legitimos: dos quincenas cada uno.
+ * Se borraron y hubo que reponerlos. El criterio parecia concluyente y no lo
+ * era, que es la familia de errores de
+ * docs/el-agregado-no-verifica-las-partes.md.
+ *
+ * En `original` la misma firma SI discrimina, porque ahi hay `ref_numb` y
+ * `check_description`. Que funcione en una fuente no dice nada de la otra: son
+ * dos granos distintos con el mismo nombre.
+ *
+ * LO QUE SI SE PUEDE AFIRMAR es que un ARCHIVO ENTERO ya se subio -- mismo
+ * nombre o mismo hash. Eso no depende de que las filas sean distinguibles.
+ * Ver `findSameFile`.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * Checks whether an existing upload of the same source type covers any of the
  * same month+year combinations as the rows being uploaded now.
  * Returns the most-overlapping existing upload if found.
@@ -258,4 +289,76 @@ export async function deleteUpload(supabase: SupabaseClient, uploadId: string): 
 
   const { error: uploadErr } = await supabase.from("pl_uploads").delete().eq("id", uploadId);
   if (uploadErr) throw new Error(`deleteUpload pl_uploads: ${uploadErr.message}`);
+}
+
+// ─── El archivo entero: lo unico que se puede afirmar ────────────────────────
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ¿ESTE ARCHIVO YA SE SUBIO?
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Es una pregunta DISTINTA de `checkDuplicateUpload`, y por eso es otra
+ * funcion. Aquella dice "este PERIODO ya tiene datos", que es cierto casi
+ * siempre y no distingue un error de un reparto legitimo por sucursal. Esta
+ * dice "este ARCHIVO ya esta", que es un hecho.
+ *
+ * ⚠ EL CASO, 2026-09-23. El mismo archivo subido a las 16:43 y a las 17:02.
+ * El aviso de periodos salto y ofrecio "Upload anyway" a un clic; nada dijo lo
+ * unico que importaba, que era el mismo archivo 19 minutos despues.
+ *
+ * ⚠ DOS SEÑALES, Y NO SON LA MISMA:
+ *
+ *   hash    el contenido. Caza el archivo renombrado, que es el que nadie ve.
+ *           Solo existe desde el 2026-09-23: los uploads anteriores lo tienen
+ *           NULL porque los archivos no se guardan y no hay de donde sacarlo.
+ *   nombre  alcanza tambien a los viejos, y es la señal que el usuario
+ *           reconoce -- "pero si es el mismo archivo".
+ *
+ * Se devuelven las dos por separado para que el aviso pueda decir CUAL casa.
+ * "Mismo contenido, otro nombre" y "mismo nombre" son dos situaciones
+ * distintas y la segunda puede ser deliberada -- un archivo corregido que
+ * conserva el nombre.
+ */
+export type SameFileMatch = {
+  upload_id: string;
+  file_name: string;
+  uploaded_at: string;
+  row_count: number | null;
+  /** Por que casa: el contenido, el nombre, o los dos. */
+  by: ("hash" | "name")[];
+};
+
+export async function findSameFile(
+  supabase: SupabaseClient,
+  fileName: string,
+  fileHash: string,
+): Promise<SameFileMatch[]> {
+  const { data } = await supabase
+    .from("pl_uploads")
+    .select("id,file_name,uploaded_at,row_count,file_hash")
+    .or(`file_hash.eq.${fileHash},file_name.eq.${fileName}`)
+    .order("uploaded_at", { ascending: false })
+    .limit(20);
+
+  type Fila = {
+    id: string; file_name: string; uploaded_at: string;
+    row_count: number | null; file_hash: string | null;
+  };
+
+  return ((data ?? []) as Fila[]).map((u) => {
+    const by: ("hash" | "name")[] = [];
+    if (u.file_hash === fileHash) by.push("hash");
+    if (u.file_name === fileName) by.push("name");
+    return {
+      upload_id: u.id,
+      file_name: u.file_name,
+      uploaded_at: u.uploaded_at,
+      row_count: u.row_count,
+      by,
+    };
+  /* El `.or` casa por nombre O por hash; un hash nulo no casa con nada, asi
+     que `by` nunca sale vacio. El filtro esta por si acaso: una fila sin
+     ninguna de las dos señales no tendria nada que decirle al usuario. */
+  }).filter((m) => m.by.length > 0);
 }

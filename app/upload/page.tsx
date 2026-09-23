@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, X, Trash2, RefreshCw } from "lucide-react";
+import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, AlertTriangle, X, Trash2, RefreshCw } from "lucide-react";
 import type { UploadPLResponse, AddbacksUploadResponse, OffshoreAllocationsUploadResponse, UploadLoanCountResponse, ManualAssignmentSummary, RelinkSummary } from "@/types";
-import { describirPeriodos, type DuplicateInfo } from "@/lib/check-duplicate-upload";
+import { describirPeriodos, type DuplicateInfo, type SameFileMatch } from "@/lib/check-duplicate-upload";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error";
 
@@ -295,6 +295,119 @@ function DuplicateDialog({
   );
 }
 
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ESTE ARCHIVO YA SE SUBIO
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Distinto del aviso de periodos, y a proposito. Aquel dice "este periodo ya
+ * tiene datos", que es cierto casi siempre porque el P&L reparte los meses por
+ * sucursal entre varios archivos -- se aprende a despachar. Este dice un hecho.
+ *
+ * ⚠ EL CASO, 2026-09-23. El mismo archivo se subio a las 16:43 y a las 17:02.
+ * Agosto paso de -45.547,22 a -91.094,45. El aviso de periodos SI salio, y
+ * ofrecia "Upload anyway · Keep everything, add this file" en un boton gris
+ * identico al de Cancel, sin decir que el archivo era el mismo ni que iba a
+ * añadir 1.156 filas encima.
+ *
+ * Aqui hay que ESCRIBIR para continuar. No es fricción por fricción: es que
+ * un clic mas no habria cambiado nada -- el clic ya se dio. Lo que faltaba era
+ * tener que leer.
+ */
+function SameFileDialog({
+  matches,
+  fileName,
+  onForce,
+  onCancel,
+}: {
+  matches: SameFileMatch[];
+  fileName: string;
+  onForce: () => void;
+  onCancel: () => void;
+}) {
+  const [texto, setTexto] = useState("");
+  const puede = texto.trim().toLowerCase() === "upload again";
+
+  const cuando = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, {
+      day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+    });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-amber-200 bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={18} className="shrink-0 text-amber-600" />
+            <h3 className="text-base font-semibold text-gray-900">This file has already been uploaded</h3>
+          </div>
+          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+        </div>
+
+        <p className="mt-3 text-sm text-gray-600">
+          Uploading it again <span className="font-semibold text-gray-800">adds its rows on top</span> of
+          the ones already there. It does not replace them.
+        </p>
+
+        <div className="mt-3 space-y-2">
+          {matches.map((m) => (
+            <div key={m.upload_id} className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="truncate text-sm font-medium text-gray-900" title={m.file_name}>
+                  {m.file_name}
+                </span>
+                <span className="shrink-0 text-xs text-gray-600">{cuando(m.uploaded_at)}</span>
+              </div>
+              <div className="mt-1 text-xs text-gray-600">
+                {m.row_count == null ? "row count not recorded" : `${m.row_count.toLocaleString()} rows`}
+                {" · "}
+                {/*
+                  * ⚠ CUAL DE LAS DOS SEÑALES CASA, DICHO. "Mismo contenido con
+                  * otro nombre" es el caso que nadie ve; "mismo nombre" puede
+                  * ser deliberado -- un archivo corregido que lo conserva.
+                  */}
+                {m.by.includes("hash") && m.by.includes("name")
+                  ? "same name and same contents"
+                  : m.by.includes("hash")
+                    ? <span className="font-semibold text-amber-800">same contents, different name</span>
+                    : "same name — contents not comparable (uploaded before hashes were kept)"}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 border-t border-gray-100 pt-3">
+          <label className="block text-xs text-gray-600">
+            If you meant to load it again, type <span className="font-mono font-semibold">upload again</span> to confirm.
+          </label>
+          <input
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            placeholder="upload again"
+            className="mt-1.5 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
+          />
+          <div className="mt-2 space-y-2">
+            <button
+              onClick={onForce}
+              disabled={!puede}
+              className="w-full rounded-xl border border-amber-300 bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-900 transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-400"
+            >
+              Upload anyway — adds {fileName} again
+            </button>
+            <button
+              onClick={onCancel}
+              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Upload section ───────────────────────────────────────────────────────────
 
 interface UploadSectionProps {
@@ -313,6 +426,8 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
   const [errorMsg, setErrorMsg] = useState("");
   const [dragging, setDragging] = useState(false);
   const [pendingDupe, setPendingDupe] = useState<DuplicateInfo[] | null>(null);
+  /** El archivo entero ya estaba. Aviso aparte, ver SameFileDialog. */
+  const [pendingSame, setPendingSame] = useState<SameFileMatch[] | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function handleFile(f: File | null) {
@@ -338,6 +453,11 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
     try {
       const res = await fetch(url, { method: "POST", body: fd });
       const json = await res.json();
+      if (res.status === 409 && json.same_file) {
+        setStatus("idle");
+        setPendingSame(json.matches as SameFileMatch[]);
+        return;
+      }
       if (res.status === 409 && json.duplicate) {
         setStatus("idle");
         setPendingDupe(json.candidates as DuplicateInfo[]);
@@ -372,6 +492,15 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
 
   return (
     <div className="space-y-4">
+      {pendingSame && (
+        <SameFileDialog
+          matches={pendingSame}
+          fileName={file?.name ?? "this file"}
+          onForce={() => { setPendingSame(null); doUpload(`${endpoint}?force=true`); }}
+          onCancel={() => { setPendingSame(null); setStatus("idle"); }}
+        />
+      )}
+
       {pendingDupe && (
         <DuplicateDialog
           candidates={pendingDupe}
