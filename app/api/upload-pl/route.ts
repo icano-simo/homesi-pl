@@ -6,7 +6,8 @@ import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassificat
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
-import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
+import { checkDuplicateUpload, deleteUpload, findSameFile } from "@/lib/check-duplicate-upload";
+import { createHash } from "node:crypto";
 import { relinkOrphanNotes } from "@/lib/relink-orphan-notes";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
 import { runLoanNumberCompletion } from "@/lib/loan-number-completion";
@@ -36,6 +37,14 @@ export async function POST(req: NextRequest) {
 
     // ── 2. Normalize the Excel (needed for dupe check) ────────────────────
     const buffer = Buffer.from(await file.arrayBuffer());
+    /*
+     * ⚠ SOBRE LOS BYTES RECIBIDOS, NO SOBRE LAS FILAS NORMALIZADAS. Dos
+     * archivos distintos pueden normalizar al mismo resultado --y entonces
+     * cargarlos los dos puede ser legitimo-- mientras que el mismo archivo
+     * subido dos veces da siempre el mismo hash. La pregunta es "¿es este
+     * archivo?", no "¿trae lo mismo?".
+     */
+    const fileHash = createHash("sha256").update(buffer).digest("hex");
     const { rows, warnings, sheet, headers, missingColumns } = normalizePL(buffer);
 
     if (rows.length === 0) {
@@ -84,6 +93,22 @@ export async function POST(req: NextRequest) {
 
     // ── 3. Duplicate check (skip if force or replace) ─────────────────────
     if (!force && !replaceId) {
+      /*
+       * ⚠ EL ARCHIVO ENTERO PRIMERO, Y SEPARADO DEL SOLAPE DE PERIODOS.
+       *
+       * "Este periodo ya tiene datos" es cierto casi siempre --el P&L reparte
+       * los meses por sucursal entre varios archivos-- asi que ese aviso se
+       * aprende a despachar. "Este archivo ya esta, subido hace 19 minutos" es
+       * un hecho, y es el que habria parado la carga doble del 2026-09-23.
+       *
+       * Va antes porque es mas concreto: si los dos avisos fueran a la vez,
+       * el general se comeria al especifico.
+       */
+      const sameFile = await findSameFile(supabase, file.name, fileHash);
+      if (sameFile.length > 0) {
+        return NextResponse.json({ same_file: true, matches: sameFile }, { status: 409 });
+      }
+
       const dupeResult = await checkDuplicateUpload(supabase, "original", rows);
       if (dupeResult.found) {
         // Todos los candidatos, no el que mas solapa: elegir por la app dejaba
@@ -106,7 +131,7 @@ export async function POST(req: NextRequest) {
     // ── 5. Create upload record ───────────────────────────────────────────
     const { data: uploadRecord, error: insertErr } = await supabase
       .from("pl_uploads")
-      .insert({ file_name: file.name, status: "processing" })
+      .insert({ file_name: file.name, file_hash: fileHash, status: "processing" })
       .select("id")
       .single();
 

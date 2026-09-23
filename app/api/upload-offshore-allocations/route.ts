@@ -5,7 +5,8 @@ import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassificat
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
-import { checkDuplicateUpload, deleteUpload } from "@/lib/check-duplicate-upload";
+import { checkDuplicateUpload, deleteUpload, findSameFile } from "@/lib/check-duplicate-upload";
+import { createHash } from "node:crypto";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
 import { generateEmployeeFeeLines } from "@/lib/generate-employee-fee-lines";
 import { relinkOrphanNotes } from "@/lib/relink-orphan-notes";
@@ -44,6 +45,8 @@ export async function POST(req: NextRequest) {
 
     // ── 2. Parse offshore allocations Excel ───────────────────────────────
     const buffer = Buffer.from(await file.arrayBuffer());
+    /* Sobre los BYTES recibidos: la pregunta es "¿es este archivo?". */
+    const fileHash = createHash("sha256").update(buffer).digest("hex");
     const { rows, warnings } = parseOffshoreAllocations(buffer);
 
     if (rows.length === 0) {
@@ -55,6 +58,21 @@ export async function POST(req: NextRequest) {
 
     // ── 3. Duplicate check ────────────────────────────────────────────────
     if (!force && !replaceId) {
+      /*
+       * ⚠ EL ARCHIVO ENTERO PRIMERO. Ver la nota de app/api/upload-pl/route.ts:
+       * "este periodo ya tiene datos" es cierto casi siempre y se aprende a
+       * despachar; "este archivo ya esta" es un hecho.
+       *
+       * Y esta fuente es justo donde hizo falta: enero de 2026 se cargo por
+       * `Offshore (1).xlsx` y por `Offshore jan july.xlsx` -- dos nombres
+       * distintos, el mismo mes-- y nadie lo aviso. Que resultara NO ser
+       * duplicado no quita que nadie lo dijera.
+       */
+      const sameFile = await findSameFile(supabase, file.name, fileHash);
+      if (sameFile.length > 0) {
+        return NextResponse.json({ same_file: true, matches: sameFile }, { status: 409 });
+      }
+
       const dupeResult = await checkDuplicateUpload(supabase, "offshore_allocations", rows);
       if (dupeResult.found) {
         // Todos los candidatos, no el que mas solapa: elegir por la app dejaba
@@ -73,7 +91,7 @@ export async function POST(req: NextRequest) {
     // ── 4. Create upload record ───────────────────────────────────────────
     const { data: uploadRecord, error: insertErr } = await supabase
       .from("pl_uploads")
-      .insert({ file_name: file.name, status: "processing" })
+      .insert({ file_name: file.name, file_hash: fileHash, status: "processing" })
       .select("id")
       .single();
 
