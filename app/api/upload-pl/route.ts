@@ -6,7 +6,7 @@ import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassificat
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
-import { checkDuplicateUpload, deleteUpload, findSameFile } from "@/lib/check-duplicate-upload";
+import { checkDuplicateUpload, deleteUpload, deleteUploadRows, findSameFile, resumirCobertura } from "@/lib/check-duplicate-upload";
 import { createHash } from "node:crypto";
 import { relinkOrphanNotes } from "@/lib/relink-orphan-notes";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
@@ -34,6 +34,28 @@ export async function POST(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const force     = searchParams.get("force") === "true";
     const replaceId = searchParams.get("replace_id") ?? null;
+    /*
+     * ⚠ REEMPLAZO PARCIAL. `replace_scope` son las parejas (año, mes,
+     * sucursal) que se sustituyen, separadas por coma:
+     *
+     *     replace_scope=2026|June|700,2026|June|733
+     *
+     * Sin el, `replace_id` sigue reemplazando el upload ENTERO, que es lo que
+     * hacia siempre. Con el, se borran solo esos tramos y el resto del archivo
+     * viejo se queda -- que es lo que hace usable la opcion con un archivo de
+     * once meses, y por tanto lo que evita que la gente elija "Upload anyway".
+     */
+    const scopeParam = searchParams.get("replace_scope");
+    const replaceScope = scopeParam
+      ? scopeParam.split(",").map((t) => {
+          const [y, m, b] = t.split("|");
+          return {
+            year: y ? Number(y) : null,
+            month: m || null,
+            branch: b ? b.trim() || null : null,
+          };
+        }).filter((t) => t.year != null && t.month)
+      : null;
 
     // ── 2. Normalize the Excel (needed for dupe check) ────────────────────
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -123,10 +145,18 @@ export async function POST(req: NextRequest) {
     // control only reaches the delete below once the backup is confirmed on
     // disk. If it throws, nothing has been deleted yet and the upload aborts
     // with the old data intact.
-    if (replaceId) await snapshotManualAssignments(supabase, replaceId);
+    /* El respaldo va por tramo: un reemplazo parcial que no lo hiciera perderia
+       las manuales del trozo, que es exactamente lo que paso el 2026-09-24. */
+    if (replaceId) await snapshotManualAssignments(supabase, replaceId, replaceScope);
 
     // ── 4. Delete replaced upload if requested ────────────────────────────
-    if (replaceId) await deleteUpload(supabase, replaceId);
+    if (replaceId) {
+      if (replaceScope && replaceScope.length > 0) {
+        await deleteUploadRows(supabase, replaceId, replaceScope);
+      } else {
+        await deleteUpload(supabase, replaceId);
+      }
+    }
 
     // ── 5. Create upload record ───────────────────────────────────────────
     const { data: uploadRecord, error: insertErr } = await supabase
@@ -226,7 +256,9 @@ export async function POST(req: NextRequest) {
     // ── 8. Mark upload as completed ───────────────────────────────────────
     await supabase
       .from("pl_uploads")
-      .update({ status: "completed", row_count: rows.length })
+      /* `coverage` sobre las filas SUBIDAS: es lo que trajo el archivo, no lo
+         que quede despues. Ver resumirCobertura. */
+      .update({ status: "completed", row_count: rows.length, coverage: resumirCobertura(rows) })
       .eq("id", id);
 
     const response: UploadPLResponse = {
