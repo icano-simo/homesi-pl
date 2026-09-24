@@ -113,6 +113,25 @@ function ManualAssignmentBlock({ ma }: { ma: ManualAssignmentSummary }) {
   );
 }
 
+/**
+ * Las colisiones, en el formato que la ruta entiende: `2026|June|700`.
+ *
+ * ⚠ SE RECONSTRUYE DE LA ETIQUETA que el usuario acaba de leer, y no se manda
+ * un objeto aparte. Si las dos se separaran, el dialogo diria una cosa y se
+ * borraria otra.
+ */
+function alcanceDe(c: DuplicateInfo): string {
+  return c.collisions
+    .map((x) => {
+      const [periodo, sucursal] = x.label.split(" · ");
+      const partes = periodo.trim().split(" ");
+      const mes = partes.slice(0, -1).join(" ");
+      const anio = partes[partes.length - 1];
+      return `${anio}|${mes}|${sucursal ?? ""}`;
+    })
+    .join(",");
+}
+
 // ─── Duplicate dialog ─────────────────────────────────────────────────────────
 
 /**
@@ -150,7 +169,8 @@ function DuplicateDialog({
   onCancel,
 }: {
   candidates: DuplicateInfo[];
-  onReplace: (uploadId: string) => void;
+  /** Con `scope`, sustituye SOLO esos tramos y deja el resto del archivo. */
+  onReplace: (uploadId: string, scope?: string) => void;
   onForce: () => void;
   onCancel: () => void;
 }) {
@@ -239,7 +259,23 @@ function DuplicateDialog({
             return (
               <button
                 key={c.upload_id}
-                onClick={() => (multi ? setConfirmando(c) : onReplace(c.upload_id))}
+                /*
+                 * ⚠ CON COLISION, EL CLIC REEMPLAZA SOLO LOS TRAMOS QUE CHOCAN.
+                 *
+                 * Antes, con un archivo de once meses, la unica opcion era
+                 * borrarlo entero -- y por eso nadie la usaba: se elegia
+                 * "Upload anyway", que es como se duplico junio. Sustituir solo
+                 * junio/700 y dejar los otros diez meses es lo que se acabo
+                 * haciendo a mano con SQL.
+                 *
+                 * Sin colision se conserva lo de antes: el aviso de periodos
+                 * con su confirmacion para los multi-periodo.
+                 */
+                onClick={() =>
+                  c.collisions.length > 0
+                    ? onReplace(c.upload_id, alcanceDe(c))
+                    : multi ? setConfirmando(c) : onReplace(c.upload_id)
+                }
                 className={`w-full rounded-xl border px-4 py-3 text-left transition-colors ${
                   multi
                     ? "border-amber-200 bg-amber-50/50 hover:bg-amber-50"
@@ -257,8 +293,35 @@ function DuplicateDialog({
                   )}
                 </div>
                 {/*
-                  * Los periodos primero y en grande: son lo que se borra, y es
-                  * el dato que el nombre del archivo no da.
+                  * ⚠ LA COLISION PRIMERO, Y ES LO QUE CAMBIA EL AVISO.
+                  *
+                  * "Este periodo ya tiene datos" era cierto casi siempre --el
+                  * P&L reparte los meses POR SUCURSAL entre archivos-- asi que
+                  * se aprendio a despachar. Lo que de verdad duplica es que el
+                  * archivo nuevo traiga una sucursal que ESE MES YA TENIA, y
+                  * eso es lo que se dice aqui, con sus filas.
+                  */}
+                {c.collisions.length > 0 && (
+                  <div className="mt-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5">
+                    <div className="text-[11px] font-semibold text-red-800">
+                      Already loaded for {c.collisions.length === 1 ? "this month and branch" : "these months and branches"}
+                    </div>
+                    <div className="mt-0.5 space-y-0.5">
+                      {c.collisions.slice(0, 6).map((x) => (
+                        <div key={x.label} className="flex items-baseline justify-between gap-2 text-[11px] text-red-700">
+                          <span className="font-mono">{x.label}</span>
+                          <span className="tabular-nums">{x.rows.toLocaleString()} rows</span>
+                        </div>
+                      ))}
+                      {c.collisions.length > 6 && (
+                        <div className="text-[10px] text-red-600">+{c.collisions.length - 6} more</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {/*
+                  * Los periodos despues: son lo que un reemplazo COMPLETO se
+                  * llevaria, y es el dato que el nombre del archivo no da.
                   */}
                 <div className="mt-1 text-xs font-medium text-gray-700">
                   {describirPeriodos(c.periods)}
@@ -504,7 +567,12 @@ function UploadSection({ endpoint, title, description, infoItems, onUploadComple
       {pendingDupe && (
         <DuplicateDialog
           candidates={pendingDupe}
-          onReplace={(uploadId) => doUpload(`${endpoint}?replace_id=${uploadId}`)}
+          onReplace={(uploadId, scope) =>
+            doUpload(
+              `${endpoint}?replace_id=${uploadId}` +
+              (scope ? `&replace_scope=${encodeURIComponent(scope)}` : ""),
+            )
+          }
           onForce={() => doUpload(`${endpoint}?force=true`)}
           onCancel={() => { setPendingDupe(null); setStatus("idle"); }}
         />

@@ -57,9 +57,40 @@ interface BackupRow extends MatchKeyed {
  * Returns how many rows are confirmed written. Callers should refuse to delete
  * if this throws.
  */
+/**
+ * Una pareja (año, mes, sucursal) del reemplazo parcial. `branch` null casa con
+ * las filas sin sucursal.
+ */
+export type TramoDeReemplazo = { year: number | null; month: string | null; branch: string | null };
+
+/** Casa una fila contra los tramos pedidos. Sin tramos, casa todo. */
+export function enTramos(
+  tx: { year: number | null; month: string | null; branch: string | null },
+  tramos: readonly TramoDeReemplazo[] | null,
+): boolean {
+  if (!tramos || tramos.length === 0) return true;
+  return tramos.some(
+    (t) =>
+      t.year === tx.year &&
+      t.month === tx.month &&
+      (t.branch ?? null) === ((tx.branch ?? "").trim() || null),
+  );
+}
+
+/**
+ * @param tramos Cuando se pasa, solo se respaldan las asignaciones de esos
+ *   (año, mes, sucursal). Es el reemplazo PARCIAL: sustituir junio/700 sin
+ *   tocar los otros diez meses del mismo archivo.
+ *
+ *   ⚠ UN REEMPLAZO PARCIAL QUE NO RESPALDA ES EL MISMO PROBLEMA QUE VINO A
+ *   RESOLVER. El 2026-09-24 se borraron a mano las 1.300 filas de junio de un
+ *   archivo y con ellas 33 asignaciones manuales, que hubo que rehacer. Por eso
+ *   el respaldo va por tramo y no todo o nada.
+ */
 export async function snapshotManualAssignments(
   supabase: SupabaseClient,
-  uploadId: string
+  uploadId: string,
+  tramos: readonly TramoDeReemplazo[] | null = null
 ): Promise<number> {
   const allTxs: Array<MatchKeyed & { id: string; cost_center_id: string; assignment_origin: string }> = [];
   let from = 0;
@@ -72,8 +103,11 @@ export async function snapshotManualAssignments(
       .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw new Error(`snapshot fetch txs: ${error.message}`);
+    /* El filtro por tramo se aplica aqui y no en la consulta: son pocas filas
+       --las manuales de un upload-- y una condicion compuesta en PostgREST
+       sobre tres columnas es mas facil de equivocar que de leer. */
     if (!data || data.length === 0) break;
-    allTxs.push(...(data as typeof allTxs));
+    allTxs.push(...(data as typeof allTxs).filter((t) => enTramos(t, tramos)));
     if (data.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
   }

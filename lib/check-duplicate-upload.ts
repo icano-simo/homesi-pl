@@ -18,6 +18,15 @@ export type DuplicateInfo = {
   /** Cuantas filas tiene de verdad, contadas y no estimadas. */
   rows: number;
   /**
+   * Las parejas (mes, sucursal) donde este upload y el archivo nuevo chocan de
+   * verdad, con las filas que ya hay en cada una.
+   *
+   * ⚠ ES LO QUE DISTINGUE UNA RECARGA DE UN REPARTO LEGITIMO, y por eso se
+   * enseña antes que `overlap`: "June 2026 · 700, ya hay 1.300 filas" dice que
+   * hacer; "este periodo ya tiene datos" no.
+   */
+  collisions: { label: string; rows: number }[];
+  /**
    * Asignaciones manuales que el Replace intentara reaplicar.
    *
    * No se pierden sin mas --hay respaldo y reaplicacion-- pero las que no
@@ -79,34 +88,82 @@ export type DuplicateCheckResult =
 export async function checkDuplicateUpload(
   supabase: SupabaseClient,
   source: "original" | "addback" | "offshore_allocations",
-  rows: Array<{ month: string | null; year: number | null }>
+  rows: Array<{ month: string | null; year: number | null; branch?: string | null }>
 ): Promise<DuplicateCheckResult> {
   const months = [...new Set(rows.map((r) => r.month).filter(Boolean))] as string[];
   const years  = [...new Set(rows.map((r) => r.year).filter(Boolean))]  as number[];
 
   if (months.length === 0 || years.length === 0) return { found: false };
 
+  /*
+   * ⚠ LAS SUCURSALES QUE TRAE EL ARCHIVO NUEVO, QUE SON LA MITAD DE LA
+   * PREGUNTA. Sin ellas esta funcion solo sabia "este mes ya tiene datos", y
+   * eso es cierto casi siempre.
+   */
+  const sucursalesNuevas = new Set(
+    rows.map((r) => (r.branch ?? "").trim()).filter(Boolean),
+  );
+  const porGrano = (m: string | null, y: number | null, b: string | null) =>
+    `${y}|${m}|${(b ?? "").trim()}`;
+
   // Find existing transactions of the same source type with overlapping months/years
   const { data: existing } = await supabase
     .from("pl_transactions")
-    .select("upload_id,month,year")
+    .select("upload_id,month,year,branch")
     .eq("source", source)
     .in("month", months)
     .in("year", years)
-    .limit(2000);
+    .limit(20000);
 
   if (!existing || existing.length === 0) return { found: false };
 
   // Count rows per upload_id and collect the overlap labels
   const countByUpload  = new Map<string, number>();
   const overlapByUpload = new Map<string, Set<string>>();
+  /** Las parejas (mes, sucursal) que de verdad chocan, por upload. */
+  const colisionPorUpload = new Map<string, Map<string, number>>();
 
-  for (const row of existing as { upload_id: string; month: string; year: number }[]) {
+  for (const row of existing as { upload_id: string; month: string; year: number; branch: string | null }[]) {
     const uid = row.upload_id;
     if (!uid) continue;
     countByUpload.set(uid, (countByUpload.get(uid) ?? 0) + 1);
     if (!overlapByUpload.has(uid)) overlapByUpload.set(uid, new Set());
     if (row.month && row.year) overlapByUpload.get(uid)!.add(`${row.month} ${row.year}`);
+
+    /*
+     * ⚠ AQUI ESTA LA DIFERENCIA ENTRE UN SOLAPE LEGITIMO Y UNA CARGA DOBLE.
+     *
+     * El P&L reparte un mes entre varios archivos POR SUCURSAL: uno trae 17
+     * sucursales y otro añade la 728 y la 733. Eso es correcto y el aviso
+     * antiguo lo trataba igual que una recarga -- por eso salia siempre y se
+     * aprendio a despachar.
+     *
+     * Choca de verdad cuando el archivo nuevo trae una sucursal que ESE MES YA
+     * TENIA. Es lo que paso con junio: el archivo del 23 traia la 700, que el
+     * del 27 de julio ya tenia, y se sumaron 1.300 filas encima.
+     */
+    const suc = (row.branch ?? "").trim();
+    if (suc && sucursalesNuevas.has(suc)) {
+      if (!colisionPorUpload.has(uid)) colisionPorUpload.set(uid, new Map());
+      const k = `${row.month} ${row.year} · ${suc}`;
+      const m = colisionPorUpload.get(uid)!;
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+  }
+
+  /*
+   * ⚠ SOLO SE AVISA DE LOS QUE CHOCAN EN (MES, SUCURSAL). Un upload que
+   * comparte mes pero ninguna sucursal no es un candidato: enseñarlo devuelve
+   * el aviso que sale siempre.
+   *
+   * Si ninguna fila del archivo trae sucursal --una fuente sin esa columna--
+   * no se puede afinar, y entonces se cae al comportamiento antiguo: mejor un
+   * aviso de mas que ninguno.
+   */
+  if (sucursalesNuevas.size > 0) {
+    for (const uid of [...countByUpload.keys()]) {
+      if (!colisionPorUpload.has(uid)) countByUpload.delete(uid);
+    }
   }
 
   if (countByUpload.size === 0) return { found: false };
@@ -165,6 +222,9 @@ export async function checkDuplicateUpload(
       periods: [...periodos].sort(ordenarPeriodos),
       rows: rows ?? 0,
       manualAssignments: manuales ?? 0,
+      collisions: [...(colisionPorUpload.get(u.id) ?? new Map())]
+        .map(([label, n]) => ({ label, rows: n }))
+        .sort((a, b) => b.rows - a.rows),
     });
   }
 
@@ -361,4 +421,105 @@ export async function findSameFile(
      que `by` nunca sale vacio. El filtro esta por si acaso: una fila sin
      ninguna de las dos señales no tendria nada que decirle al usuario. */
   }).filter((m) => m.by.length > 0);
+}
+
+// ─── Que trajo cada archivo ──────────────────────────────────────────────────
+
+/**
+ * El resumen de periodos y sucursales de un upload, para `pl_uploads.coverage`.
+ *
+ * ⚠ SE CALCULA DE LAS FILAS QUE SE ACABAN DE SUBIR, NO DE LA BASE. Es el
+ * registro de lo que el archivo TRAJO; si mañana alguien borra parte, la
+ * cobertura sigue diciendo lo que vino, que es justo el dato que hoy no existe.
+ *
+ * El 2026-09-24 no se pudo contestar "¿cuantas veces ha pasado esto?" porque
+ * borrar un upload borra sus filas y con ellas la unica huella de sus periodos.
+ */
+export function resumirCobertura(
+  rows: Array<{ year: number | null; month: string | null; branch?: string | null }>,
+): Array<{ year: number | null; month: string | null; branch: string | null; rows: number }> {
+  const m = new Map<string, { year: number | null; month: string | null; branch: string | null; rows: number }>();
+  for (const r of rows) {
+    const branch = (r.branch ?? "").trim() || null;
+    const k = `${r.year}|${r.month}|${branch}`;
+    const e = m.get(k);
+    if (e) e.rows++;
+    else m.set(k, { year: r.year, month: r.month, branch, rows: 1 });
+  }
+  return [...m.values()].sort(
+    (a, b) =>
+      (a.year ?? 0) - (b.year ?? 0) ||
+      String(a.month).localeCompare(String(b.month)) ||
+      String(a.branch).localeCompare(String(b.branch)),
+  );
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * REEMPLAZO PARCIAL: BORRAR SOLO UNOS TRAMOS DE UN UPLOAD
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * `deleteUpload` se lleva el upload entero. Con un archivo de once meses eso
+ * significa rehacerlo todo para corregir uno, asi que nadie lo usa -- y lo que
+ * se hace en su lugar es "Upload anyway", que es como se duplico junio.
+ *
+ * Esto borra solo las filas de los (año, mes, sucursal) pedidos y DEJA VIVO el
+ * upload con el resto. El 2026-09-24 se hizo a mano con SQL: 1.300 filas de
+ * junio de un archivo de 11.092, dejando sus otros diez meses.
+ *
+ * ⚠ EL UPLOAD NO SE BORRA AUNQUE SE QUEDE SIN FILAS. Su fila es el registro de
+ * que ese archivo se subio, y `coverage` dice lo que trajo: borrarla seria
+ * repetir el agujero que esa columna existe para tapar.
+ *
+ * ⚠ Y `row_count` NO SE TOCA. Es lo que el archivo TRAIA, no lo que queda. La
+ * diferencia entre `row_count` y las filas vivas es hoy el unico rastro de que
+ * algo se borro, y aqui se conserva a proposito.
+ */
+export async function deleteUploadRows(
+  supabase: SupabaseClient,
+  uploadId: string,
+  tramos: ReadonlyArray<{ year: number | null; month: string | null; branch: string | null }>,
+): Promise<number> {
+  if (tramos.length === 0) return 0;
+
+  const ids: string[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from("pl_transactions")
+      .select("id,year,month,branch")
+      .eq("upload_id", uploadId)
+      .order("id", { ascending: true })
+      .range(from, from + SELECT_PAGE - 1);
+    if (error) throw new Error(`deleteUploadRows fetch: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const t of data as Array<{ id: string; year: number | null; month: string | null; branch: string | null }>) {
+      const suc = (t.branch ?? "").trim() || null;
+      if (tramos.some((x) => x.year === t.year && x.month === t.month && (x.branch ?? null) === suc)) {
+        ids.push(t.id);
+      }
+    }
+    if (data.length < SELECT_PAGE) break;
+    from += SELECT_PAGE;
+  }
+  if (ids.length === 0) return 0;
+
+  /* Los mismos hijos que borra `deleteUpload`, y en el mismo orden: un split de
+     transaccion que sobreviva a su fila es lo que hace que la rejilla enseñe
+     un ceco que ya no existe. */
+  for (let i = 0; i < ids.length; i += DELETE_CHUNK) {
+    const chunk = ids.slice(i, i + DELETE_CHUNK);
+    const { error: snapErr } = await supabase
+      .from("conflict_snapshots").delete().in("transaction_id", chunk);
+    if (snapErr) throw new Error(`deleteUploadRows conflict_snapshots: ${snapErr.message}`);
+
+    const { error: splitErr } = await supabase
+      .from("cc_allocation_splits").delete()
+      .eq("assign_type", "transaction").in("assign_value", chunk);
+    if (splitErr) throw new Error(`deleteUploadRows cc_allocation_splits: ${splitErr.message}`);
+
+    const { error } = await supabase.from("pl_transactions").delete().in("id", chunk);
+    if (error) throw new Error(`deleteUploadRows pl_transactions: ${error.message}`);
+  }
+  return ids.length;
 }

@@ -6,7 +6,7 @@ import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassificat
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { createServerClient } from "@/lib/supabase-server";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
-import { checkDuplicateUpload, deleteUpload, findSameFile } from "@/lib/check-duplicate-upload";
+import { checkDuplicateUpload, deleteUpload, findSameFile, resumirCobertura } from "@/lib/check-duplicate-upload";
 import { createHash } from "node:crypto";
 import { relinkOrphanNotes } from "@/lib/relink-orphan-notes";
 import { snapshotManualAssignments, reapplyManualSnapshot } from "@/lib/snapshot-manual-assignments";
@@ -172,7 +172,9 @@ export async function POST(req: NextRequest) {
     // ── 8. Mark completed ─────────────────────────────────────────────────
     await supabase
       .from("pl_uploads")
-      .update({ status: "completed", row_count: rows.length })
+      /* `coverage` sobre las filas SUBIDAS: es lo que trajo el archivo, no lo
+         que quede despues. Ver resumirCobertura. */
+      .update({ status: "completed", row_count: rows.length, coverage: resumirCobertura(rows) })
       .eq("id", id);
 
     const response: AddbacksUploadResponse = {
