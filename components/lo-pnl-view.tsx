@@ -1471,7 +1471,13 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
    * pantalla sin nada que dijera cual era cual. Se elige una vez, arriba.
    */
   lente?: AffinityLens;
-  /** El mes desde el que se abrio el modal. Null en la pantalla suelta. */
+  /**
+   * El mes desde el que se abrio el modal.
+   *
+   * ⚠ NULL NO SIGNIFICA "el de por defecto": significa "no me han dado mes, y
+   * entonces lo elige la pantalla". Es lo que decide si la barra lleva
+   * desplegable de mes o no. Ver `eligeMes`.
+   */
   month?: string | null;
   year?: number | null;
 }) {
@@ -1486,13 +1492,54 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
    * dentro mientras la ventana decia "April 2026". Sin copia no hay nada que
    * se quede viejo.
    */
-  const mesHeredado = mesInicial ?? def.month;
-  const anioHeredado = anioInicial ?? def.year;
+  /**
+   * ─────────────────────────────────────────────────────────────────────────
+   * EL MES TIENE DOS ORIGENES, Y CUAL DE LOS DOS LO DICE `mesInicial`
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * En la pestaña del modal el mes VIENE DE ARRIBA y no se elige aqui: la
+   * ventana ya dice de que mes es, y un segundo control dentro seria una
+   * segunda respuesta a la misma pregunta en la misma pantalla.
+   *
+   * En la pantalla suelta --/lo-pnl-- NO HAY DE DONDE HEREDAR, y ahi estaba el
+   * fallo: `closePeriod()` da el mes anterior a hoy y no habia manera de salir
+   * de el. El 2026-09-24, con septiembre cargado --371 filas, 142.710,17, once
+   * sucursales-- la pantalla enseñaba agosto y ofrecia [August 2026] [YTD]
+   * [2025]. Septiembre no se alcanzaba por ninguna combinacion: YTD es
+   * enero-agosto, y el boton del año en curso estaba filtrado.
+   *
+   * ⚠ EL DISCRIMINANTE ES `mesInicial == null`, NO `branch`. La pregunta que
+   * decide si hace falta selector es "¿me han dado un mes?", y esa la contesta
+   * la prop del mes. `branch` contesta otra --"¿estoy dentro de una sucursal?"--
+   * que hoy coincide y no tiene por que seguir coincidiendo.
+   */
+  const eligeMes = mesInicial == null;
 
   /**
-   * Que periodo se esta mirando. El mes NO se guarda aqui: viene de arriba.
+   * El mes elegido AQUI. Solo lo usa la pantalla suelta; en la pestaña se
+   * queda a null para siempre y el mes sale entero de las props.
+   */
+  const [mesPropio, setMesPropio] = useState<{ month: string; year: number } | null>(null);
+
+  /*
+   * ⚠ EL MES HEREDADO SALE DE LAS PROPS EN CADA RENDER, NO DE `useState`.
    *
-   *   mes   el del modal, heredado. Por defecto.
+   * Lo tuvo, y ahi estaba el bug: `useState` solo lee su valor inicial AL
+   * MONTAR. Abriendo el modal de julio, pulsando la pestaña de loan officers y
+   * volviendo a abrir el de abril, el componente seguia montado con julio
+   * dentro mientras la ventana decia "April 2026". Sin copia no hay nada que
+   * se quede viejo.
+   *
+   * `mesPropio` NO reintroduce esa copia: solo se lee cuando `mesInicial` es
+   * null, o sea cuando no hay nada de arriba con lo que quedarse desfasado.
+   */
+  const mesActivo = mesInicial ?? mesPropio?.month ?? def.month;
+  const anioActivo = anioInicial ?? mesPropio?.year ?? def.year;
+
+  /**
+   * Que periodo se esta mirando. El mes no se guarda aqui: es `mesActivo`.
+   *
+   *   mes   el mes activo. Por defecto.
    *   ytd   de enero a ese mes, incluido
    *   anio  un año entero de los que el P&L tiene cargados
    */
@@ -1501,17 +1548,25 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
   >({ tipo: "mes" });
 
   /*
-   * ⚠ Y AL CAMBIAR EL MES DE ARRIBA SE VUELVE AL MES, no se conserva el YTD.
-   * Abrir otro mes es empezar otra pregunta; quedarse en "YTD de abril" tras
-   * abrir agosto seria el mismo desajuste que el bug, con otra cara.
+   * ⚠ Y AL CAMBIAR EL MES SE VUELVE AL MES, no se conserva el YTD. Abrir otro
+   * mes es empezar otra pregunta; quedarse en "YTD de abril" tras abrir agosto
+   * seria el mismo desajuste que el bug, con otra cara.
+   *
+   * ⚠ DEPENDE DE `mesActivo`, NO DE LAS PROPS. Dependia de `[mesInicial,
+   * anioInicial]`, que era correcto mientras el mes solo podia venir de
+   * arriba; en cuanto puede venir del selector, esas props no se mueven y el
+   * reset no salta: te quedarias en YTD con el rotulo diciendo otro mes. Es la
+   * misma forma que el bug que este archivo ya arreglo una vez --una copia del
+   * mes que deja de seguir al mes-- y por eso cuelga de la cifra que de verdad
+   * manda, venga de donde venga.
    */
-  useEffect(() => { setPeriodo({ tipo: "mes" }); }, [mesInicial, anioInicial]);
+  useEffect(() => { setPeriodo({ tipo: "mes" }); }, [mesActivo, anioActivo]);
 
   /** Como se nombra el periodo en los avisos. Una sola frase para las tres. */
   const etiquetaPeriodo =
     periodo.tipo === "anio" ? String(periodo.anio)
-    : periodo.tipo === "ytd" ? `January-${mesHeredado} ${anioHeredado}`
-    : `${mesHeredado} ${anioHeredado}`;
+    : periodo.tipo === "ytd" ? `January-${mesActivo} ${anioActivo}`
+    : `${mesActivo} ${anioActivo}`;
 
   const [data, setData] = useState<LoPnlResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1519,6 +1574,41 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
   const [abierto, setAbierto] = useState<string | null>(null);
   const [notaAbierta, setNotaAbierta] = useState(false);
   const [avisosAbiertos, setAvisosAbiertos] = useState(false);
+
+  /**
+   * ─────────────────────────────────────────────────────────────────────────
+   * LOS MESES QUE SE PUEDEN ELEGIR SALEN DEL DATO
+   * ─────────────────────────────────────────────────────────────────────────
+   *
+   * De `data.years`, que la ruta calcula de una pasada barata sobre
+   * `pl_transactions` --solo month y year, sin importes-- y que NO depende del
+   * periodo consultado. Por eso la lista no cambia al elegir un mes: es el
+   * catalogo de lo que hay cargado, no un resultado de la consulta.
+   *
+   * ⚠ ENTRAN TAMBIEN LOS MESES QUE SOLO TIENEN CIERRES. `months` son los que
+   * traen P&L y `closingMonths` los que traen cierres, y no coinciden: en 2025
+   * agosto tiene P&L y no cierres. Esconder los de cierres sin P&L dejaria
+   * fuera justo el mes que hay que mirar cuando falta por subir un archivo, asi
+   * que salen marcados en vez de ocultos.
+   *
+   * ⚠ Y EL MES ACTIVO ENTRA SIEMPRE, lo tenga el catalogo o no: un `<select>`
+   * cuyo `value` no case con ninguna `<option>` se pinta EN BLANCO, y la barra
+   * diria que no hay mes elegido mientras la tabla enseña uno.
+   */
+  const mesesElegibles = useMemo(() => {
+    const porClave = new Map<string, { month: string; year: number; conPnl: boolean }>();
+    for (const y of data?.years ?? []) {
+      for (const m of y.closingMonths) porClave.set(`${y.year}|${m}`, { month: m, year: y.year, conPnl: false });
+      for (const m of y.months) porClave.set(`${y.year}|${m}`, { month: m, year: y.year, conPnl: true });
+    }
+    const clave = `${anioActivo}|${mesActivo}`;
+    if (!porClave.has(clave)) porClave.set(clave, { month: mesActivo, year: anioActivo, conPnl: true });
+    return [...porClave.values()].sort(
+      (a, b) =>
+        b.year - a.year ||
+        MONTH_NAMES_IN_ORDER.indexOf(b.month) - MONTH_NAMES_IN_ORDER.indexOf(a.month),
+    );
+  }, [data?.years, mesActivo, anioActivo]);
 
   /*
    * ─────────────────────────────────────────────────────────────────────────
@@ -1596,8 +1686,8 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
          que pide. Ver la nota de los parametros en la ruta. */
       const p =
         periodo.tipo === "anio" ? `year=${periodo.anio}`
-        : periodo.tipo === "ytd" ? `ytd=1&month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`
-        : `month=${encodeURIComponent(mesHeredado)}&year=${anioHeredado}`;
+        : periodo.tipo === "ytd" ? `ytd=1&month=${encodeURIComponent(mesActivo)}&year=${anioActivo}`
+        : `month=${encodeURIComponent(mesActivo)}&year=${anioActivo}`;
       // La sucursal acota los CIERRES, no la nomina: ver la nota en la ruta.
       const conSucursal = branch ? `${p}&branch=${encodeURIComponent(branch)}` : p;
       /* Sin el parametro la ruta se comporta como siempre. */
@@ -1614,7 +1704,7 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
   /* ⚠ `lente` EN LAS DEPENDENCIAS. Sin ella el control de arriba se marca y
      este modulo se queda con los datos de la lente anterior -- que es
      exactamente el fallo que tuvo la primera version. */
-  }, [periodo, mesHeredado, anioHeredado, branch, lente]);
+  }, [periodo, mesActivo, anioActivo, branch, lente]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -1728,20 +1818,59 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
           * POSTERIORES al que se estaba revisando, asi que no contestaba
           * ninguna pregunta concreta. Lo sustituye YTD, que es la que se hace
           * al cerrar un mes: "¿como va este loan officer en lo que va de año?".
+          *
+          * ⚠ Y EL PRIMER HUECO ES UN BOTON O UN DESPLEGABLE SEGUN DE DONDE
+          * VENGA EL MES. En la pestaña del modal es un boton --el mes ya lo
+          * dice la ventana-- y en la pantalla suelta es un desplegable, porque
+          * ahi no hay ventana que lo diga ni de donde heredarlo.
           */}
         <div className="flex items-center gap-1">
           <span className="inline-flex overflow-hidden rounded-lg border border-gray-200 text-xs">
-            <button
-              onClick={() => setPeriodo({ tipo: "mes" })}
-              className={`px-3 py-1 ${
-                periodo.tipo === "mes" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              {mesHeredado} {anioHeredado}
-            </button>
+            {eligeMes ? (
+              <select
+                value={`${anioActivo}|${mesActivo}`}
+                onChange={(e) => {
+                  const [y, m] = e.target.value.split("|");
+                  setMesPropio({ month: m, year: Number(y) });
+                  /*
+                   * ⚠ TAMBIEN AQUI, aunque el efecto ya lo haga al cambiar el
+                   * mes: elegir EL MISMO mes estando en YTD no mueve
+                   * `mesActivo` y el efecto no salta, pero seguir en YTD tras
+                   * pulsar un mes concreto es lo contrario de lo que se pidio.
+                   */
+                  setPeriodo({ tipo: "mes" });
+                }}
+                title="Which month this table is about. Only periods the P&L or the closings have data for."
+                className={`cursor-pointer appearance-none py-1 pl-3 pr-7 outline-none ${
+                  periodo.tipo === "mes" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+                style={{
+                  backgroundImage:
+                    "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23999' stroke-width='1.5'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E\")",
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: "right 6px center",
+                  backgroundSize: "12px",
+                }}
+              >
+                {mesesElegibles.map((m) => (
+                  <option key={`${m.year}|${m.month}`} value={`${m.year}|${m.month}`} className="bg-white text-gray-800">
+                    {m.month} {m.year}{m.conPnl ? "" : " · no P&L"}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <button
+                onClick={() => setPeriodo({ tipo: "mes" })}
+                className={`px-3 py-1 ${
+                  periodo.tipo === "mes" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                {mesActivo} {anioActivo}
+              </button>
+            )}
             <button
               onClick={() => setPeriodo({ tipo: "ytd" })}
-              title={`Year to date: January through ${mesHeredado} ${anioHeredado}`}
+              title={`Year to date: January through ${mesActivo} ${anioActivo}`}
               className={`border-l border-gray-200 px-3 py-1 ${
                 periodo.tipo === "ytd" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
               }`}
@@ -1753,20 +1882,40 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
               * a mano, el año que viene el boton seguiria diciendo "2025".
               *
               * ⚠ Y EL CONTADOR DICE DE QUE ES, porque hay DOS cuentas y no
-              * coinciden en ningun año:
+              * coinciden en ningun año. Medido el 2026-09-24:
               *
               *              meses con P&L      meses con cierres
               *     2025     5  (ago-dic)       4  (sep-dic)
-              *     2026     8  (ene-ago)       9  (ene-sep)
+              *     2026     9  (ene-sep)       9  (ene-sep)
               *
-              * En 2025 sobra agosto --hay P&L y no hubo cierres-- y en 2026
-              * falta septiembre, que tiene cierres y aun no tiene P&L. Un "5 mo"
-              * a secas al lado de una tabla con cierres de cuatro meses invita a
+              * En 2025 sobra agosto --hay P&L y no hubo cierres--. Un "5 mo" a
+              * secas al lado de una tabla con cierres de cuatro meses invita a
               * restar y a preguntarse que falta; por eso pone "5 mo P&L" y el
               * tooltip lleva las dos listas.
+              *
+              * ⚠ ESTA TABLA CADUCA, Y YA CADUCO UNA VEZ. Decia "2026: 8 meses
+              * (ene-ago) con P&L y 9 con cierres; falta septiembre, que tiene
+              * cierres y aun no tiene P&L". Septiembre se cargo --371 filas,
+              * 142.710,17, once sucursales-- y la nota siguio aqui afirmando lo
+              * contrario. Es lo que describe `notas-que-dependen-del-alcance`:
+              * una medicion escrita como si fuera permanente. Lo que NO caduca
+              * es el motivo de que haya dos cuentas; los numeros van fechados
+              * para que se vea cuando se midieron.
+              */}
+            {/*
+              * ⚠ SIN FILTRAR EL AÑO ACTIVO, Y ES UN CAMBIO DELIBERADO. Estaba
+              * `.filter((y) => y.year !== anioActivo)`, invisible mientras el
+              * año no se podia mover: con el selector de mes, elegir uno de
+              * 2025 hacia DESAPARECER el boton "2025" y aparecer el "2026". Un
+              * boton que se va y viene segun lo que toques en el control de al
+              * lado hace que la barra parezca inestable, y ademas dejaba el año
+              * en curso inalcanzable como año entero.
+              *
+              * Y no es redundante con YTD: YTD es enero-mes activo y el boton
+              * del año es enero-diciembre. Con septiembre cargado y agosto
+              * activo, se diferencian en un mes entero.
               */}
             {(data?.years ?? [])
-              .filter((y) => y.year !== anioHeredado)
               .map((y) => (
                 <button
                   key={y.year}
@@ -1917,10 +2066,15 @@ export function LoPnlView({ branch = null, month: mesInicial = null, year: anioI
                 * dice la marca "n closings in other months" de su fila.
                 */}
               <p className="text-amber-700">
+                {/*
+                  * ⚠ DECIA «including to "All months"», y esa opcion se quito
+                  * hace tiempo: la sustituyo YTD. El texto se quedo nombrando
+                  * un boton que no esta en la barra que hay justo encima.
+                  */}
                 <span className="font-semibold">Both the branch and the month come from this window.</span>{" "}
-                The selector above starts there and can be moved, including to “All months”. In a
-                single month someone can show cost without the closings that earned it — that is
-                what the blue mark on a row means: they closed, in another period.
+                The selector above starts there and can be moved to year&nbsp;to&nbsp;date or to a whole
+                year. In a single month someone can show cost without the closings that earned it —
+                that is what the blue mark on a row means: they closed, in another period.
               </p>
             </>
           )}
