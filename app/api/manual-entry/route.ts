@@ -4,7 +4,7 @@ import { evaluateCostCenterRules } from "@/lib/evaluate-cost-center-rules";
 import { loadAllSplitRules, loadLoanClassifications, enrichTxWithLoanClassifications } from "@/lib/reevaluate-rule-assigned";
 import { syncRuleSplitAllocations, type RuleSplitEntry } from "@/lib/sync-rule-split-allocations";
 import { INSERT_CHUNK_SIZE } from "@/lib/constants";
-import type { PLTransaction, SplitRuleWithDetails } from "@/types";
+import type { ManualEntryListRow, PLTransaction, SplitRuleWithDetails } from "@/types";
 import { requireSession } from "@/lib/auth";
 
 interface ManualEntryRow {
@@ -16,6 +16,39 @@ interface ManualEntryRow {
   credit: number;
   month: string;
   year: number;
+}
+
+// Only source = 'manual_entry' — addbacks and file uploads never show here.
+export async function GET() {
+  const guard = await requireSession();
+  if (guard.response) return guard.response;
+
+  const supabase = createServerClient();
+  const out: ManualEntryListRow[] = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("pl_transactions")
+      .select(
+        "id,created_at,branch,gl_code,gl_name,check_description,vendor,movement,month,year," +
+        "cost_center_id,cost_center_status,assignment_origin,cost_centers(name)"
+      )
+      .eq("source", "manual_entry")
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .range(offset, offset + 999);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!data || data.length === 0) break;
+    for (const r of data as unknown as (Omit<ManualEntryListRow, "cost_center_name"> & { cost_centers: { name: string } | null })[]) {
+      const { cost_centers, ...rest } = r;
+      out.push({ ...rest, movement: rest.movement === null ? null : Number(rest.movement), cost_center_name: cost_centers?.name ?? null });
+    }
+    if (data.length < 1000) break;
+    offset += 1000;
+  }
+
+  return NextResponse.json(out);
 }
 
 export async function POST(req: NextRequest) {
