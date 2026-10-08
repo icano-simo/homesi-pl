@@ -12,6 +12,16 @@ import { MONTH_NAMES } from "@/lib/constants";
 import type { SplitEntry } from "@/lib/apply-splits";
 import type { PLTransaction, FilterOptionsResponse, TransactionTotals, Branch, GLMapping } from "@/types";
 
+// ─── Manual entry editing: OFF on purpose ─────────────────────────────────────
+//
+// Hidden, not removed. Saving an edit (PATCH /api/manual-entry/[id]) re-runs
+// the cost center rules on the row and overwrites whatever cost center someone
+// assigned by hand — silently, with no warning and no backup. Until the edit
+// respects a manual assignment, the way to fix a manual entry is to delete it
+// (here or in Manual Entry) and create it again. Better no edit than one that
+// destroys work without saying so.
+const MANUAL_ENTRY_EDIT_ENABLED = false;
+
 // ─── Virtual scroll constants ─────────────────────────────────────────────────
 
 const ROW_H = 38;
@@ -635,10 +645,19 @@ export default function TransactionsPage() {
   const [editingManualTx, setEditingManualTx] = useState<PLTransaction | null>(null);
 
   async function handleDeleteManual(tx: PLTransaction) {
-    if (!confirm(`Delete this manual entry transaction?\n${tx.check_description || tx.gl_code || tx.id}\n\nThis cannot be undone.`)) return;
+    const handAssigned =
+      tx.cost_center_status === "assigned" &&
+      (tx.assignment_origin === "manual" || tx.assignment_origin === "conflict_resolved");
+    const warning = handAssigned
+      ? "\n\n⚠ Its cost center was assigned by hand. Deleting the entry removes that assignment too."
+      : "";
+    if (!confirm(`Delete this manual entry transaction?\n${tx.check_description || tx.gl_code || tx.id}${warning}\n\nThis cannot be undone.`)) return;
     const res = await fetch(`/api/manual-entry/${tx.id}`, { method: "DELETE" });
     if (res.ok) {
       setRows((prev) => prev.filter((r) => r.id !== tx.id));
+    } else {
+      const json = await res.json().catch(() => ({}));
+      alert(json.error ?? "Could not delete the manual entry.");
     }
   }
 
@@ -1129,13 +1148,15 @@ export default function TransactionsPage() {
                       ) : tx.source === "manual_entry" ? (
                         <span className="inline-flex items-center gap-1">
                           <span className="rounded bg-indigo-100 px-1 py-0.5 text-[10px] font-medium text-indigo-700">Manual</span>
-                          <button
-                            onClick={() => setEditingManualTx(tx)}
-                            title="Edit"
-                            className="rounded p-px text-gray-400 hover:text-blue-600 hover:bg-blue-50"
-                          >
-                            <Pencil size={11} />
-                          </button>
+                          {MANUAL_ENTRY_EDIT_ENABLED && (
+                            <button
+                              onClick={() => setEditingManualTx(tx)}
+                              title="Edit"
+                              className="rounded p-px text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+                            >
+                              <Pencil size={11} />
+                            </button>
+                          )}
                           <button
                             onClick={() => handleDeleteManual(tx)}
                             title="Delete"

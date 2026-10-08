@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, Save, CheckCircle, AlertCircle, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { MONTH_NAMES } from "@/lib/constants";
-import type { Branch, GLMapping } from "@/types";
+import type { Branch, GLMapping, ManualEntryListRow } from "@/types";
 
 // ─── GL Code autocomplete cell ────────────────────────────────────────────────
 
@@ -127,6 +127,109 @@ function GLCodeCell({
   );
 }
 
+// ─── Saved manual entries ─────────────────────────────────────────────────────
+
+const fmtAmount = (n: number | null) =>
+  n === null ? "—" : new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+
+const fmtCreated = (iso: string) =>
+  new Date(iso).toLocaleString("en-US", { month: "short", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+// Assigned by a person, not by a rule — deleting the entry takes that choice with it.
+const isHandAssigned = (e: ManualEntryListRow) =>
+  e.cost_center_status === "assigned" && (e.assignment_origin === "manual" || e.assignment_origin === "conflict_resolved");
+
+function SavedEntries({ entries, loading, error, onDelete, deletingId }: {
+  entries: ManualEntryListRow[];
+  loading: boolean;
+  error: string | null;
+  onDelete: (e: ManualEntryListRow) => void;
+  deletingId: string | null;
+}) {
+  return (
+    <div className="space-y-2">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-900">Your manual entries</h3>
+        <p className="text-xs text-gray-500">
+          Everything created from this screen, newest first. Addbacks and file uploads are not listed here.
+        </p>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          <AlertCircle size={15} className="shrink-0" /> <span>{error}</span>
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+        <table className="w-full text-xs" style={{ minWidth: 900 }}>
+          <thead>
+            <tr className="border-b border-gray-100 bg-gray-50 text-left text-gray-500">
+              <th className="px-3 py-2 font-medium">Created</th>
+              <th className="px-3 py-2 font-medium">Branch</th>
+              <th className="px-3 py-2 font-medium">GL Code</th>
+              <th className="px-3 py-2 font-medium">Description</th>
+              <th className="px-3 py-2 font-medium text-right">Amount</th>
+              <th className="px-3 py-2 font-medium">Period</th>
+              <th className="px-3 py-2 font-medium">Cost Center</th>
+              <th className="w-8 px-2 py-2" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {loading && entries.length === 0 && (
+              <tr><td colSpan={8} className="px-3 py-4 text-center text-gray-400">Loading…</td></tr>
+            )}
+            {!loading && entries.length === 0 && (
+              <tr><td colSpan={8} className="px-3 py-4 text-center text-gray-400">No manual entries yet.</td></tr>
+            )}
+            {entries.map((e, i) => (
+              <tr key={e.id} className={i % 2 ? "bg-gray-50/40" : ""}>
+                <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{fmtCreated(e.created_at)}</td>
+                <td className="px-3 py-1.5 text-gray-700">{e.branch ?? "—"}</td>
+                <td className="px-3 py-1.5">
+                  <span className="font-mono text-gray-900">{e.gl_code ?? "—"}</span>
+                  {e.gl_name && <span className="ml-1 text-gray-400">{e.gl_name}</span>}
+                </td>
+                <td className="px-3 py-1.5 text-gray-700">{e.check_description || <span className="text-gray-300">—</span>}</td>
+                <td className={`px-3 py-1.5 text-right font-mono whitespace-nowrap ${(e.movement ?? 0) < 0 ? "text-red-600" : "text-gray-900"}`}>
+                  {fmtAmount(e.movement)}
+                </td>
+                <td className="px-3 py-1.5 whitespace-nowrap text-gray-600">{[e.month, e.year].filter(Boolean).join(" ") || "—"}</td>
+                <td className="px-3 py-1.5">
+                  {e.cost_center_name ? (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="text-gray-700">{e.cost_center_name}</span>
+                      {isHandAssigned(e) ? (
+                        <span className="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-700" title="Assigned by hand — deleting this entry also removes that assignment">
+                          assigned by hand
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-gray-400">by rule</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">{e.cost_center_status === "conflict" ? "Conflict" : "Unassigned"}</span>
+                  )}
+                </td>
+                <td className="px-1 py-1.5">
+                  <button
+                    onClick={() => onDelete(e)}
+                    disabled={deletingId !== null}
+                    title="Delete this entry"
+                    className="rounded p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── Row state ────────────────────────────────────────────────────────────────
 
 interface ManualRow {
@@ -173,12 +276,61 @@ export default function ManualEntryPage() {
   // Set to true on first save attempt — triggers per-field error indicators
   const [triedToSave, setTriedToSave] = useState(false);
 
+  const [entries, setEntries] = useState<ManualEntryListRow[]>([]);
+  const [entriesLoading, setEntriesLoading] = useState(true);
+  const [entriesError, setEntriesError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   useEffect(() => {
     fetch("/api/branches")
       .then((r) => r.json())
       .then(setBranches)
       .catch(console.error);
+    loadEntries();
   }, []);
+
+  async function loadEntries() {
+    setEntriesLoading(true);
+    try {
+      const res = await fetch("/api/manual-entry");
+      const json = await res.json();
+      if (!res.ok) { setEntriesError(json.error ?? "Could not load manual entries"); return; }
+      setEntries(json);
+      setEntriesError(null);
+    } catch (e) {
+      setEntriesError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEntriesLoading(false);
+    }
+  }
+
+  async function handleDeleteEntry(e: ManualEntryListRow) {
+    const lines = [
+      "Delete this manual entry?",
+      "",
+      `${e.check_description || "(no description)"} — ${fmtAmount(e.movement)}`,
+      `Branch ${e.branch ?? "—"} · GL ${e.gl_code ?? "—"} · ${[e.month, e.year].filter(Boolean).join(" ")}`,
+    ];
+    if (isHandAssigned(e)) {
+      lines.push("", `⚠ It has cost center "${e.cost_center_name}" assigned by hand. Deleting the entry removes that assignment too.`);
+    }
+    lines.push("", "This cannot be undone.");
+    if (!confirm(lines.join("\n"))) return;
+
+    setDeletingId(e.id);
+    try {
+      const res = await fetch(`/api/manual-entry/${e.id}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEntriesError(json.error ?? "Could not delete the entry");
+        return;
+      }
+      setEntriesError(null);
+      await loadEntries();
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   function addRow() {
     setRows((prev) => [...prev, newRow()]);
@@ -246,6 +398,7 @@ export default function ManualEntryPage() {
       });
       setRows([newRow()]);
       setTriedToSave(false);
+      loadEntries();
     } finally {
       setSaving(false);
     }
@@ -501,6 +654,14 @@ export default function ManualEntryPage() {
       <p className="text-xs text-gray-400">
         <span className="text-red-400">*</span> Required. Movement = Credit − Debit. GL Code must be selected from the dropdown. Rows are processed through Cost Center Rules automatically.
       </p>
+
+      <SavedEntries
+        entries={entries}
+        loading={entriesLoading}
+        error={entriesError}
+        onDelete={handleDeleteEntry}
+        deletingId={deletingId}
+      />
     </div>
   );
 }

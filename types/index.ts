@@ -404,6 +404,24 @@ export interface AssignmentGroup {
   transactions: AssignmentTx[];
 }
 
+// One row of the "your manual entries" list under the Manual Entry form.
+export interface ManualEntryListRow {
+  id: string;
+  created_at: string;
+  branch: string | null;
+  gl_code: string | null;
+  gl_name: string | null;
+  check_description: string | null;
+  vendor: string | null;
+  movement: number | null;
+  month: string | null;
+  year: number | null;
+  cost_center_id: string | null;
+  cost_center_name: string | null;
+  cost_center_status: string | null;
+  assignment_origin: string | null;
+}
+
 // ─── Split Rules ─────────────────────────────────────────────────────────────
 
 export interface SplitRule {
